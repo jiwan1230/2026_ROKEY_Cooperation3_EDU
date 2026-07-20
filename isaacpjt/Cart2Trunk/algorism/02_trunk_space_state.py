@@ -72,11 +72,15 @@ class TrunkWorldMap:
         if not self.vertices:
             raise ValueError("TrunkWorldMap에 vertices가 없음")
 
+        # 모든 점의 x/y/z 값만 각각 뽑아서 리스트로 분리
         xs = [v[0] for v in self.vertices]
         ys = [v[1] for v in self.vertices]
         zs = [v[2] for v in self.vertices]
 
+        # 점들 중 가장 작은 좌표 = 트렁크를 감싸는 직육면체(AABB)의 한쪽 코너.
+        # 이 코너를 로컬 좌표계의 (0,0,0)으로 삼는다.
         offset = (min(xs), min(ys), min(zs))  # M0609 base 좌표계 기준 로컬 원점 위치
+        # 폭/깊이/높이 = 최대값 - 최소값 (굴곡은 무시하고 바운딩 박스로 근사)
         trunk = Trunk(width=max(xs) - min(xs), depth=max(ys) - min(ys), height=max(zs) - min(zs))
         return trunk, offset
 
@@ -87,6 +91,7 @@ def local_to_base_frame(x: float, y: float, z: float, offset: Tuple[float, float
     PlacementPlan을 로봇 제어(민결)에게 넘길 때 이 함수로 되돌려서 전달해야 함.
     """
     ox, oy, oz = offset
+    # to_bounding_trunk()에서 뺐던 offset을 다시 더해주면 원래 좌표계로 복귀 (역변환)
     return (x + ox, y + oy, z + oz)
 
 

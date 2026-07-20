@@ -44,6 +44,7 @@ CONTACT_WEIGHT = 0.5
 
 
 def _ranges_overlap(a: Tuple[float, float], b: Tuple[float, float]) -> bool:
+    """1차원 구간 두 개가 겹치는지 확인 (면끼리 실제로 마주보는지 판단할 때 사용)."""
     return a[0] < b[1] and a[1] > b[0]
 
 
@@ -51,11 +52,14 @@ def count_touching_faces(x: float, y: float, z: float, box: "Box", trunk,
                           placed: List["PlacedBox"]) -> int:
     """박스를 (x,y,z)에 놓았을 때, 6개 면 중 벽 또는 다른 박스에 붙는 면 개수(0~6)."""
     touches = 0
+    # 후보 박스가 차지할 x/y/z 구간 (0이 시작점, 1이 끝점)
     x0, x1 = x, x + box.width
     y0, y1 = y, y + box.depth
     z0, z1 = z, z + box.height
 
-    # 트렁크 벽 6면 (바닥/천장/좌/우/앞/뒤)
+    # --- 1) 트렁크 벽 6면과 붙는지 확인 (바닥/천장/좌/우/앞/뒤) ---
+    # 박스의 시작점이 0(바닥/좌/앞 벽)에 딱 붙어있거나,
+    # 끝점이 trunk 크기(천장/우/뒤 벽)에 딱 붙어있으면 그 면은 벽에 접촉한 것.
     if abs(x0 - 0.0) < 1e-9:
         touches += 1
     if abs(x1 - trunk.width) < 1e-9:
@@ -69,12 +73,15 @@ def count_touching_faces(x: float, y: float, z: float, box: "Box", trunk,
     if abs(z1 - trunk.height) < 1e-9:
         touches += 1
 
-    # 이미 놓인 다른 박스와 맞닿는 면
+    # --- 2) 이미 놓인 다른 박스들과 맞닿는 면 확인 ---
     for p in placed:
         px0, px1 = p.x_range
         py0, py1 = p.y_range
         pz0, pz1 = p.z_range
 
+        # x축 방향으로 딱 붙어있고(내 오른쪽=상대 왼쪽 or 내 왼쪽=상대 오른쪽),
+        # 동시에 y축·z축 구간도 겹쳐야 진짜로 "면이 마주보고 접촉"하는 것.
+        # (x만 붙어있어도 y/z가 아예 다른 위치면 실제로는 접촉이 아님)
         if abs(x1 - px0) < 1e-9 or abs(x0 - px1) < 1e-9:
             if _ranges_overlap((y0, y1), (py0, py1)) and _ranges_overlap((z0, z1), (pz0, pz1)):
                 touches += 1
@@ -85,16 +92,16 @@ def count_touching_faces(x: float, y: float, z: float, box: "Box", trunk,
             if _ranges_overlap((x0, x1), (px0, px1)) and _ranges_overlap((y0, y1), (py0, py1)):
                 touches += 1
 
-    return min(touches, 6)
+    return min(touches, 6)  # 박스는 면이 6개뿐이므로 상한선을 6으로 고정
 
 
 def score_candidate(x: float, y: float, z: float, box: "Box", trunk,
                      placed: List["PlacedBox"]) -> Tuple[float, int]:
     """(score, 접촉면수)를 같이 반환해서 '왜 이 점수인지' 설명 가능하게 한다."""
     touches = count_touching_faces(x, y, z, box, trunk, placed)
-    height_term = HEIGHT_WEIGHT * (z / trunk.height)
-    contact_term = CONTACT_WEIGHT * (touches / 6)
-    return height_term - contact_term, touches
+    height_term = HEIGHT_WEIGHT * (z / trunk.height)   # 높을수록(z 클수록) 점수가 커짐 = 불리
+    contact_term = CONTACT_WEIGHT * (touches / 6)       # 접촉면 많을수록 점수가 깎임 = 유리
+    return height_term - contact_term, touches          # 최종 점수는 낮을수록 좋은 자리
 
 
 if __name__ == "__main__":

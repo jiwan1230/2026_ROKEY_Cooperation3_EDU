@@ -38,7 +38,9 @@ LARGE = Box("Large", 0.50, 0.35, 0.30, mass_kg=3.5)
 
 
 def check(label: str, condition: bool, detail: str = ""):
+    """검증 조건 하나를 PASS/FAIL로 출력하고, condition을 그대로 반환 (run_all에서 취합용)."""
     status = "PASS" if condition else "FAIL"
+    # 실패했을 때만 detail을 같이 출력해서 원인 파악을 돕는다 (성공 시엔 생략해 로그를 짧게 유지)
     print(f"  [{status}] {label}" + (f" - {detail}" if detail and not condition else ""))
     return condition
 
@@ -48,6 +50,7 @@ def verify_reproducibility() -> bool:
     boxes = [SMALL, MEDIUM, LARGE]
     trunk = Trunk(1.5, 1.5, 0.9)
 
+    # 같은 boxes, trunk로 두 번 실행해서 결과가 완전히 똑같이 나오는지 비교
     plans_a, unload_a = generate_loading_plan(boxes, trunk)
     plans_b, unload_b = generate_loading_plan(boxes, trunk)
 
@@ -152,7 +155,7 @@ def run_all() -> bool:
     ]
 
     print("\n" + "=" * 60)
-    total, passed = len(results), sum(results)
+    total, passed = len(results), sum(results)  # bool 리스트를 sum하면 True 개수가 나옴
     print(f"총 {total}개 항목 중 {passed}개 통과")
     print("=" * 60)
     return all(results)

@@ -51,8 +51,11 @@ def rebuild_state_from_rescan(rescanned_placed_boxes: List["PlacedBox"]) -> "Ext
     "이전 상태와 비교해서 진짜 새로 놓인 것만 반영" 같은 정교한 버전으로
     바꿀 수 있음.
     """
-    state = ExtremePointState()
+    state = ExtremePointState()  # 완전히 빈 상태에서 다시 시작 (이전 state는 버림)
     for pb in rescanned_placed_boxes:
+        # 재스캔으로 확인된 박스들을 하나씩 "이미 놓인 것"으로 재등록.
+        # register_placement가 알아서 그 박스 기준 새 후보 3개도 같이 만들어주므로
+        # 후보 집합을 따로 계산할 필요 없음.
         state.register_placement(pb)
     return state
 
@@ -63,6 +66,7 @@ def replan_after_rescan(remaining_boxes: List["Box"], trunk, rescanned_placed_bo
     보수적 가정 버전: 재스캔으로 확인된 박스들로 상태를 다시 만들고,
     remaining_boxes(카트에 남은 것으로 알려진 박스)에 대해 이어서 계획한다.
     """
+    # 재스캔 결과로 트렁크 상태(놓인 박스 + 후보 좌표)를 처음부터 다시 구성
     state = rebuild_state_from_rescan(rescanned_placed_boxes)
 
     from importlib import import_module as im
@@ -71,9 +75,10 @@ def replan_after_rescan(remaining_boxes: List["Box"], trunk, rescanned_placed_bo
     decide_loading_order = _m06.decide_loading_order
     place_one_box = _m07.place_one_box
 
+    # 남은 박스만 대상으로 [⑥][⑦]을 그대로 다시 수행 (기존 배치는 이미 state에 반영됨)
     order = decide_loading_order(remaining_boxes)
     plans, unloadable = [], []
-    order_counter = len(rescanned_placed_boxes) + 1
+    order_counter = len(rescanned_placed_boxes) + 1  # 순번은 기존에 놓인 개수 다음부터 이어감
 
     for box in order:
         plan = place_one_box(box, trunk, state, order_counter)

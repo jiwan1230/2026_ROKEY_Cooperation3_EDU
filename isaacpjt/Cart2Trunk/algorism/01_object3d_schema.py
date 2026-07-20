@@ -79,6 +79,8 @@ def object3d_to_box(obj: Object3D):
     """
     from importlib import import_module
     import sys, pathlib
+    # 파일명이 숫자로 시작해서(예: "03_...") 일반 import문으로는 못 불러오므로
+    # 폴더를 sys.path에 넣고 import_module로 문자열 이름째 불러온다.
     sys.path.insert(0, str(pathlib.Path(__file__).parent))
     Box = import_module("03_extreme_point_candidates").Box
 
