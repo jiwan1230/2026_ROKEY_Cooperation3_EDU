@@ -2,18 +2,32 @@
 09_rescan_replan.py
 ⑨ 재스캔 후 재계획
 =====================
-상태: 🔴 보류 — 팀원 데이터 필요 (준형의 재스캔 결과 + 지완의 트리거 신호)
+상태: 🟡 트리거 정책 확정, ID 추적 이슈로 구현 보류 (7/20)
 
-[핵심 아이디어 - 극점 알고리즘을 고른 이유가 여기서 드러남]
-ExtremePointState는 "이미 놓인 박스 리스트 + 후보 좌표 집합"만 있으면
-언제든 상태를 재구성할 수 있다. 그래서 재스캔 트리거가 오면, 새로 스캔된
-점유 정보로 ExtremePointState를 다시 만들고 generate_loading_plan()을
-그대로 다시 호출하면 된다 — 로직을 새로 짤 필요가 없다.
+[지완 답변 - 트리거 정책 확정]
+박스를 하나 놓을 때마다("PER_PLACEMENT") 무조건 재스캔해서 트렁크 공간을
+갱신하고 다음 작업을 수행. 조건부(위치 변화 임계값 등) 트리거가 아니라
+고정 주기 트리거로 확정됨.
+
+[준형 답변 - 새로 발견된 문제: 박스 ID가 재스캔 전후로 안 유지됨]
+YOLO 검출만으로는 같은 박스가 재스캔 후에도 같은 id를 유지한다는 보장이
+없음. 지속 ID가 필요하면 이전 Object3D 목록과 새 검출 결과를 매칭하는
+별도의 객체 추적/상태 관리 컴포넌트가 있어야 함 (준형 제안: Object3D에
+object_id 필드 + 중앙 관리 노드).
+
+⚠️ 이게 왜 문제냐면: 극점 알고리즘(③)은 "이미 놓인 박스 리스트"를 다시
+만들 때 각 PlacedBox가 어떤 박스(Box)에 대응하는지 id로 식별한다. id가
+재스캔마다 바뀌면 "이 박스는 이미 처리했다"를 추적할 수 없어서 중복
+배치를 시도하거나, 이미 처리한 박스를 놓쳐서 재작업하는 문제가 생길 수
+있다. 즉 ⑨는 트리거 시점은 정해졌지만, "재스캔 결과를 이전 상태와 어떻게
+매칭할지"가 막혀서 아직 실제 구현은 못 함.
 
 [막힌 지점]
-    - "환경 변화 감지"를 언제 트리거로 볼지 (지완이 줄 신호 형식 미정)
-    - 재스캔 결과가 이미 놓인 박스들의 위치를 어떤 형식으로 주는지 (준형 미정)
-    - 박스 ID가 재스캔 전후로 유지되는지 (준형 확인 필요 - 같은 박스면 같은 id)
+    - 객체 추적/ID 유지 로직을 누가 만들지 아직 팀 차원에서 미정
+      (준형 쪽 Vision 파이프라인? 지완 쪽 중앙 관리 노드?)
+    - 그게 정해지기 전까지는 rebuild_state_from_rescan()에 "id가 유지된다"는
+      전제를 그대로 둘 수 없음 - 최소한 위치 기반 매칭이라도 임시로 넣을지
+      팀 논의 필요.
 """
 
 import sys, pathlib
@@ -29,15 +43,20 @@ ExtremePointState = _m03.ExtremePointState
 PlacedBox = _m03.PlacedBox
 generate_loading_plan = _m08.generate_loading_plan
 
+RESCAN_TRIGGER_POLICY = "PER_PLACEMENT"  # 지완 답변 확정: 박스 1개 놓을 때마다 1회
+
 
 def rebuild_state_from_rescan(rescanned_placed_boxes: List["PlacedBox"]) -> "ExtremePointState":
     """
-    준형의 재스캔 결과(이미 트렁크 안에 있는 박스들의 위치)로 ExtremePointState를
+    재스캔 결과(이미 트렁크 안에 있는 박스들의 위치)로 ExtremePointState를
     다시 만든다. 후보 좌표는 각 박스를 register_placement()로 다시 등록하면서
     자동으로 재계산된다.
 
-    ⚠️ TODO: rescanned_placed_boxes가 실제로 어떤 포맷으로 오는지는
-    준형의 스캔 파이프라인 출력 형식이 확정돼야 함.
+    ⚠️ 전제 조건 (아직 불확실): rescanned_placed_boxes 안의 각 박스 id가
+    이전 스캔과 동일하게 유지된다고 가정하고 있음. 준형 답변에 따르면
+    이 전제가 지금은 보장 안 됨 - 객체 추적 컴포넌트가 붙기 전까지는
+    이 함수를 "재스캔마다 트렁크를 처음부터 완전히 새로 인식한다"는
+    보수적인 가정 하에만 안전하게 쓸 수 있음 (이미 처리한 박스 구분 불가).
     """
     state = ExtremePointState()
     for pb in rescanned_placed_boxes:
@@ -47,28 +66,22 @@ def rebuild_state_from_rescan(rescanned_placed_boxes: List["PlacedBox"]) -> "Ext
 
 def replan_after_rescan(remaining_boxes: List["Box"], trunk, rescanned_placed_boxes: List["PlacedBox"]):
     """
-    재스캔 트리거가 오면 이렇게 재사용하면 됨.
+    재스캔 트리거(PER_PLACEMENT)가 발생할 때마다 호출될 함수.
 
-    Args:
-        remaining_boxes: 아직 적재 안 된 박스 리스트
-        trunk: 트렁크 공간 (실측값)
-        rescanned_placed_boxes: 재스캔으로 확인된, 이미 트렁크 안에 있는 박스들
-
-    Returns:
-        generate_loading_plan()과 동일한 (plans, unloadable) 튜플
-        (단, 이미 놓인 박스들의 상태를 반영한 상태에서 이어서 계산)
+    ⚠️ TODO: 객체 추적/ID 유지 방식이 팀 차원에서 정해지기 전까지는
+    remaining_boxes를 "이미 처리된 박스를 제외한 나머지"로 안전하게
+    걸러낼 방법이 없어서 미구현 상태로 남겨둠.
     """
-    # TODO: generate_loading_plan이 "빈 트렁크 기준"으로만 동작하므로,
-    # rebuild_state_from_rescan()으로 만든 state를 재사용하도록
-    # generate_loading_plan을 확장하거나 별도 버전을 만들어야 함.
-    # 지금은 인터페이스만 준비해둔 상태.
     raise NotImplementedError(
-        "재스캔 데이터 포맷 확정 후 구현 예정 "
-        "(rebuild_state_from_rescan()은 이미 준비됨, generate_loading_plan 확장만 남음)"
+        "박스 ID 추적 방식(준형 Vision 파이프라인 또는 지완 중앙 관리 노드) "
+        "확정 후 구현 예정. rebuild_state_from_rescan()은 이미 준비됨."
     )
 
 
-# TODO: 지완의 트리거 신호 연동 (아직 미구현)
-# def on_rescan_trigger(signal, remaining_boxes, trunk):
-#     """지완이 정의할 트리거 신호 형식이 오면, 여기서 replan_after_rescan()을 호출."""
-#     raise NotImplementedError("트리거 신호 형식 확정 후 구현 예정")
+# TODO: 트리거 신호 연동 (트리거 정책은 확정, 신호 자체 연동은 미구현)
+# def on_rescan_trigger(remaining_boxes, trunk):
+#     """
+#     박스 1개 배치 완료 시점마다 지완 쪽에서 신호를 주면 호출.
+#     신호의 정확한 전달 방식(콜백? 토픽? 폴링?)은 아직 미정.
+#     """
+#     raise NotImplementedError("신호 전달 방식 확정 후 구현 예정")
