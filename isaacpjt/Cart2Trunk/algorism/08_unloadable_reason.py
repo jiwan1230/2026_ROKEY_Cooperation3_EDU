@@ -61,12 +61,17 @@ def _remaining_free_volume(trunk, state: "ExtremePointState") -> float:
 
 
 def classify_unloadable_reason(box: "Box", trunk, state: "ExtremePointState") -> UnloadableReason:
+    # 검사 순서가 중요: 셋 다 걸릴 수 있어도 "가장 근본적인 이유"부터 확인해서 반환한다.
+    # 1순위: 박스 자체가 트렁크보다 큼 (자리 배치와 무관하게 애초에 불가능)
     if not fits_dims(box, trunk):
         return UnloadableReason.SIZE_EXCEEDS_TRUNK
 
+    # 2순위: 남은 부피 자체가 박스 부피보다 적음 (배치를 어떻게 하든 물리적으로 불가능)
     if _remaining_free_volume(trunk, state) < box.volume:
         return UnloadableReason.INSUFFICIENT_REMAINING_VOLUME
 
+    # 여기까지 왔으면 이론상 공간은 충분한데 현재 배치 모양 때문에 못 놓는 것
+    # -> 재배치(reshuffle)하면 들어갈 가능성이 있는 케이스
     return UnloadableReason.NO_VALID_CANDIDATE_POSITION
 
 
@@ -94,19 +99,22 @@ def generate_loading_plan(
       2) [⑦] 순서대로 하나씩 Extreme Point 최적 자리 찾아 배치
       3) 자리를 못 찾으면 [⑧] 사유 코드 부여 (다음 박스는 계속 시도)
     """
-    order = decide_loading_order(boxes)
-    state = ExtremePointState()
+    order = decide_loading_order(boxes)  # [⑥] 부피 큰 순서로 정렬된 시도 순서
+    state = ExtremePointState()          # 빈 트렁크 상태(후보는 (0,0,0) 하나)에서 시작
 
     plans: List["PlacementPlan"] = []
     unloadable: List[UnloadableItem] = []
     order_counter = 1
 
     for box in order:
+        # [⑦] 현재 state 기준으로 이 박스의 최적 자리를 찾아 배치 시도
         plan = place_one_box(box, trunk, state, order_counter)
         if plan is not None:
             plans.append(plan)
-            order_counter += 1
+            order_counter += 1  # 실제로 배치된 것만 순번을 늘림
         else:
+            # 자리를 못 찾음 -> [⑧] 왜 못 찾았는지 사유를 분류.
+            # 이 박스만 건너뛰고 for문은 계속 돌아 다음 박스는 계속 시도한다 (전체 중단 X)
             reason = classify_unloadable_reason(box, trunk, state)
             unloadable.append(UnloadableItem(
                 box_id=box.id, reason=reason,

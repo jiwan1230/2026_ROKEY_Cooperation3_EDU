@@ -45,20 +45,24 @@ def place_one_box(box: "Box", trunk, state: "ExtremePointState", order: int) -> 
     현재 상태(state)에서 box 하나를 놓을 최선의 자리를 찾아 배치한다.
     자리가 없으면 None (이 경우 ⑧ 미적재 판단으로 넘어가야 함).
     """
+    # [④] 현재 후보 좌표들 중, 이 box를 놓아도 겹치지도 밖으로 나가지도 않는 것만 추림
     valid_candidates = [
         (x, y, z) for (x, y, z) in state.candidates
         if is_candidate_valid(x, y, z, box, trunk, state.placed)
     ]
 
     if not valid_candidates:
-        return None
+        return None  # 놓을 자리가 하나도 없음 -> 호출한 쪽(⑧)이 미적재 사유를 판단해야 함
 
+    # [⑤] 유효한 후보 각각을 점수화 (score, touches)까지 같이 계산해서 보관
     scored = [
         (pos, *score_candidate(pos[0], pos[1], pos[2], box, trunk, state.placed))
         for pos in valid_candidates
     ]
+    # 점수(t[1])가 가장 낮은(=가장 좋은) 후보 하나를 최종 선택
     best_pos, best_score, best_touches = min(scored, key=lambda t: t[1])
 
+    # [③] 실제로 그 자리에 박스를 배치하고, 그 박스 기준 새 후보 3개를 상태에 등록
     placed_box = PlacedBox(box=box, x=best_pos[0], y=best_pos[1], z=best_pos[2])
     state.register_placement(placed_box)
 

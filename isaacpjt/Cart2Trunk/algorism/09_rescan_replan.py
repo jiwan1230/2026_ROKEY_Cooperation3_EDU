@@ -2,18 +2,26 @@
 09_rescan_replan.py
 ⑨ 재스캔 후 재계획
 =====================
-상태: 🔴 보류 — 팀원 데이터 필요 (준형의 재스캔 결과 + 지완의 트리거 신호)
+상태: 🟡 트리거 정책 확정, ID 추적은 "추후 해결 예정" — 보수적 가정으로 임시 구현 가능
 
-[핵심 아이디어 - 극점 알고리즘을 고른 이유가 여기서 드러남]
-ExtremePointState는 "이미 놓인 박스 리스트 + 후보 좌표 집합"만 있으면
-언제든 상태를 재구성할 수 있다. 그래서 재스캔 트리거가 오면, 새로 스캔된
-점유 정보로 ExtremePointState를 다시 만들고 generate_loading_plan()을
-그대로 다시 호출하면 된다 — 로직을 새로 짤 필요가 없다.
+[지완 답변 - 트리거 정책 확정]
+박스를 하나 놓을 때마다("PER_PLACEMENT") 무조건 재스캔해서 트렁크 공간을
+갱신하고 다음 작업을 수행.
 
-[막힌 지점]
-    - "환경 변화 감지"를 언제 트리거로 볼지 (지완이 줄 신호 형식 미정)
-    - 재스캔 결과가 이미 놓인 박스들의 위치를 어떤 형식으로 주는지 (준형 미정)
-    - 박스 ID가 재스캔 전후로 유지되는지 (준형 확인 필요 - 같은 박스면 같은 id)
+[준형 답변 - 박스 ID 지속성]
+지금은 재스캔 후에도 같은 박스가 같은 id를 유지한다는 보장이 없지만,
+"나중에 해결될 예정"이라는 답변을 받음. → 급하게 팀 이슈로 escalate할
+필요는 없어졌고, 대신 지금은 "ID가 유지 안 된다"는 보수적 가정 하에
+안전하게 동작하는 임시 버전으로 구현해둠. 1차 통합(7/22) 전에 진행
+상황 한 번 더 확인하면 됨.
+
+[보수적 가정이란]
+"재스캔마다 트렁크를 처음부터 완전히 새로 인식한다"고 가정. 즉 이전에
+어떤 박스를 처리했는지 기억하지 않고, 재스캔 결과에 있는 박스는 전부
+"이미 트렁크 안에 있는 것"으로 취급해서 상태를 재구성한다. 이러면 ID가
+바뀌어도 안전하지만, "이 박스는 아직 카트에 있는데 이미 처리한 걸로
+착각" 같은 오류는 못 막는다 - ID 추적이 실제로 붙으면 이 부분을
+더 정교하게 만들 수 있음.
 """
 
 import sys, pathlib
@@ -29,46 +37,82 @@ ExtremePointState = _m03.ExtremePointState
 PlacedBox = _m03.PlacedBox
 generate_loading_plan = _m08.generate_loading_plan
 
+RESCAN_TRIGGER_POLICY = "PER_PLACEMENT"  # 지완 답변 확정: 박스 1개 놓을 때마다 1회
+
 
 def rebuild_state_from_rescan(rescanned_placed_boxes: List["PlacedBox"]) -> "ExtremePointState":
     """
-    준형의 재스캔 결과(이미 트렁크 안에 있는 박스들의 위치)로 ExtremePointState를
+    재스캔 결과(이미 트렁크 안에 있는 박스들의 위치)로 ExtremePointState를
     다시 만든다. 후보 좌표는 각 박스를 register_placement()로 다시 등록하면서
     자동으로 재계산된다.
 
-    ⚠️ TODO: rescanned_placed_boxes가 실제로 어떤 포맷으로 오는지는
-    준형의 스캔 파이프라인 출력 형식이 확정돼야 함.
+    지금은 "보수적 가정"으로 동작: rescanned_placed_boxes에 있는 건 전부
+    이미 놓인 것으로 그대로 믿고 상태를 재구성한다. ID 추적이 붙으면
+    "이전 상태와 비교해서 진짜 새로 놓인 것만 반영" 같은 정교한 버전으로
+    바꿀 수 있음.
     """
-    state = ExtremePointState()
+    state = ExtremePointState()  # 완전히 빈 상태에서 다시 시작 (이전 state는 버림)
     for pb in rescanned_placed_boxes:
+        # 재스캔으로 확인된 박스들을 하나씩 "이미 놓인 것"으로 재등록.
+        # register_placement가 알아서 그 박스 기준 새 후보 3개도 같이 만들어주므로
+        # 후보 집합을 따로 계산할 필요 없음.
         state.register_placement(pb)
     return state
 
 
 def replan_after_rescan(remaining_boxes: List["Box"], trunk, rescanned_placed_boxes: List["PlacedBox"]):
     """
-    재스캔 트리거가 오면 이렇게 재사용하면 됨.
-
-    Args:
-        remaining_boxes: 아직 적재 안 된 박스 리스트
-        trunk: 트렁크 공간 (실측값)
-        rescanned_placed_boxes: 재스캔으로 확인된, 이미 트렁크 안에 있는 박스들
-
-    Returns:
-        generate_loading_plan()과 동일한 (plans, unloadable) 튜플
-        (단, 이미 놓인 박스들의 상태를 반영한 상태에서 이어서 계산)
+    재스캔 트리거(PER_PLACEMENT)가 발생할 때마다 호출.
+    보수적 가정 버전: 재스캔으로 확인된 박스들로 상태를 다시 만들고,
+    remaining_boxes(카트에 남은 것으로 알려진 박스)에 대해 이어서 계획한다.
     """
-    # TODO: generate_loading_plan이 "빈 트렁크 기준"으로만 동작하므로,
-    # rebuild_state_from_rescan()으로 만든 state를 재사용하도록
-    # generate_loading_plan을 확장하거나 별도 버전을 만들어야 함.
-    # 지금은 인터페이스만 준비해둔 상태.
-    raise NotImplementedError(
-        "재스캔 데이터 포맷 확정 후 구현 예정 "
-        "(rebuild_state_from_rescan()은 이미 준비됨, generate_loading_plan 확장만 남음)"
-    )
+    # 재스캔 결과로 트렁크 상태(놓인 박스 + 후보 좌표)를 처음부터 다시 구성
+    state = rebuild_state_from_rescan(rescanned_placed_boxes)
+
+    from importlib import import_module as im
+    _m06 = im("06_loading_order_decision")
+    _m07 = im("07_placement_plan")
+    decide_loading_order = _m06.decide_loading_order
+    place_one_box = _m07.place_one_box
+
+    # 남은 박스만 대상으로 [⑥][⑦]을 그대로 다시 수행 (기존 배치는 이미 state에 반영됨)
+    order = decide_loading_order(remaining_boxes)
+    plans, unloadable = [], []
+    order_counter = len(rescanned_placed_boxes) + 1  # 순번은 기존에 놓인 개수 다음부터 이어감
+
+    for box in order:
+        plan = place_one_box(box, trunk, state, order_counter)
+        if plan is not None:
+            plans.append(plan)
+            order_counter += 1
+        else:
+            from importlib import import_module as im2
+            m08 = im2("08_unloadable_reason")
+            reason = m08.classify_unloadable_reason(box, trunk, state)
+            unloadable.append(m08.UnloadableItem(
+                box_id=box.id, reason=reason,
+                detail=f"{box.id} - 사유: {reason.value}",
+            ))
+
+    return plans, unloadable
 
 
-# TODO: 지완의 트리거 신호 연동 (아직 미구현)
-# def on_rescan_trigger(signal, remaining_boxes, trunk):
-#     """지완이 정의할 트리거 신호 형식이 오면, 여기서 replan_after_rescan()을 호출."""
-#     raise NotImplementedError("트리거 신호 형식 확정 후 구현 예정")
+# TODO: 트리거 신호 연동 (트리거 정책은 확정, 신호 자체 연동은 미구현)
+# def on_rescan_trigger(remaining_boxes, trunk, rescanned_placed_boxes):
+#     """박스 1개 배치 완료 시점마다 지완 쪽에서 신호를 주면 호출."""
+#     return replan_after_rescan(remaining_boxes, trunk, rescanned_placed_boxes)
+
+
+if __name__ == "__main__":
+    _m02 = import_module("02_trunk_space_state")
+    Trunk = _m02.Trunk
+
+    trunk = Trunk(width=1.5, depth=1.5, height=0.9)
+    already_placed = [PlacedBox(box=Box("Medium", 0.4, 0.3, 0.25), x=0.0, y=0.0, z=0.0)]
+    remaining = [Box("Small", 0.30, 0.20, 0.15), Box("Large", 0.50, 0.35, 0.30)]
+
+    plans, unloadable = replan_after_rescan(remaining, trunk, already_placed)
+    for p in plans:
+        print("PLACED:", p)
+    for u in unloadable:
+        print("UNLOADABLE:", u)

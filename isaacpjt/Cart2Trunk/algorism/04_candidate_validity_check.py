@@ -26,12 +26,14 @@ PlacedBox = _m03.PlacedBox
 
 def boxes_overlap(a: "PlacedBox", b: "PlacedBox") -> bool:
     """두 박스가 3축(x,y,z) 모두에서 겹치면 실제로 겹치는 것 (AABB 충돌 판정)."""
-    ax0, ax1 = a.x_range
-    bx0, bx1 = b.x_range
+    ax0, ax1 = a.x_range  # a박스의 x축 구간 [ax0, ax1]
+    bx0, bx1 = b.x_range  # b박스의 x축 구간
     ay0, ay1 = a.y_range
     by0, by1 = b.y_range
     az0, az1 = a.z_range
     bz0, bz1 = b.z_range
+    # 각 축마다 "구간이 겹치는가"(ax0 < bx1 and ax1 > bx0)를 확인.
+    # 3축 전부 겹쳐야만 실제 3D 공간에서 두 박스가 겹치는 것 (하나라도 안 겹치면 안전).
     return (ax0 < bx1 and ax1 > bx0) and (ay0 < by1 and ay1 > by0) and (az0 < bz1 and az1 > bz0)
 
 
@@ -62,6 +64,8 @@ def is_candidate_valid(x: float, y: float, z: float, box: "Box", trunk, placed: 
     후보 좌표 (x,y,z)에 box를 놓았을 때 유효한지 종합 판단.
     (경계 안 + 기존 박스와 안 겹침)
     """
+    # 박스를 (x,y,z)에 놓았을 때 반대쪽 끝(x+width 등)이 트렁크 경계를 넘는지 확인.
+    # +1e-9는 부동소수점 오차로 인해 "딱 맞는 경우"가 false로 튕기는 걸 방지하는 여유값.
     if x + box.width > trunk.width + 1e-9:
         return False
     if y + box.depth > trunk.depth + 1e-9:
@@ -69,6 +73,7 @@ def is_candidate_valid(x: float, y: float, z: float, box: "Box", trunk, placed: 
     if z + box.height > trunk.height + 1e-9:
         return False
 
+    # 경계는 통과했으니, 이미 놓인 박스들과 하나라도 겹치면 무효
     candidate = PlacedBox(box=box, x=x, y=y, z=z)
     return not any(boxes_overlap(candidate, p) for p in placed)
 

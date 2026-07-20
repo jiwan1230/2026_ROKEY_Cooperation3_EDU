@@ -75,9 +75,11 @@ class ExtremePointState:
         """
         b = placed_box.box
         used = (placed_box.x, placed_box.y, placed_box.z)
-        self.candidates.discard(used)
-        self.placed.append(placed_box)
+        self.candidates.discard(used)  # 방금 쓴 자리는 더 이상 후보가 아니므로 제거
+        self.placed.append(placed_box)  # 배치 완료된 박스 목록에 추가
 
+        # 새로 놓인 박스의 오른쪽(x+width) / 안쪽(y+depth) / 위쪽(z+height) 끝점을
+        # 다음 박스가 놓일 수도 있는 새 후보로 추가한다 (③ 극점 알고리즘의 핵심 동작)
         self.candidates.add((placed_box.x + b.width, placed_box.y, placed_box.z))
         self.candidates.add((placed_box.x, placed_box.y + b.depth, placed_box.z))
         self.candidates.add((placed_box.x, placed_box.y, placed_box.z + b.height))
