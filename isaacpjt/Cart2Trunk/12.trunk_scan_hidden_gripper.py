@@ -598,6 +598,8 @@ if RUN_SWEEP:
                         "wall_top_z": TRUNK_WALL_TOP,
                     },
                     "anchor_pos": anchor_pos.tolist(),
+                    "base_pos": np.asarray(base_pos).tolist(),
+                    "base_quat": np.asarray(base_quat).tolist(),
                     "waypoints": scan_meta,
                 },
                 f,
