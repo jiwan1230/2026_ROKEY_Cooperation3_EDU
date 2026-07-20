@@ -78,7 +78,8 @@ CAMERA_AXES = "usd"  # USD Camera: +Y up, -Z forward
 WORLD_UP = (0.0, 0.0, 1.0)
 
 # base_link 기준 고정점. 트렁크 입구 앞, 바닥보다 약간 낮은 위치.
-BASIC_TARGET_LOCAL = (0.40, 0.15, 0.55)  # (forward, lateral, up) in base frame
+BASIC_TARGET_LOCAL = (0.40, 0.15, 0.7)  # (forward, lateral, up) in base frame
+LOOK_TARGET_Z = TRUNK_FLOOR_Z + 0.05
 BASIC_STEPS = 240
 SWEEP_STEPS = 150
 DO_SWEEP = True  # 먼저 center 자세 확인 후 True로 변경 권장
@@ -162,6 +163,16 @@ def build_mobile_manipulator(stage):
     stray_prim = stage.GetPrimAtPath(f"{m0609_path}/onrobot_rg2ft/world")
     if stray_prim.IsValid() and stray_prim.HasAPI(PhysxSchema.PhysxArticulationAPI):
         stray_prim.RemoveAPI(PhysxSchema.PhysxArticulationAPI)
+
+    # RSD455 카메라 asset에 딸려오는 IMU 센서(우리는 안 씀)가 매 스텝 rigid body velocity를
+    # 조회하다가 병합된 19-DOF articulation에서 "expected 6, received 12 shape(2,6)" 텐서
+    # 에러를 유발한다 (격리 테스트로 확인함). 안 쓰는 센서이므로 비활성화.
+    imu_prim = stage.GetPrimAtPath(
+        f"{m0609_path}/onrobot_rg2ft/angle_bracket/realsense_d455/RSD455/Imu_Sensor"
+    )
+    if imu_prim.IsValid():
+        imu_prim.SetActive(False)
+        print("[IMU] RSD455 Imu_Sensor 비활성화 (velocity tensor 에러 원인)", flush=True)
 
     n = add_drive_stiffness(stage, m0609_path)
     print(f"[DRIVE] {n}개 조인트 강성 재설정", flush=True)
@@ -363,7 +374,9 @@ trunk_mid_z = (TRUNK_FLOOR_Z + TRUNK_WALL_TOP) / 2.0
 trunk_center = np.array([
     (TRUNK_X_MIN + TRUNK_X_MAX) / 2.0,
     (TRUNK_Y_MIN + TRUNK_Y_MAX) / 2.0,
-    trunk_mid_z,
+    # trunk_mid_z,
+    # LOOK_TARGET_Z,
+    TRUNK_FLOOR_Z + 0.05,
 ])
 target_pos, target_quat = lookat_to_link6_target(anchor_pos, trunk_center, anchor_mode=ANCHOR_MODE)
 print(f"[기본 자세 목표] link6_pos={target_pos} (anchor={anchor_pos}, look_at=trunk_center={trunk_center})", flush=True)

@@ -160,6 +160,16 @@ def build_mobile_manipulator(stage):
     if stray_prim.IsValid() and stray_prim.HasAPI(PhysxSchema.PhysxArticulationAPI):
         stray_prim.RemoveAPI(PhysxSchema.PhysxArticulationAPI)
 
+    # RSD455 카메라 asset에 딸려오는 IMU 센서(우리는 안 씀)가 매 스텝 rigid body velocity를
+    # 조회하다가 병합된 19-DOF articulation에서 "expected 6, received 12 shape(2,6)" 텐서
+    # 에러를 유발한다 (격리 테스트로 확인함). 안 쓰는 센서이므로 비활성화.
+    imu_prim = stage.GetPrimAtPath(
+        f"{m0609_path}/onrobot_rg2ft/angle_bracket/realsense_d455/RSD455/Imu_Sensor"
+    )
+    if imu_prim.IsValid():
+        imu_prim.SetActive(False)
+        print("[IMU] RSD455 Imu_Sensor 비활성화 (velocity tensor 에러 원인)", flush=True)
+
     n = add_drive_stiffness(stage, m0609_path)
     print(f"[DRIVE] {n}개 조인트 강성 재설정", flush=True)
 

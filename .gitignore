@@ -5,3 +5,7 @@ log/
 
 # editor
 .vscode/
+
+# Cart2Trunk scan outputs (point clouds, sweep/pose screenshots) - regenerated per run, large binaries
+isaacpjt/Cart2Trunk/results/
+__pycache__/
