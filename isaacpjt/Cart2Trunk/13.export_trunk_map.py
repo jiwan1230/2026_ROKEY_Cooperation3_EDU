@@ -23,10 +23,14 @@ Isaac Sim 불필요 (일반 python3 + numpy + open3d로 실행).
       재구성한다 (물리 안정화 오차는 HANDOFF 기록상 각도 0.05~0.08도 수준이라 무시 가능).
       12.trunk_scan_hidden_gripper.py는 이제 base_pos/base_quat를 저장하므로, 이후 run은
       이 근사 없이 정확한 값을 그대로 쓴다.
-    - 휠하우스(좌/우 돌출부) 검출은 grid+connected-component 기반 휴리스틱이다. 열린 트렁크
-      문(리드)이 공중에 떠서 찍힌 점들은 WHEEL_HOUSE_MAX_HEIGHT_ABOVE_FLOOR보다 높은 곳에
-      있다고 보고 애초에 후보에서 제외한다("문 무시"). 자동 검출 결과가 이상하면
-      --visualize/trunk_map_preview.png로 확인 후 WHEEL_HOUSE_* 상수를 손으로 조정할 것.
+    - 바닥 위 점유 공간(휠하우스든, 스캔 당시 트렁크 안에 이미 놓여있던 물건이든) 검출은
+      grid+connected-component 기반 휴리스틱이다. 적재 계획 입장에서는 "왜 그 자리가 막혀있는지"
+      (차량 구조물/기존 물건)가 아니라 "그 자리가 막혀있다는 사실" 자체가 중요하므로 종류를
+      구분하지 않고 전부 obstacle_N으로 출력한다 - 각 obstacle의 extreme point(AABB 8꼭짓점)만
+      보고 새 박스가 들어갈 수 있는지 판단하면 된다. 열린 트렁크 문(리드)이 공중에 떠서 찍힌
+      점들은 OCCUPIED_MAX_HEIGHT_ABOVE_FLOOR보다 높은 곳에 있다고 보고 애초에 후보에서
+      제외한다("문 무시"). 자동 검출 결과가 이상하면 --visualize/trunk_map_preview.png로 확인
+      후 OCCUPIED_* 상수를 손으로 조정할 것.
 """
 
 from __future__ import annotations
@@ -73,15 +77,16 @@ CEILING_PLANE_RANSAC_ITERS = 2000
 CEILING_MIN_PLANE_INLIERS = 500        # 이보다 inlier가 적으면 "우연히 찾은 평면"으로 보고 버림
 CEILING_PLANE_MIN_HORIZONTALITY = 0.8  # |normal_z|/|normal| - 이보다 작으면 수평면이 아니라고 보고 버림(옆벽 등)
 
-WHEEL_HOUSE_CELL = 0.03        # grid cell 크기 (m)
-WHEEL_HOUSE_EDGE_MARGIN = 0.05  # 벽 근처 cell 제외 (벽을 돌출부로 오검출하지 않도록)
-WHEEL_HOUSE_BUMP_THRESHOLD = 0.03  # local floor 기준값보다 이 높이(m) 이상 솟은 cell만 돌출부 후보
-WHEEL_HOUSE_MIN_CELLS = 6      # 돌출부(덩어리)로 인정할 최소 cell 개수 (노이즈 방지)
-WHEEL_HOUSE_MAX_BLOB_AREA_FRACTION = 0.25  # 덩어리 하나가 interior의 이 비율을 넘으면 휠하우스로 안 봄
-WHEEL_HOUSE_MAX_Y_SPAN_FRACTION = 0.5  # 덩어리가 y폭 전체의 이 비율을 넘게 가로지르면 제외(문턱 등으로 추정)
+OCCUPIED_CELL = 0.03        # grid cell 크기 (m)
+OCCUPIED_EDGE_MARGIN = 0.05  # 벽 근처 cell 제외 (벽을 돌출부로 오검출하지 않도록)
+OCCUPIED_BUMP_THRESHOLD = 0.03  # local floor 기준값보다 이 높이(m) 이상 솟은 cell만 돌출부 후보
+OCCUPIED_MIN_CELLS = 6      # 덩어리로 인정할 최소 cell 개수 (노이즈 방지)
+OCCUPIED_MAX_AREA_FRACTION = 0.25  # 덩어리 하나가 interior의 이 비율을 넘으면 (바닥 전체를 뒤덮은
+                                     # 노이즈/오검출 가능성이 높다고 보고) 버림
+OCCUPIED_MAX_Y_SPAN_FRACTION = 0.5  # 덩어리가 y폭 전체의 이 비율을 넘게 가로지르면 제외(문턱 등으로 추정)
 # 열린 트렁크 문(리드)이 공중에 떠서 찍히는 높이(대략 바닥+0.5~0.6m, 실측 결과 기준)보다
-# 훨씬 낮게 잡아서, 문 점군은 애초에 휠하우스 후보 계산에서 아예 제외한다 ("문 무시").
-WHEEL_HOUSE_MAX_HEIGHT_ABOVE_FLOOR = 0.40
+# 훨씬 낮게 잡아서, 문 점군은 애초에 점유 공간 후보 계산에서 아예 제외한다 ("문 무시").
+OCCUPIED_MAX_HEIGHT_ABOVE_FLOOR = 0.40
 
 
 # --------------------------------------------------------------------------- #
@@ -208,9 +213,9 @@ def compute_ceiling_z_base(trunk_bounds: dict, base_pos: np.ndarray, R_base: np.
     p_world = np.array([[cx, cy, trunk_bounds["wall_top_z"]]])
     config_ceiling_z = float(world_to_base(p_world, base_pos, R_base)[0][2])
 
-    # 바닥에서 WHEEL_HOUSE_MAX_HEIGHT_ABOVE_FLOOR보다 높이 뜬 점 = "바닥/휠하우스"가 아니라
+    # 바닥에서 OCCUPIED_MAX_HEIGHT_ABOVE_FLOOR보다 높이 뜬 점 = "바닥 위 점유 공간"이 아니라
     # "위에서 뭔가가 관측된" 점으로 취급.
-    overhead = pts_base[pts_base[:, 2] > floor_z + WHEEL_HOUSE_MAX_HEIGHT_ABOVE_FLOOR]
+    overhead = pts_base[pts_base[:, 2] > floor_z + OCCUPIED_MAX_HEIGHT_ABOVE_FLOOR]
     measured_ceiling_z = config_ceiling_z
 
     if len(overhead) >= CEILING_MIN_OVERHEAD_POINTS:
@@ -245,25 +250,32 @@ def compute_ceiling_z_base(trunk_bounds: dict, base_pos: np.ndarray, R_base: np.
 
 
 # --------------------------------------------------------------------------- #
-# 휠하우스(좌/우 돌출부) 검출 - grid 휴리스틱 + connected-component
+# 바닥 위 점유 공간(obstacle) 검출 - grid 휴리스틱 + connected-component
 # --------------------------------------------------------------------------- #
 
-def detect_wheel_houses(pts_base: np.ndarray, aabb: dict) -> list[dict]:
-    """열린 트렁크 문(리드)이 공중에 떠서 찍힌 점들은 WHEEL_HOUSE_MAX_HEIGHT_ABOVE_FLOOR보다
+def detect_occupied_regions(pts_base: np.ndarray, aabb: dict) -> list[dict]:
+    """열린 트렁크 문(리드)이 공중에 떠서 찍힌 점들은 OCCUPIED_MAX_HEIGHT_ABOVE_FLOOR보다
     훨씬 위(바닥+0.5~0.6m대)에 있으므로, 애초에 후보 점 집합에서 제외하고 시작한다
-    ("문 무시"). 남은 낮은 점들에서 좌/우 휠하우스를 각각 별도 덩어리로 검출한다."""
+    ("문 무시"). 남은 낮은 점들에서 바닥 위로 솟은 덩어리를 모두 찾아 obstacle_N으로 반환한다.
+
+    휠하우스(차량 구조물)와 스캔 당시 이미 트렁크 안에 있던 물건을 구분하려 한 적이 있었으나,
+    적재 계획 입장에서는 "그 자리가 왜 막혀있는지"는 중요하지 않고 "막혀있다는 사실"(extreme
+    point 기준 점유 영역)만 있으면 된다 - 오히려 종류를 나눠서 "같은 쪽 벽엔 하나만" 같은 제약을
+    걸면, 트렁크 안 물체가 실제 휠하우스와 크기가 비슷할 때 그 자리를 빼앗아 진짜 휠하우스가
+    노이즈로 버려지는 문제가 생긴다. 그래서 종류 구분 없이 조건을 만족하는 덩어리를 전부 그대로
+    obstacle로 반환한다(개수 제한 없음)."""
     from scipy import ndimage
 
     x_min, x_max = aabb["x_min"], aabb["x_max"]
     y_min, y_max = aabb["y_min"], aabb["y_max"]
     floor_z = aabb["floor_z"]
 
-    band_pts = pts_base[pts_base[:, 2] < floor_z + WHEEL_HOUSE_MAX_HEIGHT_ABOVE_FLOOR]
-    print(f"[휠하우스] 문 높이 제외 후 후보점: {len(pts_base)} -> {len(band_pts)} "
-          f"(z < floor_z+{WHEEL_HOUSE_MAX_HEIGHT_ABOVE_FLOOR}m)")
+    band_pts = pts_base[pts_base[:, 2] < floor_z + OCCUPIED_MAX_HEIGHT_ABOVE_FLOOR]
+    print(f"[점유영역] 문 높이 제외 후 후보점: {len(pts_base)} -> {len(band_pts)} "
+          f"(z < floor_z+{OCCUPIED_MAX_HEIGHT_ABOVE_FLOOR}m)")
 
-    nx = max(1, int((x_max - x_min) / WHEEL_HOUSE_CELL))
-    ny = max(1, int((y_max - y_min) / WHEEL_HOUSE_CELL))
+    nx = max(1, int((x_max - x_min) / OCCUPIED_CELL))
+    ny = max(1, int((y_max - y_min) / OCCUPIED_CELL))
     x_edges = np.linspace(x_min, x_max, nx + 1)
     y_edges = np.linspace(y_min, y_max, ny + 1)
 
@@ -277,21 +289,21 @@ def detect_wheel_houses(pts_base: np.ndarray, aabb: dict) -> list[dict]:
             if len(sel) >= 3:
                 local_min_z[cx, cy] = np.percentile(sel, 5)
 
-    edge_margin_cells_x = max(1, int(WHEEL_HOUSE_EDGE_MARGIN / WHEEL_HOUSE_CELL))
-    edge_margin_cells_y = max(1, int(WHEEL_HOUSE_EDGE_MARGIN / WHEEL_HOUSE_CELL))
+    edge_margin_cells_x = max(1, int(OCCUPIED_EDGE_MARGIN / OCCUPIED_CELL))
+    edge_margin_cells_y = max(1, int(OCCUPIED_EDGE_MARGIN / OCCUPIED_CELL))
     interior = np.zeros_like(local_min_z, dtype=bool)
     interior[edge_margin_cells_x:nx - edge_margin_cells_x, edge_margin_cells_y:ny - edge_margin_cells_y] = True
     interior &= ~np.isnan(local_min_z)
     n_interior = int(np.count_nonzero(interior))
     if n_interior == 0:
-        print("[휠하우스] interior에 유효 데이터 없음 -> 검출 안 함")
+        print("[점유영역] interior에 유효 데이터 없음 -> 검출 안 함")
         return []
 
     # 전역 percentile은 노이즈 하나에도 흔들리므로, cell별 local min의 중앙값을 "이 트렁크에서
     # 가장 흔한 바닥 높이" 기준으로 삼는다.
     floor_ref = float(np.median(local_min_z[interior]))
-    bump_mask = interior & (local_min_z > (floor_ref + WHEEL_HOUSE_BUMP_THRESHOLD))
-    print(f"[휠하우스] floor_ref(local median)={floor_ref:.3f} (전역 1pctl={floor_z:.3f}) "
+    bump_mask = interior & (local_min_z > (floor_ref + OCCUPIED_BUMP_THRESHOLD))
+    print(f"[점유영역] floor_ref(local median)={floor_ref:.3f} (전역 1pctl={floor_z:.3f}) "
           f"bump 후보 {int(np.count_nonzero(bump_mask))}/{n_interior} cell")
 
     labeled, n_blobs = ndimage.label(bump_mask, structure=np.ones((3, 3)))
@@ -301,20 +313,20 @@ def detect_wheel_houses(pts_base: np.ndarray, aabb: dict) -> list[dict]:
         blob = labeled == blob_id
         n_cells = int(np.count_nonzero(blob))
         area_fraction = n_cells / n_interior
-        if n_cells < WHEEL_HOUSE_MIN_CELLS:
+        if n_cells < OCCUPIED_MIN_CELLS:
             continue
-        if area_fraction > WHEEL_HOUSE_MAX_BLOB_AREA_FRACTION:
-            print(f"[휠하우스] 덩어리(cell {n_cells}개)가 interior의 {area_fraction:.0%}를 차지 "
-                  f"(> {WHEEL_HOUSE_MAX_BLOB_AREA_FRACTION:.0%}) - 휠하우스로 보기엔 너무 커서 제외")
+        if area_fraction > OCCUPIED_MAX_AREA_FRACTION:
+            print(f"[점유영역] 덩어리(cell {n_cells}개)가 interior의 {area_fraction:.0%}를 차지 "
+                  f"(> {OCCUPIED_MAX_AREA_FRACTION:.0%}) - 바닥 전체 오검출 가능성이 커서 제외")
             continue
 
         cx_idx, cy_idx = np.nonzero(blob)
         bx_min, bx_max = x_edges[cx_idx.min()], x_edges[cx_idx.max() + 1]
         by_min, by_max = y_edges[cy_idx.min()], y_edges[cy_idx.max() + 1]
-        # 휠하우스는 한쪽 벽에 붙은 좁은 돌출부여야 한다. y방향으로 폭 전체의 절반 이상을
-        # 가로지르는 덩어리는 휠하우스가 아니라 입구 문턱/선반 같은 다른 구조물일 가능성이 커서 제외.
-        if (by_max - by_min) > WHEEL_HOUSE_MAX_Y_SPAN_FRACTION * y_span_total:
-            print(f"[휠하우스] 덩어리(cell {n_cells}개, y=[{by_min:.3f},{by_max:.3f}])가 폭 전체의 "
+        # y방향으로 폭 전체의 절반 이상을 가로지르는 덩어리는 하나의 점유 물체라기보다 입구
+        # 문턱/선반 같은 다른 구조물일 가능성이 커서 제외.
+        if (by_max - by_min) > OCCUPIED_MAX_Y_SPAN_FRACTION * y_span_total:
+            print(f"[점유영역] 덩어리(cell {n_cells}개, y=[{by_min:.3f},{by_max:.3f}])가 폭 전체의 "
                   f"{(by_max - by_min) / y_span_total:.0%}를 가로질러 제외 (문턱/선반 등으로 추정)")
             continue
 
@@ -324,32 +336,18 @@ def detect_wheel_houses(pts_base: np.ndarray, aabb: dict) -> list[dict]:
                        "floor_z": floor_z, "top_z": top_z, "n_cells": n_cells})
 
     if not blobs:
-        print("[휠하우스] 조건을 만족하는 덩어리 없음 -> 검출 안 함")
+        print("[점유영역] 조건을 만족하는 덩어리 없음 -> 검출 안 함")
         return []
 
-    # 같은 벽(y_min쪽/y_max쪽)에 붙은 덩어리가 여러 개면, 서로 떨어져 있는 별개 구조물(노이즈
-    # 포함)일 가능성이 높다 - 합치지 않고 "가장 큰 덩어리 하나"만 그 벽의 휠하우스로 채택한다.
-    y_center = (y_min + y_max) / 2
-    sides = {"wheel_house_left": [], "wheel_house_right": []}
-    for b in blobs:
-        side = "wheel_house_left" if (b["y_min"] + b["y_max"]) / 2 < y_center else "wheel_house_right"
-        sides[side].append(b)
-
+    # 종류 구분 없이(휠하우스든 놓인 물건이든) 전부 개별 obstacle로 남긴다 - 큰 순서로 번호를 매겨
+    # 결과가 매 실행마다 안정적인 순서를 갖도록 한다.
     results = []
-    for name, group in sides.items():
-        if not group:
-            continue
-        if len(group) > 1:
-            dropped = sorted(group, key=lambda b: -b["n_cells"])[1:]
-            for d in dropped:
-                print(f"[휠하우스] {name} 쪽 작은 덩어리(cell {d['n_cells']}개, "
-                      f"x=[{d['x_min']:.3f},{d['x_max']:.3f}]) 제외 - 노이즈로 추정")
-        best = max(group, key=lambda b: b["n_cells"])
-        best = dict(best, name=name)
-        results.append(best)
-        print(f"[휠하우스] {name}: x=[{best['x_min']:.3f},{best['x_max']:.3f}] "
-              f"y=[{best['y_min']:.3f},{best['y_max']:.3f}] top_z={best['top_z']:.3f} "
-              f"(cell {best['n_cells']}개)")
+    for i, b in enumerate(sorted(blobs, key=lambda b: -b["n_cells"]), start=1):
+        name = f"obstacle_{i}"
+        entry = dict(b, name=name)
+        results.append(entry)
+        print(f"[점유영역] {name}: x=[{b['x_min']:.3f},{b['x_max']:.3f}] "
+              f"y=[{b['y_min']:.3f},{b['y_max']:.3f}] top_z={b['top_z']:.3f} (cell {b['n_cells']}개)")
 
     return results
 
@@ -367,7 +365,7 @@ def box_vertices(x_min, x_max, y_min, y_max, z_min, z_max):
     ]
 
 
-def build_trunk_map(aabb: dict, ceiling_z: float, wheel_houses: list[dict],
+def build_trunk_map(aabb: dict, ceiling_z: float, detected_objects: list[dict],
                      run_id: str, n_raw: int, n_filtered: int) -> dict:
     v = box_vertices(aabb["x_min"], aabb["x_max"], aabb["y_min"], aabb["y_max"],
                       aabb["floor_z"], ceiling_z)
@@ -412,13 +410,16 @@ def build_trunk_map(aabb: dict, ceiling_z: float, wheel_houses: list[dict],
 
     result["obstacles"] = [
         {
-            "name": wh["name"],
-            "vertices": box_vertices(wh["x_min"], wh["x_max"], wh["y_min"], wh["y_max"],
-                                      wh["floor_z"], wh["top_z"]),
+            "name": obj["name"],
+            "vertices": box_vertices(obj["x_min"], obj["x_max"], obj["y_min"], obj["y_max"],
+                                      obj["floor_z"], obj["top_z"]),
             "style": "solid",
-            "note": "grid 휴리스틱 자동 검출 결과 - 필요시 손으로 조정",
+            "note": (
+                "grid 휴리스틱 자동 검출 결과 - 휠하우스/기존 물건 구분 없이 바닥 위 점유 공간을 "
+                "모두 extreme point(AABB)로 표시. 필요시 손으로 조정"
+            ),
         }
-        for wh in wheel_houses
+        for obj in detected_objects
     ]
 
     return result
@@ -463,10 +464,11 @@ def build_visual_geometries(trunk_map: dict, pts_base: np.ndarray):
         ov = np.array(obs["vertices"])
         obs_edges = [[0, 1], [1, 2], [2, 3], [3, 0], [4, 5], [5, 6], [6, 7], [7, 4],
                      [0, 4], [1, 5], [2, 6], [3, 7]]
+        color = (0.1, 0.5, 0.95)
         obs_ls = o3d.geometry.LineSet()
         obs_ls.points = o3d.utility.Vector3dVector(ov)
         obs_ls.lines = o3d.utility.Vector2iVector(np.array(obs_edges))
-        obs_ls.colors = o3d.utility.Vector3dVector([(0.1, 0.5, 0.95)] * len(obs_edges))
+        obs_ls.colors = o3d.utility.Vector3dVector([color] * len(obs_edges))
         geoms.append(obs_ls)
 
     pcd = o3d.geometry.PointCloud()
@@ -520,7 +522,7 @@ def save_preview_png(trunk_map: dict, pts_base: np.ndarray, out_path: Path) -> N
     legend = [
         Line2D([0], [0], color="red", lw=2, label="solid = 실측 (바닥/벽)"),
         Line2D([0], [0], color="orange", lw=2, linestyle="--", label="dashed = 설계 한계 (천장/문닫힘)"),
-        Line2D([0], [0], color="dodgerblue", lw=2, label="obstacle (예: 타이어 하우징)"),
+        Line2D([0], [0], color="dodgerblue", lw=2, label="obstacle = 바닥 위 점유 공간 (휠하우스/기존 물건 구분 없음)"),
     ]
     fig.legend(handles=legend, loc="lower center", ncol=3)
     fig.suptitle(f"trunk_map preview - {trunk_map['run_id']} (frame={trunk_map['frame']})")
@@ -565,9 +567,9 @@ def main():
     print(f"[천장(점선) 설정값] ceiling_z={ceiling_z:.3f} "
           f"(base 프레임 높이 = {ceiling_z - aabb['floor_z']:.3f}m)")
 
-    wheel_houses = detect_wheel_houses(pts_base, aabb)
+    detected_objects = detect_occupied_regions(pts_base, aabb)
 
-    trunk_map = build_trunk_map(aabb, ceiling_z, wheel_houses, run_dir.name, n_raw, len(pts_base))
+    trunk_map = build_trunk_map(aabb, ceiling_z, detected_objects, run_dir.name, n_raw, len(pts_base))
 
     out_path = pc_dir / "trunk_map.json"
     out_path.write_text(json.dumps(trunk_map, indent=2, ensure_ascii=False))
