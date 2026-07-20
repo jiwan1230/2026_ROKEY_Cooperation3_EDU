@@ -2,28 +2,34 @@
 02_trunk_space_state.py
 ② 공간 상태 구성
 ==================
-상태: 🟡 형식 확정, 실제 연동 로직은 다음 단계 — 준형/지완 답변 반영 (7/20)
+상태: 🟡 형식 확정, 실제 연동 로직은 다음 단계 — 팀 답변 반영 (7/20)
 
-[지완 답변 - 트렁크 스캔 데이터 형식]
-Point Cloud를 모아서 만든 하나의 "3D World Map"을, Extreme Point 알고리즘에
-맞게 가공해서 준다고 함 - 트렁크의 굴곡이나 꺾이는 지점을 점(vertex)과
-선(edge)으로 표현한 뼈대(skeleton) 형태로 제공 예정 (스케치 이미지 참고:
-빨간 선으로 그려진 트렁크 뼈대 + 그 안에 배치된 박스도 같은 점/선으로 표현).
-박스를 하나 넣고 나면 그 박스도 같은 점/선 표현으로 "삽입"해서 트렁크
-맵을 갱신하는 그림임 - 이건 정확히 ③의 register_placement()가 하는 일과
-개념적으로 같음 (배치 후 상태 갱신).
+[좌표계 정리 - Q2 완전히 해소됨]
+트렁크·카트·박스(Object3D) 전부 M0609(로봇팔) base 좌표계 하나로 통일해서
+온다 (스케치 확인: 로봇이 원점, 트렁크/카트 점들이 그 원점 기준 벡터).
+그래서 "누가 좌표를 변환해줄지" 같은 질문 자체가 필요 없어졌음 -
+처음부터 끝까지 같은 좌표계.
 
-[지완 답변 - 재스캔 트리거, ⑨와 직결]
-박스를 하나 넣을 때마다 잘 들어갔는지 재스캔해서 트렁크 공간을 업데이트하고
-다음 작업을 수행하는 방식. 즉 트리거는 "매 박스 배치 1회당 1번" - 별도
-조건(위치 변화 임계값 등) 없이 고정 주기로 재스캔함.
+[그런데 왜 여전히 오프셋 계산이 필요한가]
+우리 극점(Extreme Point) 알고리즘(③)은 "박스가 놓일 자리를 (0,0,0)부터
+계산"하는 내부 방식을 쓴다. 근데 로봇 원점 기준 트렁크 점들은 (0,0,0)이
+아니라 로봇 위치에 따라 음수·양수가 섞인 값으로 온다 (예: 트렁크가
+로봇보다 앞쪽·위쪽에 있으면 z는 양수, x는 로봇 기준 앞/뒤에 따라 음수일
+수도 있음). 그래서 "트렁크 점들 중 가장 작은 좌표(min corner)"를 우리가
+직접 계산해서, 그 지점을 (0,0,0)으로 잡고 나머지 계산은 전부 그 기준
+로컬 좌표로 하는 것 - 이건 팀에게 요청할 변환이 아니라 이 파일 안에서
+알아서 처리하는 내부 구현 디테일임.
 
-[지금 상태]
-"점/선으로 표현된 형태"라는 데이터 형식은 확정됐지만, 그 데이터를 실제로
-파싱해서 우리 알고리즘이 쓰는 Trunk(현재는 단순 직육면체)로 변환하는
-로직은 아직 못 만듦 - 실제 예시 데이터(좌표값이 담긴 실물)가 와야
-정확한 파싱 로직을 짤 수 있음. 지금은 그 데이터를 받을 그릇(TrunkWorldMap)
-만 미리 준비해두고, 기존 단순 직육면체 Trunk는 MVP fallback으로 유지.
+나중에 배치 결과(PlacementPlan)를 로봇 제어(민결)에게 넘길 때는, 이 오프셋을
+다시 더해서 M0609 base 좌표계로 되돌려줘야 함 (base_frame_to_local의 역변환).
+
+[준형 답변 - 트렁크 스캔 데이터 형식]
+Point Cloud를 모아 만든 "3D World Map"을, 트렁크의 굴곡/꺾이는 지점을
+점(vertex)과 선(edge)으로 표현해서 제공 예정. 실제 좌표 샘플은 아직
+진행 중 (팀에서 계속 작업 중).
+
+[지완 답변 - 재스캔 트리거]
+박스 1개 배치할 때마다 무조건 재스캔 ("PER_PLACEMENT" 고정 주기).
 """
 
 from dataclasses import dataclass, field
@@ -33,8 +39,9 @@ from typing import List, Tuple
 @dataclass
 class Trunk:
     """
-    MVP fallback: 트렁크를 단순 직육면체로 취급하는 현재 버전.
-    실제 TrunkWorldMap 파싱 로직이 완성되기 전까지 ③~⑩ 전체가 이걸 사용.
+    내부 계산용 트렁크 표현 - 항상 (0,0,0)을 한쪽 코너로 하는 로컬 좌표계.
+    실제 M0609 base 좌표계 데이터를 받으면 TrunkWorldMap.to_bounding_trunk()로
+    변환해서 이 형태로 만든다.
     """
     width: float   # x축 (m)
     depth: float   # y축 (m)
@@ -44,58 +51,73 @@ class Trunk:
 @dataclass
 class TrunkWorldMap:
     """
-    준형이 제공할 "점/선으로 표현된 트렁크 뼈대" 데이터를 담을 그릇.
+    준형이 제공할 "M0609 base 좌표계 기준, 점/선으로 표현된 트렁크 뼈대" 데이터.
 
-    ⚠️ TODO: 아직 실제 좌표 예시를 못 받아서 vertices/edges의 정확한
-    포맷(단위, 좌표계, 정렬 순서 등)은 확정 안 됨. 실제 데이터 오면:
-      1. vertices/edges 파싱 로직 작성
-      2. 이 굴곡진 형태를 Extreme Point가 쓸 수 있는 형태로 변환
-         (단순 직육면체 이상으로 확장 - 오목한 부분/휠하우스 등 반영)
-      3. insert_box()로 배치된 박스를 맵에 반영하는 로직 (준형 스케치의
-         "삽입" 개념과 대응)
+    ⚠️ TODO: 실제 좌표 샘플이 아직 도착 전 (준형 작업 진행 중). vertices의
+    정확한 포맷(단위, 정렬 순서 등)은 실제 데이터 오면 확정.
     """
-    vertices: List[Tuple[float, float, float]] = field(default_factory=list)
+    vertices: List[Tuple[float, float, float]] = field(default_factory=list)  # M0609 base 좌표계 기준
     edges: List[Tuple[int, int]] = field(default_factory=list)  # vertices 인덱스 쌍
 
-    def to_bounding_trunk(self) -> Trunk:
+    def to_bounding_trunk(self) -> Tuple[Trunk, Tuple[float, float, float]]:
         """
-        임시 어댑터: 정밀 파싱 로직이 완성되기 전까지, vertices의 최소/최대
-        범위로 단순 직육면체(Trunk)를 근사해서 반환. 굴곡/오목 부분은
-        무시됨 - 진짜 데이터로 검증 전까지의 잠정 처리.
+        M0609 base 좌표계의 vertices를 받아서:
+          1. 우리 알고리즘이 쓸 로컬 Trunk(0,0,0 코너 기준)로 변환
+          2. 그 변환에 쓴 오프셋(= M0609 base 좌표계에서 로컬 원점이 실제로
+             어디였는지)을 같이 반환 - 나중에 로봇에게 좌표를 돌려줄 때 필요
+
+        굴곡/오목한 부분은 지금은 무시하고 최소/최대 범위로 근사 (정밀
+        형태 반영은 실제 데이터로 검증하며 다음 단계에서 확장).
         """
         if not self.vertices:
             raise ValueError("TrunkWorldMap에 vertices가 없음")
+
         xs = [v[0] for v in self.vertices]
         ys = [v[1] for v in self.vertices]
         zs = [v[2] for v in self.vertices]
-        return Trunk(width=max(xs) - min(xs), depth=max(ys) - min(ys), height=max(zs) - min(zs))
+
+        offset = (min(xs), min(ys), min(zs))  # M0609 base 좌표계 기준 로컬 원점 위치
+        trunk = Trunk(width=max(xs) - min(xs), depth=max(ys) - min(ys), height=max(zs) - min(zs))
+        return trunk, offset
 
 
-# ---- 8.rescale_and_rebuild.py 기준 값 (현재 고정 차량 기준 유효, 정밀 World Map 데이터 예정) ----
-WORLD_ORIGIN = (3.11, -0.56, 1.03)  # 로컬 (0,0,0)이 가리키는 월드 좌표 (X_MIN, Y_MIN, FLOOR_Z)
+def local_to_base_frame(x: float, y: float, z: float, offset: Tuple[float, float, float]):
+    """
+    로컬 좌표(0,0,0 코너 기준) -> M0609 base 좌표계로 되돌리는 변환.
+    PlacementPlan을 로봇 제어(민결)에게 넘길 때 이 함수로 되돌려서 전달해야 함.
+    """
+    ox, oy, oz = offset
+    return (x + ox, y + oy, z + oz)
 
+
+# ---- 8.rescale_and_rebuild.py 시뮬레이션 씬 기준 값 (MVP fallback, 실제 World Map 데이터 예정) ----
+# 참고: 이 값은 준형의 실제 M0609 base 좌표계 스캔 데이터가 아니라, 지완이 만든
+# 시뮬레이션 씬에서 뽑은 값이라 임시로만 사용.
 REAL_TRUNK = Trunk(
     width=3.68 - 3.11,     # 0.57
     depth=0.56 - (-0.56),  # 1.12
     height=1.28 - 1.03,    # 0.25
 )
-
-
-def local_to_world(x: float, y: float, z: float):
-    """로컬 좌표(0,0,0 시작) -> 월드 절대좌표 변환."""
-    ox, oy, oz = WORLD_ORIGIN
-    return (x + ox, y + oy, z + oz)
+REAL_TRUNK_OFFSET = (3.11, -0.56, 1.03)  # 위 REAL_TRUNK를 만들 때 쓴 로컬 원점 오프셋 (임시값)
 
 
 # ---- 재스캔 트리거 확정 (지완 답변) ----
-# "박스 하나 배치할 때마다 무조건 재스캔" - 조건부 트리거 아님.
 RESCAN_TRIGGER_POLICY = "PER_PLACEMENT"  # 박스 1개 놓을 때마다 1회
 
 
-# TODO: 준형의 실제 World Map 좌표 데이터 연동 (아직 미구현)
+# TODO: 준형의 실제 World Map 좌표 데이터 연동 (샘플 데이터 도착 대기 중)
 # def load_trunk_from_world_map(raw_scan_data) -> TrunkWorldMap:
-#     """
-#     준형이 줄 점/선 형식 데이터를 TrunkWorldMap으로 파싱.
-#     실제 예시 데이터 도착 후 포맷에 맞춰 구현.
-#     """
+#     """준형이 줄 점/선 형식 데이터를 TrunkWorldMap으로 파싱. 실제 샘플 도착 후 구현."""
 #     raise NotImplementedError("실제 World Map 데이터 샘플 도착 후 구현 예정")
+
+
+if __name__ == "__main__":
+    # 데모: M0609 base 좌표계 기준(음수 포함) 트렁크 점들이 왔을 때 오프셋 계산 확인
+    demo_map = TrunkWorldMap(vertices=[
+        (-0.3, -0.5, 0.9), (0.27, -0.5, 0.9), (-0.3, 0.5, 0.9), (0.27, 0.5, 0.9),
+        (-0.3, -0.5, 1.15), (0.27, -0.5, 1.15), (-0.3, 0.5, 1.15), (0.27, 0.5, 1.15),
+    ])
+    trunk, offset = demo_map.to_bounding_trunk()
+    print("로컬 Trunk:", trunk)
+    print("M0609 base 기준 오프셋:", offset)
+    print("로컬 (0.1,0.1,0.1)을 base frame으로 되돌리면:", local_to_base_frame(0.1, 0.1, 0.1, offset))
