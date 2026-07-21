@@ -43,11 +43,15 @@ HEIGHT_WEIGHT = 1.0
 CONTACT_WEIGHT = 0.5
 # 트렁크 벽 3개(A/B/C)를 우대하는 정도 - 사용자가 손그림으로 직접 지정한 우선순위:
 #   A(가장 안쪽 벽, x=width, 입구 반대쪽) > B(측면 벽, y=depth) = C(측면 벽, y=0)
-# A가 가장 세서 CONTACT_WEIGHT보다도 크게 잡음 - "입구는 웬만하면 비운다"가 거의
-# 규칙처럼 지켜지길 원했기 때문. B/C는 A보다 약하게(그러나 CONTACT_WEIGHT보다는
-# 작지 않게) 잡아서 측면 벽에 붙는 것도 웬만하면 선호하도록 함. (팀 튜닝 대상)
-WALL_A_WEIGHT = 0.6
-WALL_BC_WEIGHT = 0.3
+#
+# 첫 버전(0.6/0.3)은 "벽에 딱 붙기만 하면" 받는 WALL_BC 보너스가 A쪽으로 조금 더
+# 들어가는 이득보다 커서, 박스가 A로 계속 전진하지 않고 얕은 채로 옆벽에 붙어버리는
+# 문제가 있었다 (사용자가 실제로 발견함). 그래서 A는 CONTACT_WEIGHT보다도 확실히
+# 크게, BC는 "완전히 벽에 붙어도" A쪽으로 어느 정도 더 들어간 것보다는 못 이기도록
+# 확 낮춤 - 이제 A가 "닿았냐 안 닿았냐"가 아니라 "얼마나 가까우냐"로 계속 우세하게
+# 작용하고, BC는 A가 비슷할 때만 갈리는 진짜 '중간 정도' 보정으로 동작한다.
+WALL_A_WEIGHT = 0.9
+WALL_BC_WEIGHT = 0.2
 
 
 def _ranges_overlap(a: Tuple[float, float], b: Tuple[float, float]) -> bool:

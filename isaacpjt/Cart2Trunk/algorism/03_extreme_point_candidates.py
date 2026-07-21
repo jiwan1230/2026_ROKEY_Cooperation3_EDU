@@ -131,6 +131,34 @@ def fits_dims(box: Box, trunk) -> bool:
     return box.width <= trunk.width and box.depth <= trunk.depth and box.height <= trunk.height
 
 
+def generate_wall_flush_candidates(box: Box, trunk, candidates) -> Set[Tuple[float, float, float]]:
+    """
+    "이 박스라면 벽 A/B/C에 딱 붙을 수 있는 자리" 후보를 추가로 만든다.
+
+    register_placement()의 후보 생성은 박스 크기와 무관하게 이미 놓인 것들의 모서리만
+    보고 후보를 만든다. 그런데 "벽에 딱 붙는 자리"는 놓으려는 박스의 폭/깊이를 알아야
+    계산되는 좌표라서, 그 자리를 만들어줄 기존 모서리가 우연히 없으면 실제로는 빈
+    공간인데도 후보 자체가 안 생기는 경우가 있다 (실제 발견된 사례: 폭 0.28m 박스가
+    들어갈 수 있는 x=0.32 자리가, 그 근처에 아무 것도 안 놓여 있어서 후보에 없었음).
+
+    이미 있는 후보들의 y(또는 x)를 그대로 재사용해서, 나머지 좌표만 "벽에 딱 붙는"
+    값으로 바꿔치기한 변형을 추가로 만든다 - 지금 놓으려는 box 크기가 있어야 계산
+    가능하므로 state.candidates에는 저장하지 않고, ⑦(place_one_box)이 매번 그 박스에
+    맞게 새로 만들어서 후보 풀에 잠깐 섞어 쓴다.
+    """
+    extra: Set[Tuple[float, float, float]] = set()
+    wall_a_x = (trunk.width - box.width) if trunk.entrance_near_x else 0.0
+    wall_c_y = 0.0
+    wall_b_y = trunk.depth - box.depth
+
+    for (x, y, z) in candidates:
+        extra.add((wall_a_x, y, z))  # 벽 A(안쪽)에 딱 붙는 변형 - y/z는 기존 후보 그대로
+        extra.add((x, wall_c_y, z))  # 벽 C(y=0)에 딱 붙는 변형 - x/z는 기존 후보 그대로
+        extra.add((x, wall_b_y, z))  # 벽 B(y=depth쪽)에 딱 붙는 변형 - x/z는 기존 후보 그대로
+
+    return extra
+
+
 if __name__ == "__main__":
     # 간단 데모: 박스 하나 놓으면 후보가 어떻게 늘어나는지 확인
     state = ExtremePointState()
