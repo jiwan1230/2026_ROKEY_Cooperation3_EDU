@@ -14,3 +14,7 @@ isaacpjt/Cart2Trunk/results/
 isaacpjt/Cart2Trunk/Collected_mobile_manipulator_lift/
 
 __pycache__/
+
+# box_top_extractor.py용 격리 venv (numpy<2 고정 - pip numpy 2.x가 apt cv_bridge를 깨는 문제 회피)
+# requirements.txt로 재생성 가능
+isaacpjt/Cart2Trunk/perception/.venv/
