@@ -46,7 +46,12 @@ Q4 (준형 - 박스 ID 지속성): 재스캔해도 같은 박스가 같은 id를
 """
 
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
+
+# 지완 쪽 실제 박스 비전 출력(all_boxes_corners_*.json)이 이 좌표계여야 한다 -
+# trunk_map.json이 이미 이 값으로 나오고 있어서(② 참고) 맞춰야 함. 다른 값이면
+# ①이 카메라 좌표계 등 엉뚱한 좌표를 그대로 써버릴 위험이 있어 바로 에러를 낸다.
+EXPECTED_BOX_FRAME = "m0609_base_link"
 
 
 @dataclass(frozen=True)
@@ -86,6 +91,56 @@ def object3d_to_box(obj: Object3D):
 
     w, d, h = obj.size_xyz
     return Box(id=obj.id, width=w, depth=d, height=h)
+
+
+def load_boxes_from_vision_json(path) -> List[Object3D]:
+    """
+    지완의 실제 박스 비전 출력(all_boxes_corners_*.json 스타일)을 Object3D
+    리스트로 변환한다. ②의 load_trunk_from_world_map()과 짝을 이루는 박스용 로더.
+
+    실제 포맷은 center_xyz/size_xyz가 아니라 박스 하나당 8개 모서리 좌표
+    (corners_m, 회전된 3D 박스)로 온다. 우리 알고리즘은 회전을 다루지 않으므로
+    (MVP 범위, ③ fits_dims 참고) 트렁크 변환(② to_bounding_trunk)과 같은 방식으로
+    8개 점의 min/max로 AABB를 근사해서 center/size를 뽑는다.
+
+    confidence 필드는 실제 샘플에 아예 없다 - Q1 답변대로 "0.7 이하는 Vision 단에서
+    이미 필터링됨"을 전제로, 여기 도착한 박스는 전부 confidence=1.0으로 채운다.
+    """
+    import json
+    from pathlib import Path
+
+    data = json.loads(Path(path).read_text())
+
+    frame = data.get("coordinate_frame")
+    if frame != EXPECTED_BOX_FRAME:
+        raise ValueError(
+            f"박스 비전 데이터의 좌표계가 '{frame}'인데 '{EXPECTED_BOX_FRAME}'이어야 함 - "
+            f"트렁크 데이터(trunk_map.json)와 같은 좌표계로 맞춰서 다시 내보내달라고 "
+            f"요청해야 함 (카메라 좌표계 그대로 쓰면 엉뚱한 자리에 배치됨)"
+        )
+
+    boxes = []
+    for entry in data.get("boxes", []):
+        corners = entry["corners_m"]
+        xs = [c[0] for c in corners]
+        ys = [c[1] for c in corners]
+        zs = [c[2] for c in corners]
+        x_min, x_max = min(xs), max(xs)
+        y_min, y_max = min(ys), max(ys)
+        z_min, z_max = min(zs), max(zs)
+
+        size_xyz = (x_max - x_min, y_max - y_min, z_max - z_min)
+        center_xyz = ((x_min + x_max) / 2, (y_min + y_max) / 2, (z_min + z_max) / 2)
+        volume = size_xyz[0] * size_xyz[1] * size_xyz[2]
+
+        boxes.append(Object3D(
+            id=str(entry["box_id"]),
+            center_xyz=center_xyz,
+            size_xyz=size_xyz,
+            volume=volume,
+            confidence=1.0,
+        ))
+    return boxes
 
 
 # ---------------------------------------------------------------------------

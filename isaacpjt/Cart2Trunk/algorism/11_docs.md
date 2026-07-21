@@ -13,7 +13,7 @@
 
 | 번호 | 파일명 | 상태 |
 |---|---|---|
-| ① | `01_object3d_schema.py` | 🟢 확정 — Q1~Q4 팀 답변 반영 (7/20) |
+| ① | `01_object3d_schema.py` | 🟢 확정 — Q1~Q4 팀 답변 반영 (7/20), 실제 박스 비전 JSON 로더 추가 (7/21, 아래 참고) |
 | ② | `02_trunk_space_state.py` | 🟢 실제 데이터 연동 완료 — 지완 trunk_map.json 파서 구현, 입구 방향 추정 추가 (7/21, 아래 참고) |
 | ③ | `03_extreme_point_candidates.py` | 🟢 완료·확정 — 장애물 사이 틈 미탐지 수정(7/21) + 벽-밀착 후보 누락 수정(7/21, 아래 참고) |
 | ④ | `04_candidate_validity_check.py` | 🟢 완료·확정 |
@@ -26,6 +26,50 @@
 | ⑪ | 이 문서 | 🟢 완료 |
 | ⑫ | `12_verify_real_coords.py` | 🟢 실제 데이터 검증 완료 — 발견됐던 알고리즘 한계 수정 및 재검증 완료 (아래 참고) |
 | ⑬ | `13_support_check.py` | 🟡 신규 — 받침(지지대) 확인, `allow_stacking` 플래그로 잠금 (7/21) |
+| ⑭ | `14_run_full_pipeline.py` | 🟢 신규 — 지완 실사용 배포용 CLI 진입점 (7/21, 아래 참고) |
+
+## ⑭ 지완 실사용 배포 — 실행 진입점 + 박스 비전 데이터 연동 (7/21)
+
+**배경**: 그동안은 트렁크(②)만 실제 데이터로 연동됐고, 박스는 계속 `TEST_OBJECT3D`
+(하드코딩된 3종 규격)로만 검증했다. 지완이 실제로 우리 알고리즘을 자기 컴퓨터에서
+돌려보려면, 박스 비전 데이터를 읽는 로더 + 트렁크·박스 두 파일을 받아서 전체
+파이프라인을 돌리고 결과를 돌려주는 진입점이 필요했다.
+
+**실제 박스 비전 샘플 확인 (`all_boxes_corners_20260721_174311_555644.json`) 후 발견한 문제**:
+1. `center_xyz`/`size_xyz`가 아니라 박스 하나당 8개 모서리 좌표(`corners_m`, 회전된
+   3D 박스)로 옴 → 트렁크 변환(② `to_bounding_trunk`)과 같은 방식으로 min/max
+   AABB 근사해서 center/size를 뽑도록 처리 (회전 자체는 다루지 않음 - ③
+   `fits_dims`와 같은 MVP 범위).
+2. `confidence` 필드가 아예 없음 → Q1 답변("0.7 이하는 Vision 단에서 이미
+   필터링됨")을 전제로 남아있는 박스는 전부 1.0으로 채움.
+3. **가장 중요한 문제 - 좌표계 불일치**: `coordinate_frame`이
+   `"depth_camera_optical_frame_from_message_header"`(카메라 좌표계)였다.
+   트렁크 데이터(`trunk_map.json`)는 이미 `"m0609_base_link"`(로봇 base 좌표계)로
+   나오는데, 박스는 아직 그 변환 전 단계였던 것 - 그대로 섞어 쓰면 엉뚱한 자리에
+   배치된다. 사용자 확인 결과 지완의 파이프라인이 카메라→base 외부파라미터(TF)를
+   이미 갖고 있을 가능성이 높다고 판단, **박스도 트렁크처럼 base 좌표계로 내보내
+   달라고 요청**하는 방향으로 결정함 (우리 쪽에서 변환하지 않음).
+
+**구현**:
+- `01_object3d_schema.py::load_boxes_from_vision_json(path)` 추가 - 위 3가지를
+  처리하는 로더. `coordinate_frame`이 `m0609_base_link`가 아니면 조용히 틀린
+  좌표를 쓰지 않고 바로 `ValueError`를 낸다 (실제로 카메라 좌표계 샘플을 넣어서
+  에러가 정확히 나는 것까지 확인함).
+- `14_run_full_pipeline.py` 신규 - `--trunk-map`, `--boxes`, `--allow-stacking`,
+  `--out` CLI. ①(박스 로딩)+②(트렁크 로딩)+③~⑧(적재 계획)을 묶어서 실행하고,
+  각 박스의 최종 좌표를 **로컬 좌표뿐 아니라 `local_to_base_frame()`으로 다시
+  M0609 base 좌표계로 되돌려서** JSON 파일 + 콘솔에 출력한다 (지완/로봇 제어
+  쪽에 그대로 넘길 수 있는 좌표계).
+
+**검증**: `tests/test_01_object3d_schema.py`(3케이스), `tests/test_14_run_full_pipeline.py`(2케이스)
+신규 (TDD). 전체 pytest 25/25. 실제 `trunk_map.json`(run_20260720_200104) +
+합성 base-frame 박스로 CLI 스모크 테스트 - 실제 장애물을 피해서 정상 배치, base
+frame 좌표 왕복 변환 확인. 실제 카메라 좌표계 박스 샘플을 그대로 넣으면 의도대로
+에러 발생 확인.
+
+**지완에게 요청할 것**: 박스 비전 JSON을 지금 포맷(`all_boxes_corners_*.json`)
+그대로 두되, `corners_m`과 `coordinate_frame`만 트렁크처럼 `m0609_base_link`
+기준으로 변환해서 내보내 달라고 하면 됨 (JSON 구조 자체는 안 바꿔도 됨).
 
 ## 전체 파이프라인
 
@@ -259,4 +303,8 @@ python 12_verify_real_coords.py     # 실제 trunk_map.json 기준 검증 (7/21 
 python 05_candidate_scoring.py      # ⑤ 점수화 데모 (열린 자리 vs 구석 비교)
 python 13_support_check.py         # ⑬ 받침 비율 데모 (작은 박스 위 큰 박스 -> 거부 증명)
 python -m pytest tests/ -v          # ③ 회귀 테스트 (장애물 사이 틈 미탐지 재현 방지)
+
+# ⑭ 실제 Vision 데이터로 전체 파이프라인 실행 (trunk_map.json + 박스 비전 JSON 필요,
+# 둘 다 m0609_base_link 좌표계여야 함 - 위 "⑭ 지완 실사용 배포" 절 참고)
+python 14_run_full_pipeline.py --trunk-map trunk_map.json --boxes boxes.json
 ```
