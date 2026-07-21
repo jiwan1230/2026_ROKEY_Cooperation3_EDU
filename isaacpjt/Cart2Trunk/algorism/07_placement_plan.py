@@ -19,13 +19,13 @@ from importlib import import_module
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 _m03 = import_module("03_extreme_point_candidates")
-_m04 = import_module("04_candidate_validity_check")
 _m05 = import_module("05_candidate_scoring")
+_m13 = import_module("13_support_check")
 
 Box = _m03.Box
 PlacedBox = _m03.PlacedBox
 ExtremePointState = _m03.ExtremePointState
-is_candidate_valid = _m04.is_candidate_valid
+is_candidate_valid_with_stacking = _m13.is_candidate_valid_with_stacking
 score_candidate = _m05.score_candidate
 
 
@@ -40,15 +40,22 @@ class PlacementPlan:
     touches: int
 
 
-def place_one_box(box: "Box", trunk, state: "ExtremePointState", order: int) -> Optional["PlacementPlan"]:
+def place_one_box(
+    box: "Box", trunk, state: "ExtremePointState", order: int,
+    allow_stacking: bool = False,
+) -> Optional["PlacementPlan"]:
     """
     현재 상태(state)에서 box 하나를 놓을 최선의 자리를 찾아 배치한다.
     자리가 없으면 None (이 경우 ⑧ 미적재 판단으로 넘어가야 함).
+
+    allow_stacking=False(기본값)면 z>0 후보(박스 위에 놓는 자리)는 ⑬에서
+    무조건 거부되어 지금의 1층 전용 동작과 동일하게 동작한다.
     """
-    # [④] 현재 후보 좌표들 중, 이 box를 놓아도 겹치지도 밖으로 나가지도 않는 것만 추림
+    # [④+⑬] 현재 후보 좌표들 중, 겹치지도 밖으로 나가지도 않고(④) 충분히
+    # 받쳐지는(⑬, allow_stacking일 때만) 것만 추림
     valid_candidates = [
         (x, y, z) for (x, y, z) in state.candidates
-        if is_candidate_valid(x, y, z, box, trunk, state.placed)
+        if is_candidate_valid_with_stacking(x, y, z, box, trunk, state.placed, allow_stacking=allow_stacking)
     ]
 
     if not valid_candidates:
