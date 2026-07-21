@@ -225,6 +225,30 @@ SAVE_DIRECTORY.mkdir(parents=True, exist_ok=True)
 
 LOG_INTERVAL_FRAMES = 10
 
+# 저장 좌표계. 14_run_full_pipeline.py(algorism/)의 load_boxes_from_vision_json()이
+# 정확히 이 문자열이 아니면 바로 에러를 낸다 (팀 계약).
+OUTPUT_FRAME = "m0609_base_link"
+
+# 32.box_table_scan_setup.py가 고정 스캔 자세에서 측정해서 저장한 카메라->base_link 변환.
+# 팔이 그 스크립트가 만든 자세를 벗어나면 이 값은 더 이상 유효하지 않다 - 재측정 필요.
+BASE_TO_CAMERA_TRANSFORM_PATH = Path(__file__).resolve().parent / "base_to_camera_transform.json"
+
+
+def load_base_to_camera_transform() -> tuple[np.ndarray, np.ndarray]:
+    """base_link->camera 변환(R, t)을 읽는다. 카메라 좌표계 점 p_cam을
+    p_base = p_cam @ R.T + t 로 base_link 좌표계로 옮기는 데 쓴다."""
+    if not BASE_TO_CAMERA_TRANSFORM_PATH.exists():
+        raise RuntimeError(
+            f"{BASE_TO_CAMERA_TRANSFORM_PATH} 가 없습니다. "
+            "먼저 32.box_table_scan_setup.py를 실행해서 고정 스캔 자세의 "
+            "base_link->camera 변환을 만들어야 합니다 "
+            f"(저장 좌표계가 반드시 {OUTPUT_FRAME!r}이어야 하기 때문)."
+        )
+    data = json.loads(BASE_TO_CAMERA_TRANSFORM_PATH.read_text())
+    R = np.asarray(data["R"], dtype=np.float64)
+    t = np.asarray(data["t"], dtype=np.float64)
+    return R, t
+
 
 @dataclass
 class PlaneClusterCandidate:
@@ -248,6 +272,14 @@ class PlaneClusterCandidate:
 class DepthTopmostBoxExtractor(Node):
     def __init__(self) -> None:
         super().__init__("depth_topmost_box_extractor")
+
+        # 좌표계 변환은 시작 시점에 미리 읽어서, 못 찾으면 스캔을 아예 시작하지 않고
+        # 바로 종료한다 (카메라 좌표계로 조용히 저장해버리는 것을 막기 위함).
+        self._base_R, self._base_t = load_base_to_camera_transform()
+        self.get_logger().info(
+            f"[좌표 변환] {BASE_TO_CAMERA_TRANSFORM_PATH} 로드 완료 "
+            f"(저장 좌표계: {OUTPUT_FRAME})"
+        )
 
         self.bridge = CvBridge()
         self.frame_count = 0
@@ -2054,15 +2086,24 @@ class DepthTopmostBoxExtractor(Node):
         for box in self.latest_boxes:
             box_id = int(box["box_id"])
 
-            corners = np.asarray(
+            corners_cam = np.asarray(
                 box["corners"],
-                dtype=np.float32,
+                dtype=np.float64,
+            )
+            completed_points_cam = np.asarray(
+                box["completed_points"],
+                dtype=np.float64,
             )
 
-            completed_points = np.asarray(
-                box["completed_points"],
-                dtype=np.float32,
-            )
+            # 카메라 좌표계 -> m0609_base_link 좌표계 (32.box_table_scan_setup.py가
+            # 고정 스캔 자세에서 측정한 변환). RANSAC/DBSCAN 등 검출 로직 자체는 계속
+            # 카메라 좌표계로 돌고, 저장 직전 이 한 곳에서만 변환한다.
+            corners = (
+                corners_cam @ self._base_R.T + self._base_t
+            ).astype(np.float32)
+            completed_points = (
+                completed_points_cam @ self._base_R.T + self._base_t
+            ).astype(np.float32)
 
             if corners.shape != (8, 3):
                 self.get_logger().warning(
@@ -2166,9 +2207,7 @@ class DepthTopmostBoxExtractor(Node):
         )
 
         payload = {
-            "coordinate_frame": (
-                "depth_camera_optical_frame_from_message_header"
-            ),
+            "coordinate_frame": OUTPUT_FRAME,
             "unit": "meter",
             "box_count": len(boxes_payload),
             "completed_ply_file": ply_path.name,
