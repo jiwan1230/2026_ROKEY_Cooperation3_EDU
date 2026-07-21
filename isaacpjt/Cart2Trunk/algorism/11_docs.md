@@ -25,6 +25,7 @@
 | ⑩ | `10_verification.py` | 🟢 완료 — 5/5 PASS (단, 가정 트렁크값 기준) |
 | ⑪ | 이 문서 | 🟢 완료 |
 | ⑫ | `12_verify_real_coords.py` | 🟢 실제 데이터 검증 완료 — 발견됐던 알고리즘 한계 수정 및 재검증 완료 (아래 참고) |
+| ⑬ | `13_support_check.py` | 🟡 신규 — 받침(지지대) 확인, `allow_stacking` 플래그로 잠금 (7/21) |
 
 ## 전체 파이프라인
 
@@ -37,7 +38,8 @@ boxes, trunk
     ▼
 for box in order:
     [③] state.candidates 에서 현재 후보 좌표 확인
-    [④] is_candidate_valid() 로 겹침/경계 체크 통과한 후보만 추림
+    [④+⑬] is_candidate_valid_with_stacking() 로 겹침/경계(④) + 받침 비율(⑬,
+        allow_stacking=True일 때만) 체크 통과한 후보만 추림
         │
         ├─ 유효 후보 있음 → [⑤] score_candidate() 로 접촉면 기반 최고점 선택
         │                   → [⑦] PlacementPlan 생성, state에 새 후보 등록
@@ -153,5 +155,6 @@ score = HEIGHT_WEIGHT × (z / trunk.height) − CONTACT_WEIGHT × (접촉면수 
 python 10_verification.py           # 합성 데이터 기준 전체 검증 (5/5 PASS)
 python 12_verify_real_coords.py     # 실제 trunk_map.json 기준 검증 (7/21 수정 후 미적재 0건)
 python 05_candidate_scoring.py      # ⑤ 점수화 데모 (열린 자리 vs 구석 비교)
+python 13_support_check.py         # ⑬ 받침 비율 데모 (작은 박스 위 큰 박스 -> 거부 증명)
 python -m pytest tests/ -v          # ③ 회귀 테스트 (장애물 사이 틈 미탐지 재현 방지)
 ```
