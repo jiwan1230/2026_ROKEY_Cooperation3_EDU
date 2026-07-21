@@ -62,6 +62,15 @@ class Trunk:
     depth: float   # y축 (m)
     height: float  # z축 (m)
 
+    # 입구(로봇이 박스를 넣는 쪽) 방향 힌트. True면 로컬 0쪽이 입구에 더 가깝고,
+    # False면 반대쪽(로컬 max쪽)이 입구에 더 가깝다는 뜻. to_bounding_trunk()가
+    # 실제 데이터로 계산해서 채워주고, ⑤ score_candidate()가 "입구에서 먼 자리"를
+    # 우선하는 데 사용한다. 기본값 True는 "정보 없으면 지금까지처럼 로컬 원점을
+    # 입구로 본다"는 안전한 기본값 - 합성 테스트용 Trunk(w,d,h)처럼 실제 좌표
+    # 변환을 거치지 않고 직접 만드는 경우를 그대로 지원하기 위함.
+    entrance_near_x: bool = True
+    entrance_near_y: bool = True
+
 
 @dataclass
 class TrunkWorldMap:
@@ -94,7 +103,20 @@ class TrunkWorldMap:
         # 이 코너를 로컬 좌표계의 (0,0,0)으로 삼는다.
         offset = (min(xs), min(ys), min(zs))  # M0609 base 좌표계 기준 로컬 원점 위치
         # 폭/깊이/높이 = 최대값 - 최소값 (굴곡은 무시하고 바운딩 박스로 근사)
-        trunk = Trunk(width=max(xs) - min(xs), depth=max(ys) - min(ys), height=max(zs) - min(zs))
+        trunk_width = max(xs) - min(xs)
+        trunk_depth = max(ys) - min(ys)
+        trunk_height = max(zs) - min(zs)
+
+        # 입구 방향 추정: M0609 base 좌표계에서는 로봇 팔 자신이 원점(0,0,0)이다.
+        # 트렁크의 로컬 0쪽 변과 로컬 max쪽 변 중, 그 로봇 원점에 더 가까운 쪽이
+        # 곧 로봇이 실제로 손을 뻗어 넣는 "입구"에 더 가깝다고 본다 (축별 근사 판단 -
+        # 대각선 방향까지 정확히 잡지는 못하지만, "입구 쪽부터 채워서 막아버리는" 문제를
+        # 피하는 데는 이 정도 근사로 충분하다).
+        entrance_near_x = abs(offset[0]) <= abs(offset[0] + trunk_width)
+        entrance_near_y = abs(offset[1]) <= abs(offset[1] + trunk_depth)
+
+        trunk = Trunk(width=trunk_width, depth=trunk_depth, height=trunk_height,
+                      entrance_near_x=entrance_near_x, entrance_near_y=entrance_near_y)
         return trunk, offset
 
 

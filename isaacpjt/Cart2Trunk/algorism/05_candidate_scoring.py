@@ -41,6 +41,11 @@ boxes_overlap = _m04.boxes_overlap
 
 HEIGHT_WEIGHT = 1.0
 CONTACT_WEIGHT = 0.5
+# 입구에서 먼 자리를 얼마나 우선할지 - CONTACT_WEIGHT보다 작게 잡아서, "구석에 잘 붙는 자리"
+# 우선순위는 유지하면서 접촉면이 비슷한 후보들 사이에서만 입구/안쪽을 가르도록 함.
+# (팀 튜닝 대상 - 실제로 입구가 계속 막히는 게 심하면 올리고, 접촉면 기반 선택이 너무
+# 밀리면 내리면 됨)
+ENTRANCE_WEIGHT = 0.4
 
 
 def _ranges_overlap(a: Tuple[float, float], b: Tuple[float, float]) -> bool:
@@ -95,13 +100,33 @@ def count_touching_faces(x: float, y: float, z: float, box: "Box", trunk,
     return min(touches, 6)  # 박스는 면이 6개뿐이므로 상한선을 6으로 고정
 
 
+def entrance_distance_ratio(x: float, y: float, box: "Box", trunk) -> float:
+    """
+    후보 박스가 입구에서 얼마나 안쪽으로 들어가 있는지를 0(입구 바로 앞)~1(제일 안쪽)
+    사이 값으로 정규화해서 반환한다.
+
+    trunk.entrance_near_x/y는 ②(to_bounding_trunk)가 로봇 base 원점 기준으로 미리
+    계산해 둔 값이다 - 로컬 0쪽이 입구에 더 가까우면 True, 반대쪽이 더 가까우면 False.
+    이 함수는 그 힌트를 보고 "입구 쪽 벽에서부터 잰 거리"를 계산할 뿐, 입구가 어느 쪽인지
+    스스로 판단하지는 않는다 (판단은 ②의 책임 - 여긴 순수하게 좌표 계산만 담당).
+    """
+    # entrance_near_x가 True면 입구가 x=0 쪽이므로 x좌표 자체가 곧 "입구로부터 거리".
+    # False면 입구가 x=width 쪽이므로, 박스의 반대쪽 끝(x+width)에서 벽까지 남은 거리를 잰다.
+    depth_x = x if trunk.entrance_near_x else (trunk.width - (x + box.width))
+    depth_y = y if trunk.entrance_near_y else (trunk.depth - (y + box.depth))
+    # 폭/깊이가 서로 다른 트렁크에도 공평하게 적용되도록 각 축을 트렁크 크기로 나눠 정규화한 뒤 평균
+    return ((depth_x / trunk.width) + (depth_y / trunk.depth)) / 2
+
+
 def score_candidate(x: float, y: float, z: float, box: "Box", trunk,
                      placed: List["PlacedBox"]) -> Tuple[float, int]:
     """(score, 접촉면수)를 같이 반환해서 '왜 이 점수인지' 설명 가능하게 한다."""
     touches = count_touching_faces(x, y, z, box, trunk, placed)
     height_term = HEIGHT_WEIGHT * (z / trunk.height)   # 높을수록(z 클수록) 점수가 커짐 = 불리
     contact_term = CONTACT_WEIGHT * (touches / 6)       # 접촉면 많을수록 점수가 깎임 = 유리
-    return height_term - contact_term, touches          # 최종 점수는 낮을수록 좋은 자리
+    # 입구에서 멀수록(안쪽일수록) 점수가 깎임 = 유리 - 입구부터 막아버리는 걸 방지
+    entrance_term = ENTRANCE_WEIGHT * entrance_distance_ratio(x, y, box, trunk)
+    return height_term - contact_term - entrance_term, touches  # 최종 점수는 낮을수록 좋은 자리
 
 
 if __name__ == "__main__":
