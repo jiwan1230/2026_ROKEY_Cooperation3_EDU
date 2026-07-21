@@ -109,15 +109,18 @@ def verify_scoring_regression() -> bool:
     _m03b = import_module("03_extreme_point_candidates")
     PlacedBox = _m03b.PlacedBox
 
+    # 05_candidate_scoring.py의 __main__ 데모와 같은 시나리오 (A/B/C 벽 우대 반영 후
+    # 좌표 재설계 - pocket이 B·C에 둘러싸이면서 동시에 벽 A에도 붙어있어야 접촉면
+    # 우대와 벽 우대가 서로 충돌하지 않는다).
     trunk = Trunk(12.0, 12.0, 4.0)
     unit = Box("unit", 2, 2, 2)
     placed = [
-        PlacedBox(Box("A", 2, 2, 2), 3, 3, 0),
-        PlacedBox(Box("B", 2, 2, 2), 3, 5, 0),
-        PlacedBox(Box("C", 2, 2, 2), 5, 3, 0),
+        PlacedBox(Box("A", 2, 2, 2), 8, 1, 0),
+        PlacedBox(Box("B", 2, 2, 2), 8, 3, 0),
+        PlacedBox(Box("C", 2, 2, 2), 10, 1, 0),
     ]
-    open_score, _ = score_candidate(7.0, 3.0, 0.0, unit, trunk, placed)
-    pocket_score, _ = score_candidate(5.0, 5.0, 0.0, unit, trunk, placed)
+    open_score, _ = score_candidate(1.0, 1.0, 0.0, unit, trunk, placed)
+    pocket_score, _ = score_candidate(10.0, 3.0, 0.0, unit, trunk, placed)
 
     return check("안쪽 구석 자리가 열린 자리보다 점수가 더 낮음(더 좋음)", pocket_score < open_score,
                  detail=f"pocket={pocket_score}, open={open_score}")

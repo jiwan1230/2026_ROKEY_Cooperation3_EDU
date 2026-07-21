@@ -41,11 +41,13 @@ boxes_overlap = _m04.boxes_overlap
 
 HEIGHT_WEIGHT = 1.0
 CONTACT_WEIGHT = 0.5
-# 입구에서 먼 자리를 얼마나 우선할지 - CONTACT_WEIGHT보다 작게 잡아서, "구석에 잘 붙는 자리"
-# 우선순위는 유지하면서 접촉면이 비슷한 후보들 사이에서만 입구/안쪽을 가르도록 함.
-# (팀 튜닝 대상 - 실제로 입구가 계속 막히는 게 심하면 올리고, 접촉면 기반 선택이 너무
-# 밀리면 내리면 됨)
-ENTRANCE_WEIGHT = 0.4
+# 트렁크 벽 3개(A/B/C)를 우대하는 정도 - 사용자가 손그림으로 직접 지정한 우선순위:
+#   A(가장 안쪽 벽, x=width, 입구 반대쪽) > B(측면 벽, y=depth) = C(측면 벽, y=0)
+# A가 가장 세서 CONTACT_WEIGHT보다도 크게 잡음 - "입구는 웬만하면 비운다"가 거의
+# 규칙처럼 지켜지길 원했기 때문. B/C는 A보다 약하게(그러나 CONTACT_WEIGHT보다는
+# 작지 않게) 잡아서 측면 벽에 붙는 것도 웬만하면 선호하도록 함. (팀 튜닝 대상)
+WALL_A_WEIGHT = 0.6
+WALL_BC_WEIGHT = 0.3
 
 
 def _ranges_overlap(a: Tuple[float, float], b: Tuple[float, float]) -> bool:
@@ -120,15 +122,38 @@ def entrance_distance_ratio(x: float, box: "Box", trunk) -> float:
     return depth_x / trunk.width
 
 
+def side_wall_distance_ratio(y: float, box: "Box", trunk) -> float:
+    """
+    후보 박스가 두 측면 벽(B: y=depth쪽, C: y=0쪽) 중 더 가까운 쪽에서 얼마나
+    떨어져 있는지 0(벽에 붙음)~1(트렁크 정중앙, 제일 멂)로 정규화해서 반환한다.
+
+    B/C는 로봇의 접근 방향(x축, 벽 A)과는 완전히 별개인 좌우 측면 벽이다 - "측면
+    벽에도 붙여서 중앙 통로를 비워두자"는 아이디어를 반영한다. B와 C는 같은 값으로
+    우대하므로(WALL_BC_WEIGHT 하나만 씀) 이 함수는 어느 쪽이 더 가까운지만 보고
+    둘을 구분하지 않는다.
+    """
+    dist_to_c = y                              # y=0쪽 벽(C)까지 남은 거리
+    dist_to_b = trunk.depth - (y + box.depth)  # y=depth쪽 벽(B)까지 남은 거리
+    nearest_wall_dist = min(dist_to_c, dist_to_b)
+
+    # 박스가 정중앙에 있을 때 nearest_wall_dist가 가질 수 있는 최댓값 (그때를 1.0으로 정규화)
+    max_possible = (trunk.depth - box.depth) / 2
+    if max_possible < 1e-9:
+        return 0.0  # 박스가 트렁크 깊이를 거의 다 차지해서 '중앙'이라는 개념 자체가 무의미
+    return min(nearest_wall_dist / max_possible, 1.0)
+
+
 def score_candidate(x: float, y: float, z: float, box: "Box", trunk,
                      placed: List["PlacedBox"]) -> Tuple[float, int]:
     """(score, 접촉면수)를 같이 반환해서 '왜 이 점수인지' 설명 가능하게 한다."""
     touches = count_touching_faces(x, y, z, box, trunk, placed)
     height_term = HEIGHT_WEIGHT * (z / trunk.height)   # 높을수록(z 클수록) 점수가 커짐 = 불리
     contact_term = CONTACT_WEIGHT * (touches / 6)       # 접촉면 많을수록 점수가 깎임 = 유리
-    # 입구에서 멀수록(안쪽일수록) 점수가 깎임 = 유리 - 입구부터 막아버리는 걸 방지
-    entrance_term = ENTRANCE_WEIGHT * entrance_distance_ratio(x, box, trunk)
-    return height_term - contact_term - entrance_term, touches  # 최종 점수는 낮을수록 좋은 자리
+    # 벽 A(안쪽)에 가까울수록 점수가 깎임 = 유리 - 입구부터 막아버리는 걸 방지 (최우선)
+    wall_a_term = WALL_A_WEIGHT * entrance_distance_ratio(x, box, trunk)
+    # 벽 B/C(측면) 중 가까운 쪽에 붙을수록 점수가 깎임 = 유리 (A보다는 약하게)
+    wall_bc_term = WALL_BC_WEIGHT * (1 - side_wall_distance_ratio(y, box, trunk))
+    return height_term - contact_term - wall_a_term - wall_bc_term, touches  # 낮을수록 좋은 자리
 
 
 if __name__ == "__main__":
@@ -136,17 +161,21 @@ if __name__ == "__main__":
     Trunk = _m02.Trunk
 
     # ---- 데모: 정렬 방식과 점수화 방식이 실제로 다른 답을 낼 수 있음을 증명 ----
+    # A/B/C 벽 우대가 생긴 뒤로 좌표를 다시 잡았다 (예전 버전은 pocket이 트렁크
+    # 정중앙에 우연히 걸려서 벽 B/C 보너스를 하나도 못 받는 우연한 충돌이 있었음).
+    # 지금 pocket은 B·C 박스에 둘러싸이면서 동시에 벽 A(안쪽)에도 붙어있어서,
+    # "접촉면 많음"과 "벽 우대" 두 기준이 서로 부딪히지 않고 같은 방향을 가리킨다.
     trunk = Trunk(width=12.0, depth=12.0, height=4.0)
     box_size = Box(id="unit", width=2, depth=2, height=2)
 
     placed = [
-        PlacedBox(box=Box(id="A", width=2, depth=2, height=2), x=3, y=3, z=0),
-        PlacedBox(box=Box(id="B", width=2, depth=2, height=2), x=3, y=5, z=0),
-        PlacedBox(box=Box(id="C", width=2, depth=2, height=2), x=5, y=3, z=0),
+        PlacedBox(box=Box(id="A", width=2, depth=2, height=2), x=8, y=1, z=0),
+        PlacedBox(box=Box(id="B", width=2, depth=2, height=2), x=8, y=3, z=0),
+        PlacedBox(box=Box(id="C", width=2, depth=2, height=2), x=10, y=1, z=0),
     ]
 
-    candidate_open = (7.0, 3.0, 0.0)    # C의 +x쪽, 아무것도 없는 열린 자리
-    candidate_pocket = (5.0, 5.0, 0.0)  # B와 C 사이 안쪽 구석 자리
+    candidate_open = (1.0, 1.0, 0.0)     # 입구 쪽 구석, 아무것도 없는 열린 자리
+    candidate_pocket = (10.0, 3.0, 0.0)  # B·C 사이 + 벽 A에 붙은 안쪽 구석 자리
 
     print("=== 후보 비교: '열린 자리' vs '안쪽 구석' ===\n")
     for label, (cx, cy, cz) in [("열린 자리", candidate_open), ("안쪽 구석", candidate_pocket)]:

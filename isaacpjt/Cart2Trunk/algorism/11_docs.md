@@ -157,7 +157,8 @@ score = HEIGHT_WEIGHT × (z / trunk.height) − CONTACT_WEIGHT × (접촉면수 
    판단해 `Trunk`에 채워 넣는다.
 3. ⑤에 `entrance_distance_ratio()`를 추가해서, 후보가 입구에서 얼마나 안쪽인지
    0(입구)~1(제일 안쪽)로 정규화하고, `score_candidate()`가 이 값에
-   `ENTRANCE_WEIGHT(0.4)`를 곱해 점수에 반영한다.
+   `WALL_A_WEIGHT`를 곱해 점수에 반영한다 (이후 벽 B/C가 추가되면서 이 가중치 이름과
+   값도 같이 바뀜 - 아래 "⑤ 벽 A/B/C 3단계 우대" 절 참고).
 
 **중간에 발견해서 고친 버그(같은 날)**: 처음엔 x축뿐 아니라 y축도 같이 봐서
 `entrance_near_y` 필드까지 만들고 (x비율+y비율)/2로 평균을 냈었다. 그런데 사용자가
@@ -171,9 +172,38 @@ score = HEIGHT_WEIGHT × (z / trunk.height) − CONTACT_WEIGHT × (접촉면수 
 **검증**: `tests/test_02_trunk_space_state.py`, `tests/test_05_candidate_scoring.py`
 신규 작성 (TDD) — 총 4개 케이스. 기존 `10_verification.py` 5/5 PASS 유지, 실제
 데이터(`12_verify_real_coords.py`) 2개 run 모두 미적재 0건·브루트포스 누락 0건
-그대로 유지 확인. 두 run 모두 `entrance_near_x=True, entrance_near_y=True`로
-계산되어 (로컬 원점이 실제로 입구 쪽이었다는 뜻), 두 번째 박스부터는 입구에서
-더 먼 좌표로 밀려 배치되는 것을 확인함.
+그대로 유지 확인. 두 run 모두 `entrance_near_x=True`로 계산되어 (로컬 원점이 실제로
+입구 쪽이었다는 뜻), 두 번째 박스부터는 입구에서 더 먼 좌표로 밀려 배치되는 것을
+확인함.
+
+## ⑤ 벽 A/B/C 3단계 우대로 확장 (7/21, 같은 날 추가)
+
+**배경**: 위 입구거리 항만으로는 부족했다 - 사용자가 손그림 예시로 직접 확인해보니,
+입구에서 멀어지긴 해도 트렁크 안에서 뿔뿔이 흩어져 배치될 수 있었다. 사용자가
+"벽마다 우선순위를 다르게 주자"는 아이디어를 손그림으로 제안함:
+`A(가장 안쪽 벽, x=width, 입구 반대) > B(측면 벽, y=depth) = C(측면 벽, y=0)`
+
+**구현**: `ENTRANCE_WEIGHT`를 `WALL_A_WEIGHT(0.6)`로 이름 변경(기존 `entrance_distance_ratio()`가
+그대로 "벽 A까지 거리"를 의미하므로 로직은 안 바뀜, 이름만 A/B/C 체계에 맞게 바꿈).
+`side_wall_distance_ratio()`를 새로 추가해서 측면 벽(B/C) 중 더 가까운 쪽까지 거리를
+0(벽에 붙음)~1(정중앙)로 정규화하고, `WALL_BC_WEIGHT(0.3)`를 곱해 점수에 반영.
+B와 C는 같은 가중치 하나를 공유해서 "둘 중 가까운 쪽"만 보므로 자동으로 대칭이다.
+
+최종 가중치 우선순위(높은 순): `HEIGHT_WEIGHT(1.0)` > `WALL_A_WEIGHT(0.6)` >
+`CONTACT_WEIGHT(0.5)` > `WALL_BC_WEIGHT(0.3)`.
+
+**발견한 회귀**: 가중치를 이렇게 세게 잡으니, ⑤ 데모/`10_verification.py`의 기존
+"안쪽 구석(pocket) vs 열린 자리(open)" 예시가 깨졌다 - pocket 좌표(5,5)가 트렁크(12×12)
+정중앙에 우연히 걸려서 벽 B/C 보너스를 0으로 받았기 때문. 접촉면 많음(pocket 유리)과
+벽 우대(open이 우연히 더 유리)가 정면충돌한 사례. 사용자 확인 후 "가중치는 유지하고
+예전 테스트를 새 우선순위에 맞게 재설계"하기로 결정 - pocket이 B·C에 둘러싸이면서
+동시에 벽 A에도 붙도록 좌표를 다시 잡아서(`A(8,1) B(8,3) C(10,1)`, `pocket=(10,3)`,
+`open=(1,1)`), 접촉면 우대와 벽 우대가 같은 방향을 가리키게 만듦. `05_candidate_scoring.py`
+데모와 `10_verification.py::verify_scoring_regression()` 둘 다 이 좌표로 갱신.
+
+**검증**: `tests/test_05_candidate_scoring.py`에 5개 케이스 추가 (TDD) - B/C 대칭성,
+정중앙에서 최대치, 벽 근처 후보가 중앙 후보보다 우대받는지, A 가중치가 BC보다 큰지.
+전체 pytest 17/17, `10_verification.py` 5/5, 실제 데이터 2개 run 미적재 0건 유지 확인.
 
 ## 실제 데이터 연동 내역 (7/21)
 
