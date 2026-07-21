@@ -100,22 +100,24 @@ def count_touching_faces(x: float, y: float, z: float, box: "Box", trunk,
     return min(touches, 6)  # 박스는 면이 6개뿐이므로 상한선을 6으로 고정
 
 
-def entrance_distance_ratio(x: float, y: float, box: "Box", trunk) -> float:
+def entrance_distance_ratio(x: float, box: "Box", trunk) -> float:
     """
     후보 박스가 입구에서 얼마나 안쪽으로 들어가 있는지를 0(입구 바로 앞)~1(제일 안쪽)
     사이 값으로 정규화해서 반환한다.
 
-    trunk.entrance_near_x/y는 ②(to_bounding_trunk)가 로봇 base 원점 기준으로 미리
-    계산해 둔 값이다 - 로컬 0쪽이 입구에 더 가까우면 True, 반대쪽이 더 가까우면 False.
-    이 함수는 그 힌트를 보고 "입구 쪽 벽에서부터 잰 거리"를 계산할 뿐, 입구가 어느 쪽인지
-    스스로 판단하지는 않는다 (판단은 ②의 책임 - 여긴 순수하게 좌표 계산만 담당).
+    x축만 본다 - 로봇은 M0609 base 좌표계 원점에 고정돼 있고, 트렁크에는 항상 정해진
+    한 방향(x축)으로만 접근한다는 게 확인됐다 (실제 스캔 데이터의 "x, +deep" 라벨과도
+    일치). 즉 y(좌우 위치)는 입구에서 먼 정도와 아예 무관하다 - 로봇이 왼쪽에 있든
+    오른쪽에 있든 트렁크 안쪽으로 뻗는 거리는 x만으로 결정되기 때문. (첫 버전은 x/y를
+    평균 냈다가, 좌우 위치만 달라도 점수가 달라지는 버그가 돼서 x만 보도록 수정함.)
+
+    trunk.entrance_near_x는 ②(to_bounding_trunk)가 로봇 base 원점 기준으로 미리
+    계산해 둔 값이다 - 로컬 x=0쪽이 입구에 더 가까우면 True, 반대쪽이 더 가까우면 False.
     """
     # entrance_near_x가 True면 입구가 x=0 쪽이므로 x좌표 자체가 곧 "입구로부터 거리".
     # False면 입구가 x=width 쪽이므로, 박스의 반대쪽 끝(x+width)에서 벽까지 남은 거리를 잰다.
     depth_x = x if trunk.entrance_near_x else (trunk.width - (x + box.width))
-    depth_y = y if trunk.entrance_near_y else (trunk.depth - (y + box.depth))
-    # 폭/깊이가 서로 다른 트렁크에도 공평하게 적용되도록 각 축을 트렁크 크기로 나눠 정규화한 뒤 평균
-    return ((depth_x / trunk.width) + (depth_y / trunk.depth)) / 2
+    return depth_x / trunk.width
 
 
 def score_candidate(x: float, y: float, z: float, box: "Box", trunk,
@@ -125,7 +127,7 @@ def score_candidate(x: float, y: float, z: float, box: "Box", trunk,
     height_term = HEIGHT_WEIGHT * (z / trunk.height)   # 높을수록(z 클수록) 점수가 커짐 = 불리
     contact_term = CONTACT_WEIGHT * (touches / 6)       # 접촉면 많을수록 점수가 깎임 = 유리
     # 입구에서 멀수록(안쪽일수록) 점수가 깎임 = 유리 - 입구부터 막아버리는 걸 방지
-    entrance_term = ENTRANCE_WEIGHT * entrance_distance_ratio(x, y, box, trunk)
+    entrance_term = ENTRANCE_WEIGHT * entrance_distance_ratio(x, box, trunk)
     return height_term - contact_term - entrance_term, touches  # 최종 점수는 낮을수록 좋은 자리
 
 

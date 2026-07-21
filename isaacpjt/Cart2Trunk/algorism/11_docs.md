@@ -149,17 +149,24 @@ score = HEIGHT_WEIGHT × (z / trunk.height) − CONTACT_WEIGHT × (접촉면수 
 
 **수정 방식**: 원점 자체는 안 건드림 (로봇 제어 쪽 좌표 변환이 이미 이 원점 기준으로
 맞춰져 있어서 바꾸면 파급력이 큼). 대신:
-1. `Trunk`에 `entrance_near_x` / `entrance_near_y` 필드 추가 (기본값 `True` =
-   "정보 없으면 지금까지처럼 로컬 원점을 입구로 본다" — 합성 테스트용 `Trunk(w,d,h)`가
-   그대로 동작하도록 하는 안전한 기본값).
+1. `Trunk`에 `entrance_near_x` 필드 추가 (기본값 `True` = "정보 없으면 지금까지처럼
+   로컬 원점을 입구로 본다" — 합성 테스트용 `Trunk(w,d,h)`가 그대로 동작하도록 하는
+   안전한 기본값).
 2. `to_bounding_trunk()`가 M0609 base 좌표계의 로봇 원점(0,0,0)과 트렁크의 로컬
-   0쪽/max쪽 변 사이 거리를 축별로 비교해서, 로봇에 더 가까운 쪽을 입구로 자동
+   x=0쪽/x=width쪽 변 사이 거리를 비교해서, 로봇에 더 가까운 쪽을 입구로 자동
    판단해 `Trunk`에 채워 넣는다.
 3. ⑤에 `entrance_distance_ratio()`를 추가해서, 후보가 입구에서 얼마나 안쪽인지
    0(입구)~1(제일 안쪽)로 정규화하고, `score_candidate()`가 이 값에
-   `ENTRANCE_WEIGHT(0.4)`를 곱해 점수에 반영한다 — 높이/접촉면이 비슷한 후보들
-   중에서 안쪽을 우선하게 됨 (접촉면 가중치 0.5보다 작게 잡아서 "구석에 붙는 자리"
-   우선순위 자체는 안 깨지도록 함).
+   `ENTRANCE_WEIGHT(0.4)`를 곱해 점수에 반영한다.
+
+**중간에 발견해서 고친 버그(같은 날)**: 처음엔 x축뿐 아니라 y축도 같이 봐서
+`entrance_near_y` 필드까지 만들고 (x비율+y비율)/2로 평균을 냈었다. 그런데 사용자가
+손그림으로 직접 비교하다가 "로봇은 항상 정해진 한 방향(x축)으로만 접근하고, y축
+(좌우 위치)은 입구와 아예 무관하다"는 걸 지적함 — 실제 스캔 데이터의 "x, +deep"
+라벨과도 일치하는 전제였다. 그래서 `entrance_near_y`를 완전히 제거하고
+`entrance_distance_ratio()`가 x축만 보도록 수정. 이 버그는
+`tests/test_05_candidate_scoring.py::test_lateral_y_position_does_not_affect_score`로
+회귀 방지함 (같은 x, 다른 y를 가진 두 후보가 완전히 같은 점수를 받는지 확인).
 
 **검증**: `tests/test_02_trunk_space_state.py`, `tests/test_05_candidate_scoring.py`
 신규 작성 (TDD) — 총 4개 케이스. 기존 `10_verification.py` 5/5 PASS 유지, 실제
