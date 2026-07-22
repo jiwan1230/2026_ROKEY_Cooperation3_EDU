@@ -20,6 +20,7 @@ _m04 = import_module("04_candidate_validity_check")
 Trunk = _m02.Trunk
 Box = _m03.Box
 is_candidate_valid = _m04.is_candidate_valid
+PLACEMENT_SAFETY_MARGIN_M = _m03.PLACEMENT_SAFETY_MARGIN_M
 
 
 def test_negative_x_is_rejected():
@@ -40,8 +41,20 @@ def test_negative_z_is_rejected():
     assert is_candidate_valid(0.0, 0.0, -0.05, box, trunk, placed=[]) is False
 
 
-def test_origin_corner_still_valid():
-    """회귀 방지 - 경계값(0,0,0)은 여전히 유효해야 한다 (부동소수점 여유값 유지 확인)."""
+def test_origin_is_now_rejected_for_missing_wall_margin():
+    """
+    PLACEMENT_SAFETY_MARGIN_M(벽 안전 여유) 도입 이후 (0,0,0)은 더 이상 유효하지
+    않다 - 벽에 완전히 딱 붙어서 여유가 0이기 때문. 예전엔 이 지점이 "여전히
+    유효해야 한다"는 회귀 테스트였는데, 그 전제 자체가 마진 도입으로 바뀌었다.
+    """
     trunk = Trunk(width=1.0, depth=1.0, height=1.0)
     box = Box("unit", width=0.2, depth=0.2, height=0.2)
-    assert is_candidate_valid(0.0, 0.0, 0.0, box, trunk, placed=[]) is True
+    assert is_candidate_valid(0.0, 0.0, 0.0, box, trunk, placed=[]) is False
+
+
+def test_margin_corner_still_valid():
+    """회귀 방지 - 벽 안전 여유만큼 뗀 지점은 유효해야 한다 (부동소수점 여유값 유지 확인)."""
+    trunk = Trunk(width=1.0, depth=1.0, height=1.0)
+    box = Box("unit", width=0.2, depth=0.2, height=0.2)
+    m = PLACEMENT_SAFETY_MARGIN_M
+    assert is_candidate_valid(m, m, 0.0, box, trunk, placed=[]) is True

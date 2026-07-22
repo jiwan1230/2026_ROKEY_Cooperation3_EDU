@@ -8,4 +8,13 @@ log/
 
 # Cart2Trunk scan outputs (point clouds, sweep/pose screenshots) - regenerated per run, large binaries
 isaacpjt/Cart2Trunk/results/
+
+# Collect and Save As로 생성된 번들 (NVIDIA 표준 에셋 텍스처 중복 포함, 용량 큼 - 재생성 가능,
+# 31.collect_mobile_manipulator_lift.py로 다시 만들 수 있음)
+isaacpjt/Cart2Trunk/Collected_mobile_manipulator_lift/
+
 __pycache__/
+
+# box_top_extractor.py용 격리 venv (numpy<2 고정 - pip numpy 2.x가 apt cv_bridge를 깨는 문제 회피)
+# requirements.txt로 재생성 가능
+isaacpjt/Cart2Trunk/perception/.venv/

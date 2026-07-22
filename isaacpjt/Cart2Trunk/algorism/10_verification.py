@@ -77,12 +77,18 @@ def verify_reason_codes() -> bool:
     # 위쪽에 남는 "낭비 부피"가 함께 늘어나서 예전 LARGE/MEDIUM 조합(공용 상수, 다른
     # 테스트에서도 씀)으로는 이 시나리오 자체가 성립하지 않게 됨 - 그래서 이 테스트
     # 전용 박스로 다시 설계함 (Blocker 높이를 트렁크 높이-0.2에 딱 맞춰 낭비를 최소화).
-    # ⑰ 박스-벽 마진(0.01m) 도입 후: Blocker의 깊이가 트렁크 깊이와 완전히 같으면
-    # 마진 넣을 자리가 없어서 Blocker 자체가 못 들어가게 됨 - 깊이를 2*MARGIN만큼
-    # 줄여서 마진 자리를 남겨줌 (남는 부피 부등식은 재계산해서 여전히 성립함을 확인).
-    trunk2 = Trunk(0.55, 0.35, 0.50)
-    blocker = Box("Blocker", 0.50, 0.33, 0.30)  # 여유 0.50-0.30=0.20 (경계값, 통과) + 깊이에 마진 자리 확보
-    too_big = Box("TooBig", 0.45, 0.35, 0.30)   # 크기 자체는 들어가지만 남는 부피 부족
+    # ⑰ 박스-벽 마진(PLACEMENT_SAFETY_MARGIN_M, main과 병합하며 0.01->0.02로 상향) 도입
+    # 후: 박스 폭/깊이가 트렁크와 완전히 같으면 마진 넣을 자리가 없어서 그 박스 자체가
+    # 못 들어가게 됨 - Blocker/TooBig 둘 다 폭·깊이를 2*MARGIN만큼 줄여서 마진 자리를
+    # 남겨줌. 이러면서 Blocker(부피 60.48L)가 여전히 TooBig(59.94L)보다 커야
+    # decide_loading_order(⑥, 부피 내림차순)가 Blocker를 먼저 시도해서 트렁크를
+    # 먼저 채우고, 그 다음 TooBig이 남은 부피(59.52L) 부족으로 막히는 시나리오가
+    # 성립한다 - Blocker가 더 작아지면 TooBig이 먼저 시도되면서(빈 트렁크에서 그 자체
+    # 여유 없이도 SIZE 통과) 엉뚱하게 NO_VALID_CANDIDATE_POSITION으로 갈리는 걸 실제로
+    # 확인해서 트렁크/두 박스 치수를 전부 재설계함.
+    trunk2 = Trunk(0.60, 0.40, 0.50)
+    blocker = Box("Blocker", 0.56, 0.36, 0.30)  # 트렁크의 절반 넘게 차지(60.48L) + 폭/깊이/높이 전부 여유 경계값
+    too_big = Box("TooBig", 0.555, 0.36, 0.30)  # Blocker보다 살짝 작지만(59.94L), 남는 부피(59.52L)보다는 큼
     _, unload2 = generate_loading_plan([blocker, too_big], trunk2)
     ok2 = (
         len(unload2) == 1
