@@ -21,6 +21,8 @@ sys.path.insert(0, str(pathlib.Path(__file__).parent))
 _m03 = import_module("03_extreme_point_candidates")
 _m05 = import_module("05_candidate_scoring")
 _m13 = import_module("13_support_check")
+_m15 = import_module("15_overhead_clearance_check")
+_m17 = import_module("17_margin_check")
 
 Box = _m03.Box
 PlacedBox = _m03.PlacedBox
@@ -28,6 +30,10 @@ ExtremePointState = _m03.ExtremePointState
 generate_wall_flush_candidates = _m03.generate_wall_flush_candidates
 generate_box_flush_candidates = _m03.generate_box_flush_candidates
 is_candidate_valid_with_stacking = _m13.is_candidate_valid_with_stacking
+has_overhead_clearance = _m15.has_overhead_clearance
+has_clear_approach_path = _m15.has_clear_approach_path
+has_sufficient_margin = _m17.has_sufficient_margin
+MARGIN = _m17.MARGIN
 score_candidate = _m05.score_candidate
 
 
@@ -57,17 +63,28 @@ def place_one_box(
     # + "이미 놓인 다른 박스 옆면에 딱 붙는 자리"를 지금 놓으려는 box 크기 기준으로
     # 추가 생성 - state.candidates에는 저장하지 않고 이번 배치 판단에만 잠깐 섞어
     # 쓴다 (다른 박스 크기에는 안 맞을 수 있어서)
-    candidate_pool = (
-        state.candidates
-        | generate_wall_flush_candidates(box, trunk, state.candidates)
-        | generate_box_flush_candidates(box, trunk, state.candidates, state.placed)
-    )
+    wall_flush = generate_wall_flush_candidates(box, trunk, state.candidates, margin=MARGIN)
+    box_flush = generate_box_flush_candidates(box, trunk, state.candidates, state.placed, margin=MARGIN)
+    # ⑰(마진) 도입 후 발견: "벽에 마진만큼 띄운 자리"가 하필 다른 박스와는 마진
+    # 미달로 너무 가까운 경우가 있다 - 그 자리에서 다시 그 박스를 피해 마진만큼
+    # 더 띄우는 조합("벽 마진" + "박스 마진" 둘 다 적용)은 각 생성기를 한 번씩만
+    # 돌려서는 안 나온다. wall_flush 결과를 다시 box-flush 생성기에 넣어서 조합을
+    # 만든다 (⑦이 아니라 ③+⑦ 조합 자체 확장 - 잘못된 후보가 섞여도 유효성 검사가
+    # 그대로 걸러내므로 안전하다).
+    combo_flush = generate_box_flush_candidates(box, trunk, wall_flush, state.placed, margin=MARGIN)
+    candidate_pool = state.candidates | wall_flush | box_flush | combo_flush
 
-    # [④+⑬] 후보 좌표들 중, 겹치지도 밖으로 나가지도 않고(④) 충분히
-    # 받쳐지는(⑬, allow_stacking일 때만) 것만 추림
+    # [④+⑬+⑮+⑯+⑰] 후보 좌표들 중, 겹치지도 밖으로 나가지도 않고(④) 충분히
+    # 받쳐지고(⑬, allow_stacking일 때만) 로봇 팔이 위쪽으로 뺄 여유 공간도
+    # 충분하고(⑮, 최종 자리 기준) 거기까지 가는 길에 더 높이 솟은 걸 타고 넘지
+    # 않아도 되고(⑯, 입구~목표 사이 같은 y폭 장애물 기준) 벽/다른 박스와 딱
+    # 붙지 않고 최소 간격을 유지하는(⑰) 것만 추림
     valid_candidates = [
         (x, y, z) for (x, y, z) in candidate_pool
         if is_candidate_valid_with_stacking(x, y, z, box, trunk, state.placed, allow_stacking=allow_stacking)
+        and has_overhead_clearance(z, box, trunk)
+        and has_clear_approach_path(x, y, z, box, trunk, state.placed)
+        and has_sufficient_margin(x, y, z, box, trunk, state.placed)
     ]
 
     if not valid_candidates:

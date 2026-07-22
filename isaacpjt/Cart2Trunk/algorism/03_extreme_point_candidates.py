@@ -18,7 +18,7 @@
 """
 
 from dataclasses import dataclass, field
-from typing import List, Set, Tuple
+from typing import List, Optional, Set, Tuple
 
 
 @dataclass(frozen=True)
@@ -30,6 +30,12 @@ class Box:
     height: float  # z축 (m)
     mass_kg: float = 0.0
     is_fragile: bool = False
+
+    # 카트 위에서 이 박스가 다른 어떤 박스 위에 얹혀 있는지(그 박스의 id) - 없으면
+    # None(바닥에 있거나 관계 정보 없음). ⑥ decide_loading_order()가 "위에 아무것도
+    # 안 얹힌 것부터 집는다"는 픽업 순서 제약을 지키는 데 씀. 비전 쪽 실제 필드명
+    # (support_candidate_id 등)과의 정확한 매핑은 ①에서 별도로 확정 필요.
+    rests_on_id: Optional[str] = None
 
     @property
     def volume(self) -> float:
@@ -131,9 +137,9 @@ def fits_dims(box: Box, trunk) -> bool:
     return box.width <= trunk.width and box.depth <= trunk.depth and box.height <= trunk.height
 
 
-def generate_wall_flush_candidates(box: Box, trunk, candidates) -> Set[Tuple[float, float, float]]:
+def generate_wall_flush_candidates(box: Box, trunk, candidates, margin: float = 0.0) -> Set[Tuple[float, float, float]]:
     """
-    "이 박스라면 벽 A/B/C에 딱 붙을 수 있는 자리" 후보를 추가로 만든다.
+    "이 박스라면 벽 A/B/C에 (margin만큼 띄우고) 붙을 수 있는 자리" 후보를 추가로 만든다.
 
     register_placement()의 후보 생성은 박스 크기와 무관하게 이미 놓인 것들의 모서리만
     보고 후보를 만든다. 그런데 "벽에 딱 붙는 자리"는 놓으려는 박스의 폭/깊이를 알아야
@@ -141,20 +147,27 @@ def generate_wall_flush_candidates(box: Box, trunk, candidates) -> Set[Tuple[flo
     공간인데도 후보 자체가 안 생기는 경우가 있다 (실제 발견된 사례: 폭 0.28m 박스가
     들어갈 수 있는 x=0.32 자리가, 그 근처에 아무 것도 안 놓여 있어서 후보에 없었음).
 
-    이미 있는 후보들의 y(또는 x)를 그대로 재사용해서, 나머지 좌표만 "벽에 딱 붙는"
-    값으로 바꿔치기한 변형을 추가로 만든다 - 지금 놓으려는 box 크기가 있어야 계산
+    이미 있는 후보들의 y(또는 x)를 그대로 재사용해서, 나머지 좌표만 "벽에서 margin만큼
+    띄운" 값으로 바꿔치기한 변형을 추가로 만든다 - 지금 놓으려는 box 크기가 있어야 계산
     가능하므로 state.candidates에는 저장하지 않고, ⑦(place_one_box)이 매번 그 박스에
-    맞게 새로 만들어서 후보 풀에 잠깐 섞어 쓴다.
+    맞게 새로 만들어서 후보 풀에 잠깐 섞어 쓴다. margin=0.0(기본값)이면 이전과 동일하게
+    완전히 벽에 붙는 자리를 만든다 - ⑰(마진 확인)가 켜졌을 때만 margin>0으로 호출된다.
     """
     extra: Set[Tuple[float, float, float]] = set()
-    wall_a_x = (trunk.width - box.width) if trunk.entrance_near_x else 0.0
-    wall_c_y = 0.0
-    wall_b_y = trunk.depth - box.depth
+    wall_a_x = (trunk.width - box.width - margin) if trunk.entrance_near_x else margin
+    wall_c_y = margin
+    wall_b_y = trunk.depth - box.depth - margin
 
     for (x, y, z) in candidates:
-        extra.add((wall_a_x, y, z))  # 벽 A(안쪽)에 딱 붙는 변형 - y/z는 기존 후보 그대로
-        extra.add((x, wall_c_y, z))  # 벽 C(y=0)에 딱 붙는 변형 - x/z는 기존 후보 그대로
-        extra.add((x, wall_b_y, z))  # 벽 B(y=depth쪽)에 딱 붙는 변형 - x/z는 기존 후보 그대로
+        extra.add((wall_a_x, y, z))  # 벽 A(안쪽)에서 margin만큼 뗀 변형 - y/z는 기존 후보 그대로
+        extra.add((x, wall_c_y, z))  # 벽 C(y=0)에서 margin만큼 뗀 변형 - x/z는 기존 후보 그대로
+        extra.add((x, wall_b_y, z))  # 벽 B(y=depth쪽)에서 margin만큼 뗀 변형 - x/z는 기존 후보 그대로
+        # 구석(코너) 자리 - x/y 둘 다 벽에서 margin만큼 뗀 조합. margin=0이면 wall_a_x/
+        # wall_c_y/wall_b_y 조합이 이미 코너와 같은 값이라 새 정보가 없지만, margin>0일
+        # 땐 위 세 변형이 한쪽 축만 margin 처리해서 나머지 축(예: y=0인 채로)이 여전히
+        # 벽에 붙어있는 무효 후보가 되므로, 양쪽 다 margin 처리된 진짜 코너 후보가 따로 필요하다.
+        extra.add((wall_a_x, wall_c_y, z))
+        extra.add((wall_a_x, wall_b_y, z))
 
     return extra
 
@@ -165,9 +178,12 @@ def _ranges_overlap(a: Tuple[float, float], b: Tuple[float, float]) -> bool:
     return a[0] < b[1] and a[1] > b[0]
 
 
-def generate_box_flush_candidates(box: Box, trunk, candidates, placed: List["PlacedBox"]) -> Set[Tuple[float, float, float]]:
+def generate_box_flush_candidates(
+    box: Box, trunk, candidates, placed: List["PlacedBox"], margin: float = 0.0
+) -> Set[Tuple[float, float, float]]:
     """
-    "이 박스라면 이미 놓인 다른 박스 옆면에 딱 붙을 수 있는 자리" 후보를 추가로 만든다.
+    "이 박스라면 이미 놓인 다른 박스 옆면에 (margin만큼 띄우고) 붙을 수 있는 자리"
+    후보를 추가로 만든다.
 
     generate_wall_flush_candidates()는 트렁크 바깥쪽 벽(A/B/C)에 딱 붙는 자리는
     커버하지만, "이미 놓인 다른 박스" 옆면에 딱 붙는 자리는 다루지 않는다. 실제
@@ -176,7 +192,10 @@ def generate_box_flush_candidates(box: Box, trunk, candidates, placed: List["Pla
     만들어줄 기존 모서리가 없어서 후보 자체가 안 생기는 경우가 있었다.
 
     이미 있는 후보들의 좌표를 재사용해서, 각 놓인 박스와 y/z(또는 x/z) 구간이
-    겹치는 조합마다 그 박스의 가까운 면·먼 면에 딱 붙는 변형을 둘 다 만든다.
+    겹치는 조합마다 그 박스의 가까운 면·먼 면에서 margin만큼 뗀 변형을 둘 다 만든다.
+    margin=0.0(기본값)이면 이전과 동일하게 완전히 옆면에 붙는 자리를 만든다 -
+    ⑰(마진 확인)가 켜졌을 때만 margin>0으로 호출된다. z 방향(위/아래로 쌓이는
+    관계)에는 margin을 적용하지 않는다 - 그건 딱 맞닿아야(⑬ 받침) 하는 관계라서다.
     "붙였을 때 실제로 다른 것과 안 겹치는지"는 여기서 판단하지 않고 ④(유효성
     검사)에 그대로 맡긴다 - 겹치는 조합만 안 걸러내는 정도는 후보가 좀 늘어나는
     것뿐이라 문제없고, 굳이 두 번 계산할 필요가 없다. 장애물 하나를 넘어서 그
@@ -196,15 +215,15 @@ def generate_box_flush_candidates(box: Box, trunk, candidates, placed: List["Pla
             pz0, pz1 = p.z_range
 
             # x축 방향: 이 박스의 y/z가 p와 겹치면, p의 가까운 면(입구 쪽)과
-            # 먼 면(안쪽) 각각에 딱 붙는 x로 바꿔치기
+            # 먼 면(안쪽)에서 각각 margin만큼 뗀 x로 바꿔치기
             if _ranges_overlap((y0, y1), (py0, py1)) and _ranges_overlap((z0, z1), (pz0, pz1)):
-                extra.add((px0 - box.width, y, z))  # p 바로 앞(입구 쪽)에 붙음
-                extra.add((px1, y, z))              # p를 지나 바로 뒤(안쪽)에 붙음
+                extra.add((px0 - box.width - margin, y, z))  # p 바로 앞(입구 쪽), margin만큼 띄움
+                extra.add((px1 + margin, y, z))              # p를 지나 바로 뒤(안쪽), margin만큼 띄움
 
-            # y축 방향: 이 박스의 x/z가 p와 겹치면, p의 양쪽 면에 딱 붙는 y로 바꿔치기
+            # y축 방향: 이 박스의 x/z가 p와 겹치면, p의 양쪽 면에서 margin만큼 뗀 y로 바꿔치기
             if _ranges_overlap((x0, x1), (px0, px1)) and _ranges_overlap((z0, z1), (pz0, pz1)):
-                extra.add((x, py0 - box.depth, z))
-                extra.add((x, py1, z))
+                extra.add((x, py0 - box.depth - margin, z))
+                extra.add((x, py1 + margin, z))
 
     return extra
 

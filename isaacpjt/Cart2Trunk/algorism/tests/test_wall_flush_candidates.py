@@ -19,6 +19,7 @@ _m02 = import_module("02_trunk_space_state")
 _m03 = import_module("03_extreme_point_candidates")
 _m04 = import_module("04_candidate_validity_check")
 _m07 = import_module("07_placement_plan")
+_m17 = import_module("17_margin_check")
 
 Trunk = _m02.Trunk
 Box = _m03.Box
@@ -27,6 +28,7 @@ ExtremePointState = _m03.ExtremePointState
 generate_wall_flush_candidates = _m03.generate_wall_flush_candidates
 is_candidate_valid = _m04.is_candidate_valid
 place_one_box = _m07.place_one_box
+MARGIN = _m17.MARGIN
 
 
 def test_generate_wall_flush_candidates_adds_wall_a_variant():
@@ -63,7 +65,8 @@ def test_place_one_box_finds_deep_spot_that_pure_corner_extension_misses():
     실제로 발견된 사례의 최소 재현: 오른쪽 벽 쪽에 장애물 2개(차 바퀴 흉내)와 박스
     하나가 이미 놓여 있고, 그 사이 y밴드는 비어 있지만 그 자리에 도달할 기존
     모서리가 없다. 폭 0.28짜리 박스를 놓으면, 후보 생성 보강 전에는 입구 쪽
-    (x=0)에 배치됐지만 보강 후에는 벽 A 쪽(x=0.32, 벽에 딱 붙음)에 배치돼야 한다.
+    (x=0)에 배치됐지만 보강 후에는 벽 A 쪽(x=0.32-MARGIN, ⑰ 마진만큼 띄우고
+    벽에 붙음)에 배치돼야 한다.
     """
     trunk = Trunk(width=0.6, depth=0.73, height=0.4)
     state = ExtremePointState()
@@ -85,4 +88,5 @@ def test_place_one_box_finds_deep_spot_that_pure_corner_extension_misses():
 
     assert plan is not None
     x, y, z = plan.position
-    assert abs(x - 0.32) < 1e-9, f"벽 A에 딱 붙은 깊은 자리(x=0.32)가 아니라 x={x}에 배치됨"
+    expected_x = 0.32 - MARGIN
+    assert abs(x - expected_x) < 1e-9, f"벽 A에서 마진만큼 뗀 깊은 자리(x={expected_x})가 아니라 x={x}에 배치됨"

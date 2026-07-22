@@ -72,12 +72,21 @@ def verify_reason_codes() -> bool:
     ok1 = len(unload1) == 1 and unload1[0].reason == UnloadableReason.SIZE_EXCEEDS_TRUNK
     results.append(check("SIZE_EXCEEDS_TRUNK", ok1))
 
-    # INSUFFICIENT_REMAINING_VOLUME: Large가 거의 꽉 채우는 트렁크에 Medium까지 넣으려는 경우
-    trunk2 = Trunk(0.55, 0.35, 0.30)
-    _, unload2 = generate_loading_plan([LARGE, MEDIUM], trunk2)
+    # INSUFFICIENT_REMAINING_VOLUME: Blocker가 거의 꽉 채우는 트렁크에 두 번째 박스까지
+    # 넣으려는 경우. ⑮ 상단 여유 공간(0.2m) 도입 후 트렁크 높이를 그냥 키우면 Blocker
+    # 위쪽에 남는 "낭비 부피"가 함께 늘어나서 예전 LARGE/MEDIUM 조합(공용 상수, 다른
+    # 테스트에서도 씀)으로는 이 시나리오 자체가 성립하지 않게 됨 - 그래서 이 테스트
+    # 전용 박스로 다시 설계함 (Blocker 높이를 트렁크 높이-0.2에 딱 맞춰 낭비를 최소화).
+    # ⑰ 박스-벽 마진(0.01m) 도입 후: Blocker의 깊이가 트렁크 깊이와 완전히 같으면
+    # 마진 넣을 자리가 없어서 Blocker 자체가 못 들어가게 됨 - 깊이를 2*MARGIN만큼
+    # 줄여서 마진 자리를 남겨줌 (남는 부피 부등식은 재계산해서 여전히 성립함을 확인).
+    trunk2 = Trunk(0.55, 0.35, 0.50)
+    blocker = Box("Blocker", 0.50, 0.33, 0.30)  # 여유 0.50-0.30=0.20 (경계값, 통과) + 깊이에 마진 자리 확보
+    too_big = Box("TooBig", 0.45, 0.35, 0.30)   # 크기 자체는 들어가지만 남는 부피 부족
+    _, unload2 = generate_loading_plan([blocker, too_big], trunk2)
     ok2 = (
         len(unload2) == 1
-        and unload2[0].box_id == "Medium"
+        and unload2[0].box_id == "TooBig"
         and unload2[0].reason == UnloadableReason.INSUFFICIENT_REMAINING_VOLUME
     )
     results.append(check("INSUFFICIENT_REMAINING_VOLUME", ok2, detail=str(unload2)))
@@ -128,18 +137,23 @@ def verify_scoring_regression() -> bool:
 
 def verify_real_data() -> bool:
     print("\n[5] 실제 데이터 반영 검증 (트렁크 실측값 0.57×1.12×0.25m)")
+    # 이 트렁크 높이(0.25m)는 ⑮ 상단 여유 공간(0.2m) 기준으로 보면 SMALL(0.15m)조차
+    # 여유가 0.10m뿐이라 로봇이 안전하게 놓을 수 없는 높이임 - 그래서 셋 다 미적재가
+    # 맞는 결과다. (이 값은 지완의 실제 스캔이 아니라 시뮬레이션 씬에서 뽑은 임시값 -
+    # 실제 스캔 데이터(run_20260720_*, 높이 약 0.52m)는 ⑫에서 별도로 검증하고 있고
+    # 거긴 전혀 안 깨짐. 오히려 이 임시 트렁크 높이 자체가 비현실적으로 낮았다는 걸
+    # ⑮가 드러내준 셈.)
     plans, unloadable = generate_loading_plan([SMALL, MEDIUM, LARGE], REAL_TRUNK)
 
     ok1 = check(
         "Large는 SIZE_EXCEEDS_TRUNK로 미적재 처리됨",
-        len(unloadable) == 1 and unloadable[0].box_id == "Large"
-        and unloadable[0].reason == UnloadableReason.SIZE_EXCEEDS_TRUNK,
+        any(u.box_id == "Large" and u.reason == UnloadableReason.SIZE_EXCEEDS_TRUNK for u in unloadable),
         detail=str(unloadable),
     )
     ok2 = check(
-        "Medium, Small은 정상 배치됨",
-        {p.box_id for p in plans} == {"Medium", "Small"},
-        detail=str([p.box_id for p in plans]),
+        "Medium, Small도 상단 여유 공간(0.2m) 부족으로 미적재 처리됨 (트렁크 높이 0.25m가 비현실적으로 낮음)",
+        {u.box_id for u in unloadable} == {"Small", "Medium", "Large"} and len(plans) == 0,
+        detail=str(unloadable),
     )
     return ok1 and ok2
 

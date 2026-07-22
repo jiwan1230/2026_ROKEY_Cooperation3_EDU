@@ -10,17 +10,23 @@ m05 = import_module("05_candidate_scoring")
 m06 = import_module("06_loading_order_decision")
 m07 = import_module("07_placement_plan")
 m13 = import_module("13_support_check")
+m15 = import_module("15_overhead_clearance_check")
+m17 = import_module("17_margin_check")
 
 Trunk = m02.Trunk
 Box = m03.Box
 PlacedBox = m03.PlacedBox
 ExtremePointState = m03.ExtremePointState
 generate_wall_flush_candidates = m03.generate_wall_flush_candidates
+generate_box_flush_candidates = m03.generate_box_flush_candidates
 decide_loading_order = m06.decide_loading_order
 place_one_box = m07.place_one_box
 PlacementPlan = m07.PlacementPlan
 score_candidate = m05.score_candidate
 is_candidate_valid_with_stacking = m13.is_candidate_valid_with_stacking
+has_overhead_clearance = m15.has_overhead_clearance
+has_clear_approach_path = m15.has_clear_approach_path
+has_sufficient_margin = m17.has_sufficient_margin
 
 
 def place_one_box_stacked_only(box, trunk, state, order):
@@ -30,11 +36,22 @@ def place_one_box_stacked_only(box, trunk, state, order):
     버전 - "파란 박스는 무조건 2층에 놓는다"는 이번 데모 시나리오의 지시를 그대로
     반영하기 위함이다 (원래 place_one_box는 바닥에 자리가 남아있으면 높이 우선
     원칙 때문에 바닥을 먼저 고르는데, 지금은 그 선택지를 아예 없애고 싶은 것).
+    나머지(③ 벽/박스 밀착 후보 보강, ⑮ 상단 여유 공간, ⑯ 접근 경로 확인)는 실제
+    07_placement_plan.py와 동일하게 맞춰서, 이 데모가 지금 진짜 알고리즘과
+    어긋나지 않도록 함.
     """
-    candidate_pool = state.candidates | generate_wall_flush_candidates(box, trunk, state.candidates)
+    candidate_pool = (
+        state.candidates
+        | generate_wall_flush_candidates(box, trunk, state.candidates)
+        | generate_box_flush_candidates(box, trunk, state.candidates, state.placed)
+    )
     valid_candidates = [
         (x, y, z) for (x, y, z) in candidate_pool
-        if z > 1e-9 and is_candidate_valid_with_stacking(x, y, z, box, trunk, state.placed, allow_stacking=True)
+        if z > 1e-9
+        and is_candidate_valid_with_stacking(x, y, z, box, trunk, state.placed, allow_stacking=True)
+        and has_overhead_clearance(z, box, trunk)
+        and has_clear_approach_path(x, y, z, box, trunk, state.placed)
+        and has_sufficient_margin(x, y, z, box, trunk, state.placed)
     ]
     if not valid_candidates:
         return None
@@ -57,7 +74,7 @@ def place_one_box_stacked_only(box, trunk, state, order):
 
 TRUNK_WIDTH = 0.60   # x축
 TRUNK_DEPTH = 0.73   # y축
-TRUNK_HEIGHT = 0.40
+TRUNK_HEIGHT = 0.50  # ⑮ 상단 여유 공간(0.2m) 도입 후, 실제 스캔 데이터(~0.52m)에 맞춰 상향
 
 ROBOT_TO_TRUNK_GAP = 0.30
 ROBOT_Y = TRUNK_DEPTH / 2

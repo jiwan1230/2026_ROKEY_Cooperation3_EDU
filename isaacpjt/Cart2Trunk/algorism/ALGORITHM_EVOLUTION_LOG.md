@@ -22,6 +22,15 @@
 | 10 | 카트 재적재 손그림 | 사용자 손그림 (카트+기존 트렁크) | "기존 유지+추가"보다 "전부 재조합"이 더 나은 배치를 냄 | `local_test_data/sketch_placement_test_cart_reload.py` (신규) |
 | 11 | 거의 꽉 찬 트렁크 손그림 | 사용자 손그림 (스트레스 테스트) | 31.8% 찬 상태에서도 카트 박스 전부 성공 | `local_test_data/sketch_placement_test_near_full.py` (신규) |
 | 12 | F_BigLeft 위치 질문 | 11번 결과에 대한 사용자 질문 | "다른 박스 옆면에 붙는 자리" 후보 누락 (7번과 같은 종류, 다른 패턴) + 부수 발견: `is_candidate_valid()`가 좌표 하한(x<0 등)을 한 번도 검사 안 했던 별개의 버그 | `03_extreme_point_candidates.py`, `04_candidate_validity_check.py`, `07_placement_plan.py` |
+| 13 | 로봇 팔 천장 충돌 이미지 | 사용자 제공 이미지 (팔이 트렁크 천장에 걸림) | 상단 여유 공간(Overhead Clearance) 확인 로직이 아예 없음 - 로봇 미연결 상태에서 사전 대비 | `15_overhead_clearance_check.py` (신규), `07_placement_plan.py` |
+| 14 | 카트 2층 적재 순서 질문 | 사용자 질문("위 박스부터 집는 게 맞는지 숫자로 보고 싶다") | `decide_loading_order()`가 픽업 물리 제약을 무시하고 순수 부피순 - 바닥에 깔린 박스가 1번으로 나오는 실제 버그 재현 | `03_extreme_point_candidates.py`, `06_loading_order_decision.py`, `01_object3d_schema.py` |
+| 15 | 데모 스크립트 동기화 확인 | 13번 반영 여부 점검 요청 | 로컬 데모 3개가 ⑮뿐 아니라 7번(`generate_box_flush_candidates`)까지 이중으로 안 맞춰져 있던 드리프트 발견 | `local_test_data/sketch_placement_test_2layer.py`, `sketch_placement_test_cart_reload.py`, `sketch_placement_test_near_full.py` |
+| 16 | "기존 박스도 재배치한 거 아니야?" 질문 | 카트 재적재 결과에 대한 사용자의 날카로운 지적 | 10번 라운드의 "전부 재조합" 방식이 사실 이미 트렁크에 있는 박스까지 알고리즘으로 다시 계산하고 있었음 - "이미 있는 짐은 못 옮긴다"는 현실 제약 반영 필요 | `local_test_data/sketch_placement_test_cart_reload.py` |
+| 17 | "내가 직접 좌표 조정하고 싶다" 요청 | 손그림 좌표 재현이 어긋난다는 지적 | matplotlib 인터랙티브 3D 편집기(슬라이더+박스 추가/색상) 신규 제작, JSON 저장 → 메인 스크립트 자동 반영 연동 | `local_test_data/interactive_cart_reload_editor.py` (신규) |
+| 18 | 새 장애물 손그림 (빨간 장애물 2개) | 사용자 제공 손그림 + "빈 공간에 먼저 내려놓고 나중에 재배치해도 되지 않아?" 제안 | 스테이징(임시 배치)+재배치 2-pass 로직 구현 중, 임시 박스 위에 다른 박스가 쌓였다가 붕 뜨는 물리적으로 불가능한 결과를 자체 발견·수정 | `local_test_data/sketch_placement_test_obstacles.py` (신규) |
+| 19 | 회전(rotation) 지원 여부 질문 | 사용자 질문("정자세로 안 들어가면 회전시켜서 적재하기도 하나?") | 기존에 이미 "회전 미고려(MVP 범위)"로 명시돼 있던 한계를 재확인 - 코드 변경 없음 | 없음 (기존 한계 재확인) |
+| 20 | 안전장치 테스트 1/4 - ⑯ 실제 차단 | 사용자 요청(⑥⑬⑮⑯을 순서대로 직접 테스트하고 싶다) | ⑯이 실제로 후보를 거부하는 사례를 처음으로 확인 - 목표 자리 자체는 여유가 있어도, 입구 쪽 더 높은 장애물 때문에 거부되고 안전한 다른 자리로 우회 배치됨 | `local_test_data/sketch_placement_test_scenario1_blocked_path.py` (신규), `local_test_data/_viz_helpers.py` (신규, 공용 시각화 헬퍼로 리팩터링) |
+| 21 | 안전장치 테스트 2/4 - 3단 쌓기 체인 | 사용자 요청 | ⑥ 픽업 순서는 정확(C→B→A)했지만 트렁크 배치는 카트의 탑 구조를 그대로 재현하지 않음(16번 원칙 재확인) + 데모 재배치 로직의 실제 버그(이중 등록으로 받침 비율이 부풀려져 기준 미달 후보가 통과) 발견·수정 + before 그림이 카트 안 실제 적재 관계를 안 보여주던 시각화 버그도 수정 | `local_test_data/sketch_placement_test_scenario2_three_tier_chain.py` (신규), `local_test_data/sketch_placement_test_obstacles.py` (버그 수정), `local_test_data/_viz_helpers.py` (`stack_on_id` 추가) |
 
 ---
 
@@ -379,23 +388,371 @@ def generate_box_flush_candidates(box, trunk, candidates, placed):
 
 ---
 
+## 13. 로봇 팔 천장 충돌 이미지 — 상단 여유 공간(⑮) 신규 도입
+
+**계기**: 사용자가 로봇 팔이 트렁크 천장/입구 쪽에 걸리는 사진을 공유하며 "우선
+시나리오부터 짜줘" 요청. 아직 로봇을 연결해서 실제로 걸리는지 확인해본 건 아니고,
+**미리 대비**하는 차원이라고 명시.
+
+**설계 방향 확정 (대화로 조율)**: 우리 패키징 알고리즘이 실제 IK/충돌 시뮬레이션까지
+하는 건 범위 밖(그건 하류의 모션 플래너 몫) — 대신 **보수적인 안전 마진**만 걸기로
+합의. VGP20 그리퍼의 실측 치수를 얻으려고 USD 파일(`m0609_vgp20_camera.usd` →
+`m0609_vgp20.usd`)을 여러 차례 요청해 열어봤지만, 참조하는 그리퍼 메시 파일
+(`vgp20_converted.usd`)을 시스템 전체에서 못 찾음 — 공식 M0609 로봇 팔 USD는 3곳에서
+찾아 실측 링크/조인트 데이터는 확보했지만, 그리퍼는 결국 보수적 추정치를 씀. 위반 시
+"점수 감점"이 아니라 **완전 차단(하드 컷)** 방식으로 결정.
+
+**수정 파일**: `15_overhead_clearance_check.py` (신규)
+
+```python
+# 15_overhead_clearance_check.py:36
+OVERHEAD_CLEARANCE = 0.20
+
+# 15_overhead_clearance_check.py:39
+def has_overhead_clearance(z: float, box: "Box", trunk, clearance: float = OVERHEAD_CLEARANCE) -> bool:
+    return (trunk.height - (z + box.height)) >= clearance - 1e-9
+```
+
+```python
+# 07_placement_plan.py:24, 32, 74 — place_one_box() 후보 필터에 연결
+_m15 = import_module("15_overhead_clearance_check")
+has_overhead_clearance = _m15.has_overhead_clearance
+...
+valid_candidates = [
+    (x, y, z) for (x, y, z) in candidate_pool
+    if is_candidate_valid_with_stacking(x, y, z, box, trunk, state.placed, allow_stacking=allow_stacking)
+    and has_overhead_clearance(z, box, trunk)
+]
+```
+
+**사전에 잡은 회귀 (구현 전 계산으로 미리 발견, "안전하게 진행" 지시에 따름)**:
+`10_verification.py`가 쓰던 `REAL_TRUNK`(높이 0.25m)로는 새 여유 기준(0.2m)까지 더하면
+Small/Medium 박스조차 못 들어간다는 걸 구현 전에 계산으로 먼저 확인해서 보고 →
+사용자가 "REAL_TRUNK는 임시값이니 테스트 기대값을 현실에 맞게 수정"으로 결정. 이후
+실제로 발생한 회귀 2건(스태킹 테스트 트렁크 높이, `INSUFFICIENT_REMAINING_VOLUME`
+케이스)도 전부 시나리오 재설계로 해결(값을 억지로 맞추지 않음).
+
+**검증**: TDD 5케이스(`tests/test_15_overhead_clearance_check.py`), `10_verification.py`
+5/5, `12_verify_real_coords.py`(실제 스캔 2건) 이상 없음.
+
+---
+
+## 14. 카트 2층 적재 순서 질문 — 픽업 순서 제약(⑥) 재작성
+
+**계기**: "카트에 박스가 2층으로 적재돼 있을 때 위 박스부터 집어서 트렁크에 적재하는
+게 맞는지, 순서를 숫자로 볼 수 있을까?" 라는 구체적 검증 요청.
+
+**발견한 문제**: 팀이 7/20에 "Vision은 카메라에 지금 보이는 박스만 준다 - 밑에 깔린
+건 애초에 인식이 안 되니 코드 수정 불필요"로 결론 냈었는데, 실제 비전 데이터
+(`all_boxes_corners_*.json`)를 보니 `support_type`("floor"/"box_top") 필드가 있어
+**깔려있는 박스도 관계 정보와 함께 한 번에 인식**하고 있었음 — 7/20 전제가 이미
+깨져 있었음. 데모로 직접 재현: 초록 박스(바닥, 부피 최대) 위에 파란 박스 2개가
+얹혀 있는 카트를, 그대로 순수 부피순으로 정렬하면 **밑에 깔린 초록이 1번으로
+나옴** (물리적으로 불가능한 픽업 순서).
+
+**수정**: `Box`에 `rests_on_id` 필드 추가, `decide_loading_order()`를 "지금 위에
+아무것도 안 얹힌(픽업 가능한) 것들 중 부피가 큰 것부터" 고르는 위상정렬로 재작성.
+
+```python
+# 03_extreme_point_candidates.py:38
+rests_on_id: Optional[str] = None  # 카트 위에서 이 박스가 다른 어떤 박스 위에 얹혀 있는지
+
+# 06_loading_order_decision.py:38
+def decide_loading_order(boxes: List["Box"]) -> List["Box"]:
+    remaining = {b.id: b for b in boxes}
+    order: List["Box"] = []
+    while remaining:
+        blocked_ids = {b.rests_on_id for b in remaining.values() if b.rests_on_id is not None}
+        available = [b for b in remaining.values() if b.id not in blocked_ids]
+        next_box = max(available, key=lambda b: b.volume)
+        order.append(next_box)
+        del remaining[next_box.id]
+    return order
+```
+
+`01_object3d_schema.py`의 `Object3D`에도 같은 필드를 추가하고 `object3d_to_box()`가
+끊기지 않게 그대로 전달하도록 함(실제 비전 필드 `support_candidate_id`와의 정확한
+매핑은 팀 확인 전이라 로더에서는 아직 `None`으로 안전하게 둠).
+
+**결과 (수정 전 → 후, 실제 숫자)**:
+
+| 순번 | 수정 전(순수 부피순) | 수정 후(픽업 순서 제약) |
+|---|---|---|
+| 1 | Cart_Green (5.40L, 맨 아래인데 1번) ❌ | Cart_Blue2 (2.02L) ✅ |
+| 2 | Cart_Blue2 (2.02L) | Cart_Blue1 (1.08L) ✅ |
+| 3 | Cart_Blue1 (1.08L) | Cart_Green (5.40L, 맨 아래라 마지막) ✅ |
+
+**검증**: TDD 4케이스(`tests/test_06_loading_order_decision.py`, 카트 시나리오
+그대로 재현하는 케이스 포함) + 2케이스(`tests/test_01_object3d_schema.py`), 전체
+pytest 43/43, `10_verification.py` 5/5.
+
+---
+
+## 15. 데모 스크립트 동기화 확인 — 이중 드리프트 발견
+
+**계기**: "동기화해도 핵심 알고리즘은 안전하다는 거지?"라고 먼저 확인한 뒤 진행
+승인. 13번(⑮) 적용 후 로컬 데모 3개가 실제 파이프라인(`07_placement_plan.py`)과
+계속 같은 로직을 쓰고 있는지 점검.
+
+**발견한 문제**: ⑮뿐 아니라, **7번에서 고친 `generate_box_flush_candidates()`도
+로컬 헬퍼 함수에 반영이 안 돼 있었음** — 즉 두 라운드 분량의 드리프트가 동시에
+쌓여 있던 것. 조용히 고치지 않고 사용자에게 먼저 보고한 뒤 동기화 진행.
+
+**수정**: `sketch_placement_test_2layer.py`, `sketch_placement_test_cart_reload.py`,
+`sketch_placement_test_near_full.py` 3개 전부 `has_overhead_clearance` +
+`generate_box_flush_candidates` 반영. `TRUNK_HEIGHT`도 0.40 → 0.50으로 상향
+(2개 층 쌓기 + 0.2m 여유를 동시에 만족시키려면 필요).
+
+**검증**: 3개 스크립트 전부 재실행해서 100% 배치 성공 확인, 전체 pytest 43/43.
+
+---
+
+## 16. "기존 박스도 재배치한 거 아니야?" — 카트 재적재 로직 재설계
+
+**계기**: 10번 라운드 결과표를 보고 사용자가 "Cart_Green을 카트에선 마지막에
+집지만 트렁크엔 가장 먼저 넣으면, 원래 있던 박스들 결국 치우고 넣어야 하는 거
+아니야? 그런 것까지 계산한 거야?" 라고 정확히 지적.
+
+**인정한 문제**: 아니었음 — 10번의 "전부 재조합" 방식은 **이미 트렁크에 있던
+7개까지 매번 알고리즘으로 새로 계산**하고 있었고, "그 목표 배치에 도달하려면
+기존 짐을 실제로 얼마나 옮겨야 하는지"는 전혀 반영 안 돼 있었음. 사용자가 두
+선택지(①전부 다시 계산 vs ②안 움직여도 되는 건 그대로 두고 새 것만 배치) 중
+"로봇으로 기존 적재물을 미는 건 지금 단계에서 어려우니, 주어진 공간에서
+최선을 다하자"를 선택.
+
+**재설계**: 기존 7개는 차 바퀴와 동일하게 **좌표를 상수로 등록만 하고
+`decide_loading_order`/`place_one_box`를 아예 호출하지 않음** — 알고리즘이 그
+자리를 "결정"하는 게 아니라 "주어진 사실"로 취급. 카트에서 온 3개만 ⑥+⑦ 전체
+파이프라인을 적용해서 남는 공간에 배치.
+
+**드러난 실전 결과**: 이 현실적 제약 하에서 `Cart_Blue2`가 실제로 **미적재**로
+나옴 — "카트에서 집는 순서(픽업 물리 제약)"와 "트렁크에 놓을 수 있는 순서(자리
+가용성)"가 다를 수 있다는 걸 실제 시나리오에서 증명한 셈(14번에서 만든 개념이
+여기서 실전 충돌 사례로 나타남).
+
+**추가 피드백 반영**: 이 상수 좌표가 처음엔 알고리즘이 다른 목적으로 계산했던
+값을 그대로 가져온 것이었는데, "이 손그림을 참고해서 다시 조정해봐"라는 지적을
+받고 손그림의 배치 구도(입구 쪽 작은 박스 클러스터, 그 아래 넓은 박스, 바퀴
+사이 틈에 낀 큰 박스)에 맞춰 좌표를 다시 잡음.
+
+**결과 파일**: `local_test_data/sketch_placement_test_cart_reload.py` (재작성)
+**결과 이미지**: `local_test_data/sketch_placement_cart_reload_result.png`
+
+![기존 7개 고정 + 카트 신규 3개만 배치 (Cart_Blue2 미적재)](local_test_data/sketch_placement_cart_reload_result.png)
+
+---
+
+## 17. "내가 직접 좌표 조정하고 싶다" — 인터랙티브 3D 편집기 제작
+
+**계기**: 16번에서 손그림 구도를 텍스트로 설명해서 좌표를 추정하는 방식의 한계를
+느낀 사용자가 "내가 직접 좌표를 수정하고 그림을 볼 수 있게, matplotlib 3d를
+써서 만들어줘"라고 요청. 디스플레이(`DISPLAY=:0`, Wayland)와 GUI 백엔드(TkAgg 등)
+사용 가능 여부를 먼저 확인한 뒤 실제 동작하는 GUI로 제작.
+
+**기능**: 라디오버튼으로 박스 선택 → X/Y/Z 슬라이더로 조정하면 3D(회전 가능)와
+top-down이 실시간 갱신, 다른 박스/트렁크 밖과 겹치면 빨간 테두리+경고 문구,
+"저장" 버튼으로 JSON 내보내기, "초기화" 버튼. 이어서 "새 박스 추가하고 색깔도
+넣을 수 있게 해줄 수 있어?" 요청을 받아 이름/가로/세로/높이/색상 입력창 +
+"박스 추가" 버튼을 추가하고, 라디오버튼 목록을 동적으로 다시 생성하도록 확장.
+
+**연동**: `sketch_placement_test_cart_reload.py`가 저장된
+`cart_reload_fixed_positions.json`이 있으면 자동으로 읽어서 기존 7개 좌표에
+반영(없으면 기존 하드코딩 기본값 사용) — 단, 편집기에서 직접 추가한 이름 모를
+박스는 메인 스크립트가 아는 7개 id에 없으므로 자동으로 무시됨(시각화 실험용).
+
+**결과 파일**: `local_test_data/interactive_cart_reload_editor.py` (신규, GUI 도구라
+정적 결과 이미지 없음 - `python3 interactive_cart_reload_editor.py`로 직접 실행)
+
+**검증**: 리치 JSON 포맷(위치+치수+색상) 저장/로드 왕복 테스트(알려지지 않은
+커스텀 박스는 메인 스크립트가 안전하게 무시하는지 포함), 전체 pytest 43/43.
+
+---
+
+## 18. 새 장애물 손그림 — 스테이징+재배치, 물리적으로 불가능한 배치 자체 발견·수정
+
+**계기**: 사용자가 새 손그림(장애물 두 개 + 카트)을 제공하고 "이걸 참고해서
+적재해봐" 요청.
+
+**1차 결과 (예상보다 심한 실패)**: 카트 박스 3개 중 **2개(Cart_Blue1, Cart_Blue2)가
+미적재**. 장애물 높이가 이미 0.20m라서 그 위에 파란 박스(0.12m)를 쌓으면 남는
+여유가 0.18m로 ⑮ 기준(0.20m) 미달, 그렇다고 쌓을 수 있는 유일한 곳(Cart_Green)은
+픽업 순서상 아직 트렁크에 없는 시점이라 못 씀 — 16번에서 발견한 "픽업 순서 ≠
+배치 가능 순서" 문제가 장애물이 큰 시나리오에서 더 심하게 재현됨.
+
+**사용자 제안**: "파란 박스를 트렁크의 빈 공간에 둘 수 있다면 먼저 내려놓고,
+Cart_Green을 배치한 다음에 다시 재배치 해도 되지 않아?"
+
+**1차 구현의 숨은 버그 (스스로 발견)**: 곧바로 구현하니 3/3 성공으로 나왔지만,
+자세히 보니 `Cart_Blue1`이 **아직 임시로 내려놓은 상태인 `Cart_Blue2` 위에**
+쌓여 있었음 — 이후 3단계에서 `Cart_Blue2`가 다른 자리로 재배치되면서 `Cart_Blue1`이
+받침 없이 붕 뜬 채로 남는, 물리적으로 불가능한 결과였음. "임시로 내려놓은 것 위엔
+아무것도 못 쌓게" `state`(전체)와 `state_final`(확정만)을 분리해서 재구현.
+
+```python
+# local_test_data/sketch_placement_test_obstacles.py
+# state_final: "다른 박스가 그 위에 안심하고 쌓여도 되는" 확정 배치만 담는다.
+# 임시로 내려놓은 박스는 나중에 옮겨질 수 있으므로 여기 절대 안 넣는다.
+state_final = ExtremePointState()
+...
+plan = place_one_box_stacked_only(box, trunk, state_final, order=order_counter)
+```
+
+수정 후, 최종 결과 전체에 대해 ⑬(`13_support_check.py`)이 실제로 쓰는 것과 **완전히
+같은 기준(받침 비율 ≥80%)**으로 재검증하는 자체 안전장치도 추가(100% 완전 지지를
+요구하면 ⑬보다 엄격해서 거짓 경보가 남 — 처음엔 이 실수도 했다가 바로 잡음).
+
+**결과**: 카트 박스 3개 전부 배치 성공 (`Cart_Green` 1층, `Cart_Blue1`/`Cart_Blue2`
+임시 바닥 → 2층 재배치 성공), 받침 비율 검증 통과.
+
+**결과 파일**: `local_test_data/sketch_placement_test_obstacles.py` (신규)
+**결과 이미지**: `local_test_data/sketch_placement_obstacles_result.png`
+
+![장애물 2개 + 카트 박스 3개, 스테이징 후 재배치 성공](local_test_data/sketch_placement_obstacles_result.png)
+
+**검증**: 전체 pytest 43/43, `10_verification.py` 5/5, `12_verify_real_coords.py`
+이상 없음 (핵심 알고리즘 파일은 전혀 안 건드리고 데모 스크립트 안에서만 처리).
+
+---
+
+## 19. 회전(rotation) 지원 여부 질문 — 기존 한계 재확인
+
+**계기**: "박스가 정자세로 안 들어가면 회전시켜서 적재하기도 하나?" 질문.
+
+**확인**: 코드를 새로 안 고치고 기존 코드를 그대로 확인 - `fits_dims()`와
+`01_object3d_schema.py`의 비전 로더 둘 다 이미 "회전은 고려하지 않음(MVP 범위)"라고
+명시돼 있었음.
+
+```python
+# 03_extreme_point_candidates.py:136
+"""박스 자체 크기가 트렁크보다 큰지 여부 (회전은 고려하지 않음 - MVP 범위)."""
+```
+
+**결론**: 세워서는 안 들어가지만 눕히면(가로/세로/높이를 바꾸면) 들어가는
+경우에도, 지금은 회전을 시도조차 안 하고 그냥 미적재 처리됨. 실제로 필요한
+기능인지(그리퍼가 90도로 돌려 놓는 게 물리적으로 가능한지 등)는 로봇 연결 후
+팀과 논의하기로 보류 - 코드 변경 없음.
+
+---
+
+## 20. 안전장치 테스트 1/4 — ⑯ 접근 경로 확인이 실제로 후보를 거부하는 사례
+
+**계기**: 지금까지 만든 안전장치(⑥⑬⑮⑯)를 사용자가 직접 시나리오를 주면서 하나씩
+검증해보고 싶다고 요청. "지금까지 테스트한 건 전부 ⑯이 우연히 경계값이라
+통과했을 뿐, 진짜로 거부하는 걸 본 적이 없다"는 점에 착안해 첫 시나리오로 선정.
+
+**설계**: 트렁크에 입구 쪽으로 아주 높이 솟은 장애물(`Tall_Blocker`, 높이 0.40m,
+천장 0.50m의 80%)을 놓고, 그 뒤(더 깊은 곳)에 받침 박스(`Base_Box`)를 배치.
+카트 박스(`Cart_Item`) 하나를 `Base_Box` 위에 쌓으려고 시도.
+
+**결과**: ⑬(받침)과 ⑮(최종 자리 천장 여유)는 둘 다 통과하는데, **⑯이 명확히
+거부**함 - `Tall_Blocker`(0.40m)를 넘어가려면 그 높이 기준으로 천장 여유를 다시
+계산해야 하는데, `0.50 - (0.40 + 0.10) = 0.00m`로 기준(0.20m) 미달. 거부되고 나면
+일반 배치로 재시도해서 **바닥의 다른 안전한 자리로 우회 배치 성공** - ⑯이 그냥
+실패로 끝나는 게 아니라 안전한 대안으로 이어진다는 것까지 확인.
+
+**부수 작업**: 여러 데모 스크립트가 거의 똑같이 복붙해온 3D+top-down 시각화
+코드(~150줄)를 `local_test_data/_viz_helpers.py`로 뽑아내서 공용화. "비포(카트에
+대기 중)/애프터(트렁크 배치 완료)" 한 쌍을 `draw_scene()` 두 번 호출로 만들 수
+있게 정리 - 이후 시나리오들은 전부 이 헬퍼를 재사용.
+
+**결과 이미지**: `local_test_data/sketch_scenario1_before.png` / `sketch_scenario1_after.png`
+
+![시나리오1 AFTER - Base_Box 위 쌓기는 거부되고 안전한 다른 자리로 배치됨](local_test_data/sketch_scenario1_after.png)
+
+**검증**: 전체 pytest 48/48 그대로 안전 (핵심 알고리즘 미변경, 데모+공용 헬퍼만 추가).
+
+---
+
+## 21. 안전장치 테스트 2/4 — 3단 쌓기 체인, 그리고 실제로 발견한 버그 두 개
+
+**계기**: 20번에 이어 두 번째 시나리오로 "카트 안에서 C가 B 위에, B가 A 위에
+얹혀 있는 3단 체인"을 선정 - ⑥(픽업 순서)과 ⑮(층이 늘어날수록 빠듯해지는 천장
+여유)를 같이 확인하려는 목적.
+
+**1차 시도**: 차 바퀴가 있는 트렁크에서 실행했더니, `Chain_B`/`Chain_C`가
+`Chain_A`를 거치지 않고 **차 바퀴 위**로 바로 올라가버림 - 픽업 순서(C→B→A)는
+맞았지만 애초에 노리려던 "3단 탑" 상황 자체가 안 만들어짐. 차 바퀴를 빼고
+트렁크를 비운 채로 재실행.
+
+**2차 시도 - 발견 1 (알고리즘 원칙 재확인)**: 차 바퀴를 빼도 `Chain_B`와
+`Chain_C`가 둘 다 `Chain_A` 위에 나란히 올라갈 뿐, `Chain_C`가 `Chain_B` 위에
+쌓이진 않음. 재배치가 "카트에서 집은 순서"(C 먼저) 그대로 진행되다 보니, C가
+먼저 A 위 빈자리를 차지해버리고 B는 그 옆 자리를 따로 잡는 것. **16번 라운드의
+원칙("카트 안에서의 관계 ≠ 트렁크 최종 배치")이 3단 체인에서도 똑같이 재현됨** -
+새 버그가 아니라 이미 확인한 특성의 연장선.
+
+**발견 2 (진짜 데모 버그, 안전장치 자체 검증 로직이 잡아냄)**: A의 발판을
+`Chain_B` 하나로 거의 꽉 차게 줄여서 진짜 탑을 강제로 만들어보려던 중,
+`AssertionError: Chain_B 받침 비율 42.9% 기준 미달`가 발생. 원인 추적 결과,
+재배치 코드에서 `place_one_box_stacked_only()`가 성공하면 **이미 내부적으로
+`state_final`에 등록**하는데, 그 뒤에 직접 `state_final.register_placement()`를
+한 번 더 호출하는 코드가 있어서 **같은 박스가 두 번 등록**됐음 - 다음 박스의
+받침 비율 계산 때 그 박스의 지지 면적이 이중으로 잡혀, 실제로는 42.9%(기준
+미달)인데 85.7%처럼 계산돼서 통과해버린 것. 핵심 알고리즘(`13_support_check.py`)
+자체는 직접 격리해서 검증해보니 정상 - 버그는 **데모 스크립트의 재배치 루프에만**
+있었음. 같은 패턴이 18번 라운드의 `sketch_placement_test_obstacles.py`에도 있었음
+(그땐 재배치 대상이 하나뿐이라 증상이 안 드러났을 뿐) - 같이 수정.
+
+```python
+# local_test_data/sketch_placement_test_scenario2_three_tier_chain.py
+# place_one_box_stacked_only()가 성공하면 state_final에 이미 내부에서
+# register_placement()를 해버린다 - 여기서 또 register_placement를 부르면
+# 같은 박스가 두 번 등록돼서, 다음 박스의 받침 비율 계산 때 그 면적이
+# 이중으로 잡혀 실제로는 부족한 받침도 통과해버리는 버그가 된다.
+new_plan = place_one_box_stacked_only(box, trunk, state_final, order=finalized[box.id].order)
+# (수정 후) 여기서 state_final.register_placement()를 다시 호출하지 않음
+```
+
+**수정 후 최종 결과**: `Chain_A`(바닥) + `Chain_C`(그 위 2층, 100% 받침) +
+`Chain_B`(받침 부족으로 쌓이지 못하고 바닥에 따로) - 물리적으로 완전히 유효한
+결과. 받침 비율 재검증(⑬ 기준과 동일, 80%)도 통과.
+
+**발견 3 (시각화 버그)**: 사용자가 "before 그림에서 박스가 쌓인 구조가 아니라
+나란히 배치돼있다"고 지적 - `_viz_helpers.py`가 대기 중인(카트) 박스를 전부
+바닥(z=0)에 나란히만 그리고 있었음, 카트 안에서 실제로 얹혀있는 관계를 반영 안
+함. `SceneBox`에 `stack_on_id` 필드를 추가해서, 3D에서는 실제로 층으로 쌓아
+그리고 top-down에서는 레벨마다 살짝 밀어서(카드 겹치듯) 보이게 수정.
+
+**결과 이미지**: `local_test_data/sketch_scenario2_before.png` / `sketch_scenario2_after.png`
+
+![시나리오2 BEFORE(수정 후) - 카트 안에서 진짜로 쌓여있는 3단 체인](local_test_data/sketch_scenario2_before.png)
+![시나리오2 AFTER - Chain_C만 Chain_A 위에 쌓이고 Chain_B는 받침 부족으로 바닥에 따로](local_test_data/sketch_scenario2_after.png)
+
+**검증**: 전체 pytest 48/48, `10_verification.py` 5/5, `12_verify_real_coords.py`
+이상 없음 (버그 2건 다 데모 스크립트 안에 있었고 핵심 알고리즘은 안 건드림).
+
+---
+
 ## 파일별 최종 변경 요약
 
 | 파일 | 상태 | 이번 반복에서 추가/변경된 것 |
 |---|---|---|
-| `01_object3d_schema.py` | 기존 파일 수정 | `load_boxes_from_vision_json()`, `EXPECTED_BOX_FRAME` |
+| `01_object3d_schema.py` | 기존 파일 수정 | `load_boxes_from_vision_json()`, `EXPECTED_BOX_FRAME`, `Object3D.rests_on_id` |
 | `02_trunk_space_state.py` | 기존 파일 수정 | `Trunk.entrance_near_x`, `to_bounding_trunk()`의 입구 방향 추정 |
-| `03_extreme_point_candidates.py` | 기존 파일 수정 | `generate_wall_flush_candidates()`, `generate_box_flush_candidates()` |
+| `03_extreme_point_candidates.py` | 기존 파일 수정 | `generate_wall_flush_candidates()`, `generate_box_flush_candidates()`, `Box.rests_on_id` |
 | `04_candidate_validity_check.py` | 기존 파일 수정 | `is_candidate_valid()` 하한 경계(x<0 등) 검사 추가 |
 | `05_candidate_scoring.py` | 기존 파일 수정 | `entrance_distance_ratio()`, `side_wall_distance_ratio()`, `WALL_A_WEIGHT`, `WALL_BC_WEIGHT` |
-| `07_placement_plan.py` | 기존 파일 수정 | `generate_wall_flush_candidates()` + `generate_box_flush_candidates()` 연결 |
+| `06_loading_order_decision.py` | 기존 파일 수정 | `decide_loading_order()` 위상정렬 재작성 (픽업 순서 제약) |
+| `07_placement_plan.py` | 기존 파일 수정 | `generate_wall_flush_candidates()` + `generate_box_flush_candidates()` + `has_overhead_clearance()` 연결 |
 | `13_support_check.py` | 신규 | 받침 확인 전체 |
 | `14_run_full_pipeline.py` | 신규 | 지완 실사용 CLI 진입점 |
-| `local_test_data/*.py` | 신규 (5개 스크립트) | 손그림 시나리오 재현 + 시각화 |
-| `local_test_data/*.png` | 신규 (5개 이미지) | 각 라운드 결과 시각화 |
+| `15_overhead_clearance_check.py` | 신규 | 상단 여유 공간(⑮) 확인 + 접근 경로 확인(⑯, `has_clear_approach_path`) |
+| `local_test_data/*.py` | 신규/수정 (11개 스크립트) | 손그림 시나리오 재현 + 시각화 + 인터랙티브 3D 편집기 + 안전장치 테스트 시나리오 |
+| `local_test_data/_viz_helpers.py` | 신규 | 여러 스크립트가 복붙하던 3D+top-down 시각화 공용 헬퍼 (비포/애프터 쌍 생성) |
+| `local_test_data/*.png` | 신규 (11개 이미지) | 각 라운드/시나리오 결과 시각화 |
 
 ## 테스트 현황
 
-- 최종 pytest: **32/32 통과** (`tests/` 디렉터리)
+- 최종 pytest: **48/48 통과** (`tests/` 디렉터리, ⑯ 신규 5케이스 포함)
 - `10_verification.py`: 5/5 통과
-- 실제 스캔 데이터(`run_20260720_160153`, `run_20260720_200104`) 2개 run: 미적재 0건, 브루트포스 교차검증 통과
+- `12_verify_real_coords.py`: 실제 스캔 데이터(`run_20260720_160153`, `run_20260720_200104`) 2개 run 미적재 0건, 브루트포스 교차검증 통과
+- `local_test_data/sketch_placement_test_obstacles.py`, `sketch_placement_test_scenario2_three_tier_chain.py`: 받침 비율(⑬ 기준, ≥80%) 자체 재검증 통과
+
+## 확인된 한계 (코드 미변경, 알고 있는 채로 보류)
+
+- **회전 미지원**: 박스가 정자세로 안 들어가면 눕혀서라도 넣어보는 로직 없음 (19번). 로봇/그리퍼 제약 확인 후 결정.
+- **장애물 위 적층**: 받침 확인 로직이 "다른 박스"와 "차 바퀴 같은 장애물"을 구분 안 해서, 실제로는 둥글어서 평평하게 못 얹을 장애물 위에도 쌓일 수 있음 (9번에서 발견, 아직 미수정).
+- **VGP20 그리퍼 실측 없음**: `OVERHEAD_CLEARANCE=0.20`은 실제 그리퍼 CAD가 아니라 보수적 추정치 (13번).
+- **비전 `support_candidate_id` 매핑 미확정**: `rests_on_id`를 실제 비전 필드와 정확히 매핑하는 건 팀 확인 전이라 로더는 항상 `None`으로 둠 (14번).
+- **카트에서의 적재 구조(탑 모양)를 트렁크에서 그대로 재현 안 함**: 재배치가 "카트에서 집은 순서"대로 진행되다 보니, 먼저 집힌 작은 박스가 큰 발판을 먼저 차지해버려서 뒤에 집힌 박스가 원래 노렸던 자리에 못 쌓이고 밀려날 수 있음 (16번에서 2단으로 처음 확인, 21번에서 3단 체인으로 재확인). 진짜 탑을 재현하려면 재배치 순서 로직 자체를 바꿔야 함 - 아직 미착수.
+- **슬라이드인 적재(미착수)**: "2층 박스를 입구에서 걸쳐두고 밀어 넣는" 아이디어는 논의만 하고 설계는 아직 시작 안 함.

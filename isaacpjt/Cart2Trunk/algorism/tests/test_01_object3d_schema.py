@@ -22,8 +22,11 @@ import pytest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))  # tests/ -> algorism/
 _m01 = import_module("01_object3d_schema")
+_m03 = import_module("03_extreme_point_candidates")
 
 load_boxes_from_vision_json = _m01.load_boxes_from_vision_json
+Object3D = _m01.Object3D
+object3d_to_box = _m01.object3d_to_box
 
 
 def _write_json(tmp_path, data):
@@ -97,3 +100,32 @@ def test_load_boxes_rejects_non_base_frame(tmp_path):
 
     with pytest.raises(ValueError, match="m0609_base_link"):
         load_boxes_from_vision_json(path)
+
+
+def test_object3d_to_box_carries_rests_on_id_through():
+    """
+    ⑥ 픽업 순서 제약(rests_on_id)이 Object3D -> Box 변환에서 안 끊기고 그대로
+    전달되는지 확인 - 이게 끊기면 ⑥이 아무리 잘 만들어져도 실제로는 항상
+    rests_on_id=None만 받게 되어 무용지물이 된다.
+    """
+    obj = Object3D("Cart_Blue1", (0, 0, 0), (0.09, 0.10, 0.12), 0.09 * 0.10 * 0.12,
+                    confidence=1.0, rests_on_id="Cart_Green")
+    box = object3d_to_box(obj)
+    assert box.rests_on_id == "Cart_Green"
+
+
+def test_load_boxes_from_vision_json_leaves_rests_on_id_unset_for_now(tmp_path):
+    """
+    실제 샘플의 support_candidate_id 필드가 정확히 무슨 의미인지(진짜 '깔린 박스
+    id'가 맞는지) 아직 지완/준형님 확인 전이라, 지금은 잘못 매핑해서 조용히 틀린
+    픽업 순서 제약을 만드는 것보다 안 채우는 쪽이 안전하다 - 확인되면 여기를 고치면 됨.
+    """
+    data = {
+        "coordinate_frame": "m0609_base_link",
+        "boxes": [_box_entry(0, (0.0, 0.1), (0.0, 0.1), (0.0, 0.1))],
+    }
+    path = _write_json(tmp_path, data)
+
+    boxes = load_boxes_from_vision_json(path)
+
+    assert boxes[0].rests_on_id is None
