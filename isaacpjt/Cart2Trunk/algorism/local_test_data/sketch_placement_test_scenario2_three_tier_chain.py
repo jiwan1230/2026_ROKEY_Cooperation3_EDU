@@ -21,6 +21,7 @@ m07 = import_module("07_placement_plan")
 m13 = import_module("13_support_check")
 m15 = import_module("15_overhead_clearance_check")
 m17 = import_module("17_margin_check")
+m18 = import_module("18_rotation")
 viz = import_module("_viz_helpers")
 
 Trunk = m02.Trunk
@@ -37,16 +38,28 @@ is_candidate_valid_with_stacking = m13.is_candidate_valid_with_stacking
 has_overhead_clearance = m15.has_overhead_clearance
 has_clear_approach_path = m15.has_clear_approach_path
 has_sufficient_margin = m17.has_sufficient_margin
+MARGIN = m17.MARGIN
+rotate_box = m18.rotate_box
 SceneBox = viz.SceneBox
 draw_scene = viz.draw_scene
 
 
 def place_one_box_stacked_only(box, trunk, state, order):
-    candidate_pool = (
-        state.candidates
-        | generate_wall_flush_candidates(box, trunk, state.candidates)
-        | generate_box_flush_candidates(box, trunk, state.candidates, state.placed)
-    )
+    """정자세로 먼저 시도하고, 안 되면 ⑱(90도 회전, 가로/세로 교환)로 한 번 더 시도한다 -
+    07_placement_plan.py의 place_one_box()와 동일한 회전 폴백 규칙."""
+    plan = _place_one_box_stacked_only_orientation(box, trunk, state, order, rotated=False)
+    if plan is not None:
+        return plan
+    if box.width == box.depth:
+        return None
+    return _place_one_box_stacked_only_orientation(rotate_box(box), trunk, state, order, rotated=True)
+
+
+def _place_one_box_stacked_only_orientation(box, trunk, state, order, rotated):
+    wall_flush = generate_wall_flush_candidates(box, trunk, state.candidates, margin=MARGIN)
+    box_flush = generate_box_flush_candidates(box, trunk, state.candidates, state.placed, margin=MARGIN)
+    combo_flush = generate_box_flush_candidates(box, trunk, wall_flush, state.placed, margin=MARGIN)
+    candidate_pool = state.candidates | wall_flush | box_flush | combo_flush
     valid_candidates = [
         (x, y, z) for (x, y, z) in candidate_pool
         if z > 1e-9
@@ -62,7 +75,7 @@ def place_one_box_stacked_only(box, trunk, state, order):
     placed_box = PlacedBox(box=box, x=best_pos[0], y=best_pos[1], z=best_pos[2])
     state.register_placement(placed_box)
     return PlacementPlan(box_id=box.id, order=order, position=best_pos,
-                          dimensions=(box.width, box.depth, box.height), score=best_score, touches=best_touches)
+                          dimensions=(box.width, box.depth, box.height), score=best_score, touches=best_touches, rotated=rotated)
 
 
 TRUNK_WIDTH, TRUNK_DEPTH, TRUNK_HEIGHT = 0.60, 0.73, 0.50

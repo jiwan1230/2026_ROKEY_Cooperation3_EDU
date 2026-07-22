@@ -23,6 +23,7 @@ _m05 = import_module("05_candidate_scoring")
 _m13 = import_module("13_support_check")
 _m15 = import_module("15_overhead_clearance_check")
 _m17 = import_module("17_margin_check")
+_m18 = import_module("18_rotation")
 
 Box = _m03.Box
 PlacedBox = _m03.PlacedBox
@@ -34,6 +35,7 @@ has_overhead_clearance = _m15.has_overhead_clearance
 has_clear_approach_path = _m15.has_clear_approach_path
 has_sufficient_margin = _m17.has_sufficient_margin
 MARGIN = _m17.MARGIN
+rotate_box = _m18.rotate_box
 score_candidate = _m05.score_candidate
 
 
@@ -43,9 +45,10 @@ class PlacementPlan:
     box_id: str
     order: int
     position: Tuple[float, float, float]      # 트렁크 로컬 좌표 (x, y, z)
-    dimensions: Tuple[float, float, float]     # (width, depth, height)
+    dimensions: Tuple[float, float, float]     # (width, depth, height) - 실제로 놓인 자세 기준
     score: float
     touches: int
+    rotated: bool = False  # True면 ⑱ 90도 회전(가로/세로 교환)된 자세로 놓인 것
 
 
 def place_one_box(
@@ -58,7 +61,25 @@ def place_one_box(
 
     allow_stacking=False(기본값)면 z>0 후보(박스 위에 놓는 자리)는 ⑬에서
     무조건 거부되어 지금의 1층 전용 동작과 동일하게 동작한다.
+
+    [⑱ 회전] 먼저 정자세로 시도하고, 자리가 없을 때만 90도 돌린 자세(가로/세로
+    교환, 높이는 그대로 - 로봇이 눕히거나 뒤집는 건 불가능)로 한 번 더 시도한다.
+    정자세가 이미 되면 굳이 돌리지 않는다 (회전은 그리퍼 동작이 하나 더 필요함).
     """
+    plan = _place_one_orientation(box, trunk, state, order, allow_stacking, rotated=False)
+    if plan is not None:
+        return plan
+    if box.width == box.depth:
+        return None  # 정사각형이면 돌려도 후보가 똑같아서 재시도할 의미 없음
+    return _place_one_orientation(rotate_box(box), trunk, state, order, allow_stacking, rotated=True)
+
+
+def _place_one_orientation(
+    box: "Box", trunk, state: "ExtremePointState", order: int,
+    allow_stacking: bool, rotated: bool,
+) -> Optional["PlacementPlan"]:
+    """place_one_box()의 실제 배치 로직 - 주어진 box의 치수(정자세 또는 이미
+    회전된 치수)를 그대로 하나의 "자세"로 취급해서 자리를 찾는다."""
     # [③ 보강] 순수 모서리 확장만으로는 못 만드는 "이 박스라면 벽에 딱 붙는 자리"
     # + "이미 놓인 다른 박스 옆면에 딱 붙는 자리"를 지금 놓으려는 box 크기 기준으로
     # 추가 생성 - state.candidates에는 저장하지 않고 이번 배치 판단에만 잠깐 섞어
@@ -109,6 +130,7 @@ def place_one_box(
         dimensions=(box.width, box.depth, box.height),
         score=best_score,
         touches=best_touches,
+        rotated=rotated,
     )
 
 
