@@ -195,7 +195,13 @@ DUMMY_MASS_KG = 1.0
 
 # ================= 스캔 자세 1: 테이블을 내려다보는 고정 시점 (32.py와 동일) =================
 EYE_HEIGHT_ABOVE_TABLE = 0.85
-SCAN_EYE = np.array([CART_POS[0], CART_POS[1] - 0.15, TABLE_TOP_Z + EYE_HEIGHT_ABOVE_TABLE])
+# 사용자가 실측/실험으로 찾은 값: 박스가 쌓인 공간을 스캔할 때 수직(정면 위)에서
+# 21도 기울여서 볼 때 검출 정확도가 가장 높다. 높이(EYE_HEIGHT_ABOVE_TABLE)는
+# 그대로 두고, 그 높이에서 21도가 나오도록 카메라의 수평 오프셋만 계산한다
+# (기존엔 오프셋 0.15m 고정값이라 실제로는 약 10도였음 - atan(0.15/0.85)).
+SCAN_TILT_FROM_VERTICAL_DEG = 21.0
+_scan_horizontal_offset = EYE_HEIGHT_ABOVE_TABLE * np.tan(np.radians(SCAN_TILT_FROM_VERTICAL_DEG))
+SCAN_EYE = np.array([CART_POS[0], CART_POS[1] - _scan_horizontal_offset, TABLE_TOP_Z + EYE_HEIGHT_ABOVE_TABLE])
 SCAN_LOOK_AT = np.array([CART_POS[0], CART_POS[1], TABLE_TOP_Z])
 
 # ================= 스캔 자세 2: 크레이트를 내려다보는 고정 시점 =================

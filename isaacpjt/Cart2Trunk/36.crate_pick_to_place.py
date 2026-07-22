@@ -131,8 +131,21 @@ BASE_QUAT = np.array([0.7071318116571836, 0.0005542394938275026, -0.000551026314
 PLACE_WORLD_XY = (0.9, 0.0)
 PLACE_DIMENSIONS = (0.28036145865917184, 0.19250817535401155, 0.1708746105019488)  # world (x폭, y깊이, 높이)
 CRATE_FLOOR_WORLD_Z = 0.1497797656866212  # 크레이트 바닥 (35.py의 CRATE_FLOOR_TOP_Z와 동일, 낮춘 값)
-RELEASE_HEIGHT_ABOVE_BASE = 0.30  # [[cart2trunk_mobile_pick_demo]] 기준 안전 도달 높이
-PLACE_RELEASE_WORLD_Z = float(BASE_POS[2]) + RELEASE_HEIGHT_ABOVE_BASE  # ~0.72, 트렁크 버전과 동일 타협
+# 기존엔 BASE_POS[2]+0.30(~0.72m)에서 그냥 놓아서 박스가 바닥(~0.15-0.24m)까지
+# 0.48m를 자유낙하했다 - "내려놓기"가 아니라 "던지기"에 가까웠고, release 시점의
+# 수평 오차(~0.10m)가 그대로 최종 위치 오차로 남았다. PICK이 pick_grasp_pos =
+# box_top_z + TIP_LOCAL_OFFSET[2]로 박스 윗면에 흡착 팁을 정확히 맞춰서
+# err~0.001-0.002m까지 수렴하는 것과 같은 방식으로, PLACE도 박스 바닥이 크레이트
+# 바닥 바로 위(RELEASE_CLEARANCE_ABOVE_FLOOR)에 오도록 link6 목표 높이를 역산해서
+# 실제로 "내려놓는다" - 흡착 팁이 박스 윗면을 붙잡고 있으므로 박스는 팁 아래로
+# PLACE_DIMENSIONS[2](박스 높이)만큼 매달려 있다:
+#   box_bottom = link6_z - TIP_LOCAL_OFFSET[2] - PLACE_DIMENSIONS[2]
+# 이걸 CRATE_FLOOR_WORLD_Z + RELEASE_CLEARANCE_ABOVE_FLOOR로 맞추도록 link6_z를 구한다.
+RELEASE_CLEARANCE_ABOVE_FLOOR = 0.02  # release 시점에 박스 바닥과 바닥 사이 남길 여유
+PLACE_RELEASE_WORLD_Z = (
+    CRATE_FLOOR_WORLD_Z + RELEASE_CLEARANCE_ABOVE_FLOOR
+    + PLACE_DIMENSIONS[2] + TIP_LOCAL_OFFSET[2]
+)
 PLACE_HOVER_Z = PLACE_RELEASE_WORLD_Z + 0.15
 
 # 리포지셔닝 목표: 35.py 스캔 때 이미 검증된 위치(충돌 없음 + IK 수렴 양호,
