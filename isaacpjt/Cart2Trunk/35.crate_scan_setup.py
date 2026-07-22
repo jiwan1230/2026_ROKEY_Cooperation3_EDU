@@ -100,13 +100,21 @@ M0609_RMPFLOW_CONFIG_PATH = str(M0609_DIR / "rmpflow/m0609_rmpflow_common.yaml")
 
 # ================= 테이블 (32.py와 동일 - 대상 박스 스캔용, 그대로 재사용) =================
 CART_POS = (0.0, 0.0, 0.0)
-TABLE_TOP_Z = 0.40
+# Large를 실제로 집을 때(테이블에서 로봇 기준 가장 먼 자리) 팔이 쭉 펴지면서
+# 앞쪽(로봇에 더 가까운) Small/Medium을 스치는 물리 충돌이 실측으로 확인됐다 -
+# RMPflow 발산(err 0.32~0.35m, 크레이트 밖 착지)의 원인으로 추정. 테이블을
+# 낮추고(0.40->0.34) 박스 자체 크기/서로간 간격을 0.65배로 줄여서 팔이 스치고
+# 지나갈 부피와 스윙 거리를 함께 줄인다(사용자 지시).
+TABLE_TOP_Z = 0.34
 TABLE_SIZE = (0.8, 0.6, TABLE_TOP_Z - 0.05)
 
+# 원래 크기/위치의 0.65배 - 박스 자체가 작아지고(스윙 시 스치는 부피 감소) 서로
+# 더 가까워진다(팔이 먼 박스를 집으러 스윙해야 하는 거리 감소). 절대 크기는
+# TABLE_BOX_SIZE_TOLERANCE_M(아래) 기준으로 서로 구분 가능한 정도로 유지.
 TABLE_BOXES = [
-    ("Small", (0.20, 0.15, 0.12), (0.85, 0.25, 0.20), (-0.22, -0.12)),
-    ("Medium", (0.28, 0.20, 0.18), (0.25, 0.65, 0.30), (0.22, -0.12)),
-    ("Large", (0.35, 0.25, 0.22), (0.20, 0.35, 0.85), (0.0, 0.15)),
+    ("Small", (0.13, 0.10, 0.08), (0.85, 0.25, 0.20), (-0.14, -0.08)),
+    ("Medium", (0.18, 0.13, 0.12), (0.25, 0.65, 0.30), (0.14, -0.08)),
+    ("Large", (0.23, 0.16, 0.14), (0.20, 0.35, 0.85), (0.0, 0.10)),
 ]
 BOX_MASS_KG = {"Small": 1.0, "Medium": 2.0, "Large": 3.5}
 TABLE_DROP_Z = TABLE_TOP_Z + 0.5
@@ -835,8 +843,11 @@ print(f"[테이블 스캔 결과] {table_boxes_json_path}", flush=True)
 # 걸러내는 크기 기반 필터로 교체한다 - 이 데모 테이블 위 실제 박스는 TABLE_BOXES에
 # 정의된 3종류뿐이므로, 후보의 footprint(정렬된 w,d)가 그중 하나와
 # TABLE_BOX_SIZE_TOLERANCE_M 이내로 맞는지 확인한다(크레이트 더미 박스를 크기로
-# 걸렀던 것과 같은 패턴).
-TABLE_BOX_SIZE_TOLERANCE_M = 0.05
+# 걸렀던 것과 같은 패턴). 박스 크기를 0.65배로 줄이면서 세 박스 사이 실제 치수
+# 차이도 같이 줄어들어서(예: Small/Medium footprint 폭 차이가 0.03m로 좁아짐),
+# 기존 0.05m 허용치를 그대로 쓰면 서로 다른 박스로 오매칭될 수 있다 - 0.025m로
+# 줄인다(실측 감지 오차는 지금까지 수 mm~1cm 수준이었으므로 여전히 넉넉함).
+TABLE_BOX_SIZE_TOLERANCE_M = 0.025
 _known_table_footprints = [tuple(sorted((w, d))) for _, (w, d, _h), _color, _off in TABLE_BOXES]
 
 
@@ -1062,6 +1073,27 @@ reposition_chassis(controller, ROBOT_START_XY, "테이블쪽 원위치 복귀")
 scene_path = str(_THIS_DIR / "crate_scan_scene.usd")
 omni.usd.get_context().save_as_stage(scene_path)
 print(f"[저장] {scene_path}", flush=True)
+
+# ================= 이번 실행 결과를 날짜별 폴더에 보관 (매번 덮어써지는 문제 해결) =================
+# 스크린샷/trunk_map.json 등이 스크립트를 다시 돌릴 때마다 같은 파일명으로 덮어써져서
+# 예전 실행 결과를 나중에 다시 볼 수 없었다 - 사용자 요청으로 매 실행 끝에 이번 실행의
+# 스크린샷/JSON을 통째로 복사해서 타임스탬프 폴더에 남긴다(RESULTS_DIR 자체는 계속
+# "최신 결과"로 남아 14_run_full_pipeline.py 등 다른 스크립트가 그대로 쓸 수 있게 유지).
+import shutil
+from datetime import datetime
+
+_run_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+_archive_dir = RESULTS_DIR / "runs" / f"{_run_stamp}_35scan"
+_archive_dir.mkdir(parents=True, exist_ok=True)
+_archived = []
+for _f in list(_THIS_DIR.glob("_verify_crate_scan_*.png")) + [
+    RESULTS_DIR / "table_boxes_filtered.json",
+    RESULTS_DIR / "trunk_map.json",
+]:
+    if _f.exists():
+        shutil.copy2(_f, _archive_dir / _f.name)
+        _archived.append(_f.name)
+print(f"[보관] {_archive_dir} 에 {len(_archived)}개 파일 복사: {_archived}", flush=True)
 
 print("\n[완료] 35.crate_scan_setup.py 끝.\n", flush=True)
 

@@ -3,8 +3,9 @@
 
 results/crate_demo/{table_boxes_filtered,trunk_map,placement_result}.json 세 개를
 읽어서 왼쪽엔 테이블 스캔 결과, 오른쪽엔 크레이트 내부(장애물로 등록된 더미 박스 2개 +
-알고리즘이 실제로 계산한 배치)를 나란히 그린다. 36.py가 실제로 집어서 옮긴 박스
-(EXECUTED_ID, box_id는 스캔마다 바뀔 수 있음)만 강조.
+알고리즘이 실제로 계산한 배치)를 나란히 그린다. 36.py는 이제 배치에 성공한 박스
+전부를 순서대로 옮기므로(예전엔 하나만 하드코딩해서 옮겼음), 기본적으로
+placement_result.json의 모든 box_id를 "실행됨"으로 강조한다.
 
 실행: perception/.venv 안에서 실행해야 함 (numpy<2 고정, 시스템 numpy 2.x와 ABI 충돌).
     source perception/.venv/bin/activate && python3 37.plot_crate_placement.py
@@ -29,7 +30,7 @@ INK_SECONDARY = "#52514e"
 INK_MUTED = "#898781"
 GRID = "#e1e0d9"
 BASELINE = "#c3c2b7"
-BLUE = "#2a78d6"    # 카테고리 슬롯1 - 실제 실행된 박스(EXECUTED_ID)
+BLUE = "#2a78d6"    # 카테고리 슬롯1 - 실제 실행된 박스(EXECUTED_IDS)
 AQUA = "#1baf7a"    # 카테고리 슬롯3 - 알고리즘이 배치는 계산했지만 이번엔 안 옮긴 박스
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -39,18 +40,18 @@ TABLE_BOXES_JSON = RUN_DIR / "table_boxes_filtered.json"
 TRUNK_MAP_JSON = RUN_DIR / "trunk_map.json"
 PLACEMENT_JSON = RUN_DIR / "placement_result.json"
 
-# 36.crate_pick_to_place.py가 실제로 집어서 옮긴 박스(BOX_PICK_PRIM_PATH="/World/Box_Small").
-# box_id는 카메라 거리순으로 매 스캔마다 새로 매겨지므로 스캔이 바뀌면 이 값도 확인이
-# 필요하다 - results/crate_demo/table_boxes_filtered.json에서 dimensions가 Small
-# (0.20x0.15x0.12 근방)과 맞는 box_id를 확인할 것.
-EXECUTED_ID = "2"
-
 with open(TABLE_BOXES_JSON) as f:
     table_data = json.load(f)
 with open(TRUNK_MAP_JSON) as f:
     trunk_map = json.load(f)
 with open(PLACEMENT_JSON) as f:
     placement_data = json.load(f)
+
+# 36.crate_pick_to_place.py는 placement_result.json에 배치 성공으로 나온 박스를
+# 전부(하나가 아니라) 순서대로 집어서 옮긴다 - 기본값은 그 전부를 "실행됨"으로 표시.
+# 특정 실행에서 일부만 흡착 실패 등으로 건너뛰었다면 이 set을 수동으로 좁혀서
+# 실제 결과를 반영할 수 있다.
+EXECUTED_IDS = {str(p["box_id"]) for p in placement_data["placements"]}
 
 offset = placement_data["trunk_offset_base_frame"]
 
@@ -73,7 +74,7 @@ for box in table_data["boxes"]:
     ys = [c[1] for c in box["corners_m"]]
     x0, x1 = min(xs), max(xs)
     y0, y1 = min(ys), max(ys)
-    executed = box_id == EXECUTED_ID
+    executed = box_id in EXECUTED_IDS
     style = dict(facecolor=BLUE, edgecolor=BLUE, alpha=0.35, linewidth=2.2) if executed \
         else dict(facecolor=AQUA, edgecolor=AQUA, alpha=0.30, linewidth=1.6)
     ax_scan.add_patch(Rectangle((x0, y0), x1 - x0, y1 - y0, **style, zorder=3))
@@ -116,7 +117,7 @@ for p in placement_data["placements"]:
     box_id = str(p["box_id"])
     x, y, _ = p["position_local"]
     w, d, _ = p["dimensions"]
-    executed = box_id == EXECUTED_ID
+    executed = box_id in EXECUTED_IDS
     style = dict(facecolor=BLUE, edgecolor=BLUE, alpha=0.35, linewidth=2.2) if executed \
         else dict(facecolor=AQUA, edgecolor=AQUA, alpha=0.30, linewidth=1.6)
     ax_trunk.add_patch(Rectangle((x, y), w, d, **style, zorder=3))
@@ -145,7 +146,7 @@ ax_trunk.tick_params(colors=INK_MUTED, labelsize=8)
 # ================= 범례 (양쪽 공용) =================
 legend_handles = [
     Rectangle((0, 0), 1, 1, facecolor=BLUE, edgecolor=BLUE, alpha=0.35, linewidth=2.2,
-              label=f"실행됨 - box_id={EXECUTED_ID} (36.py가 실제로 집어서 옮김)"),
+              label="실행됨 (36.py가 실제로 집어서 옮김)"),
     Rectangle((0, 0), 1, 1, facecolor=AQUA, edgecolor=AQUA, alpha=0.30, linewidth=1.6,
               label="알고리즘이 배치는 계산했지만 이번엔 안 옮긴 박스"),
     Rectangle((0, 0), 1, 1, facecolor="none", edgecolor=INK_MUTED, hatch="///", linewidth=1.3,
@@ -154,10 +155,21 @@ legend_handles = [
 fig.legend(handles=legend_handles, loc="lower center", ncol=1, frameon=False,
            fontsize=9, labelcolor=INK_SECONDARY, bbox_to_anchor=(0.5, -0.08))
 
-fig.suptitle(f"Cart2Trunk: 박스 스캔 → 크레이트 스캔(장애물) → 적재 알고리즘 배치 → 실제 실행(box_id={EXECUTED_ID})",
+fig.suptitle(f"Cart2Trunk: 박스 스캔 → 크레이트 스캔(장애물) → 적재 알고리즘 배치 → 실제 실행({len(EXECUTED_IDS)}개 전부)",
              fontsize=13, color=INK_PRIMARY, y=1.02, fontweight="bold")
 
 fig.tight_layout(rect=[0, 0.09, 1, 1])
 out_path = SCRIPT_DIR / "_crate_05_placement_flow.png"
 fig.savefig(out_path, dpi=150, facecolor=SURFACE, bbox_inches="tight")
 print(f"[SAVED] {out_path}")
+
+# ================= 이번 실행 결과를 날짜별 폴더에 보관 (35/36.py와 동일) =================
+import shutil
+from datetime import datetime
+
+_run_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+_archive_dir = RUN_DIR / "runs" / f"{_run_stamp}_37plot"
+_archive_dir.mkdir(parents=True, exist_ok=True)
+shutil.copy2(out_path, _archive_dir / out_path.name)
+shutil.copy2(PLACEMENT_JSON, _archive_dir / PLACEMENT_JSON.name)
+print(f"[보관] {_archive_dir} 에 2개 파일 복사", flush=True)
