@@ -22,14 +22,19 @@
 
 좌표 근거
 ----
-    box_id=0(Medium) position_base_frame(min corner) = (-0.9997, -0.1743, -0.0188)
-    -> world (박스 중심 xy, 바닥 z) = (0.2705, -1.4098, 0.3995)
+5. 테이블 박스 검출 필터를 수정해서(support_type 기반 -> 알려진 크기 매칭 기반)
+   Large가 매번 제대로 잡히게 되자, 적재 알고리즘의 "부피 큰 순" 배치 정책상
+   Large가 먼저 크레이트의 좋은 자리를 차지하고 Medium이 NO_VALID_CANDIDATE_POSITION
+   으로 밀려나는 상황이 실제로 나왔다(오탐이 아니라 진짜 3개가 경쟁한 정상 결과) -
+   사용자 선택에 따라 데모가 실제로 집어서 옮기는 박스를 Medium에서 Small로 바꿨다
+   (Small은 Large/Medium과 경쟁해도 배치에 성공함, 실측 확인).
+
 (35.crate_scan_setup.py가 실측한 base_link pose + algorism/14_run_full_pipeline.py를
 results/crate_demo/trunk_map.json + 테이블 스캔 박스 JSON으로 돌려서 얻음. trunk_map.json의
 vertices 상단(z_max)은 크레이트 벽의 실제 물리 높이(0.15m)가 아니라 별도의 넉넉한 가상
-높이(1.0m)를 썼다 - 안 그러면 Trunk.height=0.15m로 잡혀 Medium 박스 높이(0.17m)가
-SIZE_EXCEEDS_TRUNK로 거부된다(35.py 1차 실행에서 실제로 겪음). 오픈-탑이라 진짜 천장이
-없다는 취지를 알고리즘에도 반영한 것.
+높이(1.0m)를 썼다 - 안 그러면 Trunk.height=0.15m로 잡혀 박스 높이가 SIZE_EXCEEDS_TRUNK로
+거부된다(35.py 1차 실행에서 실제로 겪음). 오픈-탑이라 진짜 천장이 없다는 취지를
+알고리즘에도 반영한 것.
 """
 
 from isaacsim import SimulationApp
@@ -127,9 +132,17 @@ BASE_QUAT = np.array([0.7071318116571836, 0.0005542394938275026, -0.000551026314
 # 중심을 직접 목표로 쓴다 - DummyA/B 양쪽으로 각각 (1.143-0.657-0.280)/2≈0.103m,
 # y쪽 양 벽으로 각각 (0.4-0.193)/2≈0.104m 여유(대칭, 이 gap에서 얻을 수 있는
 # 최대 여유). gap 중심이 우연히 크레이트 중심(0.9, 0.0)과 정확히 일치한다(두
-# 더미가 크레이트 중심 기준 대칭 배치이므로).
+# 더미가 크레이트 중심 기준 대칭 배치이므로). 이 좌표는 "특정 박스의 배치 결과"가
+# 아니라 컨테이너 형상(더미 위치) 자체에서 나온 값이라, 아래에서 데모 대상을
+# Medium->Small로 바꿔도 그대로 안전하다(오히려 Small이 더 작아서 여유가 더 커짐).
 PLACE_WORLD_XY = (0.9, 0.0)
-PLACE_DIMENSIONS = (0.28036145865917184, 0.19250817535401155, 0.1708746105019488)  # world (x폭, y깊이, 높이)
+# results/crate_demo/placement_result.json box_id=2(Small)의 dimensions - Large를
+# 정확히 검출하도록 35.py 필터를 고친 뒤(support_type 기반 -> 크기 매칭 기반),
+# "부피 큰 순" 배치 정책상 Large가 먼저 좋은 자리를 차지해 Medium이
+# NO_VALID_CANDIDATE_POSITION으로 밀렸다(실측 확인) - 데모 대상을 항상 배치에
+# 성공하는 Small로 바꿨다. 높이(PLACE_DIMENSIONS[2])는 release 높이 계산에 실제로
+# 쓰이므로 반드시 실제 집는 박스(Small)의 값이어야 한다.
+PLACE_DIMENSIONS = (0.1497725248336792, 0.2020389810204506, 0.11442550178617239)  # world (x폭, y깊이, 높이)
 CRATE_FLOOR_WORLD_Z = 0.1497797656866212  # 크레이트 바닥 (35.py의 CRATE_FLOOR_TOP_Z와 동일, 낮춘 값)
 # 기존엔 BASE_POS[2]+0.30(~0.72m)에서 그냥 놓아서 박스가 바닥(~0.15-0.24m)까지
 # 0.48m를 자유낙하했다 - "내려놓기"가 아니라 "던지기"에 가까웠고, release 시점의
@@ -155,7 +168,7 @@ PLACE_HOVER_Z = PLACE_RELEASE_WORLD_Z + 0.15
 # 검증된 위치에 고정하고, PLACE_WORLD_XY 쪽을 안정적으로 수렴했던 값 근처로 잡는다.
 CHASSIS_TARGET_XY = (0.9, -0.55)
 
-BOX_PICK_PRIM_PATH = "/World/Box_Medium"
+BOX_PICK_PRIM_PATH = "/World/Box_Small"
 PICK_HOVER_HEIGHT_ABOVE_BOX = 0.20
 
 
@@ -324,9 +337,9 @@ def get_box_world_pos():
 # ================= 1. PICK =================
 box_prim = stage.GetPrimAtPath(BOX_PICK_PRIM_PATH)
 box_pos = get_box_world_pos()
-box_top_z = float(box_pos[2]) + 0.09  # Medium 박스 절반 높이(0.18/2) 근사
+box_top_z = float(box_pos[2]) + 0.06  # Small 박스 절반 높이(0.12/2) 근사
 
-print(f"\n[PICK] Box_Medium 실측 world pos={np.round(box_pos, 3)}", flush=True)
+print(f"\n[PICK] Box_Small 실측 world pos={np.round(box_pos, 3)}", flush=True)
 
 pick_hover_pos = (box_pos[0], box_pos[1], box_top_z + PICK_HOVER_HEIGHT_ABOVE_BOX)
 pick_grasp_pos = (box_pos[0], box_pos[1], box_top_z + TIP_LOCAL_OFFSET[2])

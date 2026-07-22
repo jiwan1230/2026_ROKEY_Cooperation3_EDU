@@ -815,20 +815,72 @@ table_boxes_json_path = max(new_table_jsons, key=lambda p: p.stat().st_mtime)
 print(f"[테이블 스캔 결과] {table_boxes_json_path}", flush=True)
 
 # 14_run_full_pipeline.py는 --boxes로 받은 모든 항목을 "배치할 박스"로 취급하고
-# support_type을 전혀 걸러내지 않는다 - support_type="floor"인 오탐(빈 테이블 면)이
-# 실제 박스보다 커서 decide_loading_order(부피 큰 순)에서 먼저 배치되면, 진짜
-# 목표(box_id=0 Medium)가 자리를 뺏겨 NO_VALID_CANDIDATE_POSITION으로 튕겨나가는
-# 걸 실제로 겪었다. 크레이트 obstacles에 이미 쓰는 것과 같은 필터를 여기도 적용해서,
-# 파이프라인에 넘길 필터링된 사본을 미리 저장해둔다.
+# support_type을 전혀 걸러내지 않는다 - 병합/오탐(빈 테이블 면 전체를 하나로 묶은
+# 거대 후보 등)이 실제 박스보다 커서 decide_loading_order(부피 큰 순)에서 먼저
+# 배치되면, 진짜 목표가 자리를 뺏겨 NO_VALID_CANDIDATE_POSITION으로 튕겨나가는 걸
+# 실제로 겪었다 - 그래서 필터링된 사본을 미리 저장해둔다.
+#
+# 처음엔 support_type=="box_top"만 채택했다(오탐=floor라는 가정) - 그런데
+# box_top_extractor.py 코드를 직접 보면 support_type은 "이 박스 아래 받침을 어떻게
+# 찾았나"를 나타낼 뿐이다: 다른 검출 후보가 바로 밑에서 매칭되면 "box_top", 못
+# 찾아서 별도 바닥 RANSAC으로 폴백하면 "floor" - 테이블에 그냥 놓인(안 쌓인) 박스는
+# 원래 "floor"가 정상이고, "box_top"은 오히려 "밑에 우연히 평평한 빈 테이블 조각이
+# 후보로 잡혀서 매칭된" 우연에 가깝다. 실측 확인: Large(카메라에서 가장 먼 박스)는
+# 매 스캔마다 예외 없이 정확하게(footprint 0.247~0.249x0.348~0.349, 실제
+# 0.35x0.25와 근접) 검출되지만 항상 support_type=="floor"라 이 필터가 매번
+# 버리고 있었다 - "floor=오탐"은 옛날에 겪은 특정 사례(테이블 전체를 뒤덮은 거대
+# 병합 후보가 우연히 floor였던 것)를 일반화한 잘못된 가정이었다.
+#
+# support_type 대신, 실제 문제였던 "터무니없이 큰/작은 병합·조각 오탐"을 직접
+# 걸러내는 크기 기반 필터로 교체한다 - 이 데모 테이블 위 실제 박스는 TABLE_BOXES에
+# 정의된 3종류뿐이므로, 후보의 footprint(정렬된 w,d)가 그중 하나와
+# TABLE_BOX_SIZE_TOLERANCE_M 이내로 맞는지 확인한다(크레이트 더미 박스를 크기로
+# 걸렀던 것과 같은 패턴).
+TABLE_BOX_SIZE_TOLERANCE_M = 0.05
+_known_table_footprints = [tuple(sorted((w, d))) for _, (w, d, _h), _color, _off in TABLE_BOXES]
+
+
+def _matches_known_table_box(box):
+    xs = [c[0] for c in box["corners_m"]]
+    ys = [c[1] for c in box["corners_m"]]
+    footprint = tuple(sorted((max(xs) - min(xs), max(ys) - min(ys))))
+    return any(
+        abs(footprint[0] - known[0]) <= TABLE_BOX_SIZE_TOLERANCE_M
+        and abs(footprint[1] - known[1]) <= TABLE_BOX_SIZE_TOLERANCE_M
+        for known in _known_table_footprints
+    )
+
+
+def _table_box_center_xy(box):
+    xs = [c[0] for c in box["corners_m"]]
+    ys = [c[1] for c in box["corners_m"]]
+    return (min(xs) + max(xs)) / 2.0, (min(ys) + max(ys)) / 2.0
+
+
 table_boxes_data = json.loads(table_boxes_json_path.read_text())
 _table_total = len(table_boxes_data["boxes"])
-table_real_boxes = [b for b in table_boxes_data["boxes"] if b["support_type"] == "box_top"]
+_size_ok_table_boxes = [b for b in table_boxes_data["boxes"] if _matches_known_table_box(b)]
+
+# 크기 필터를 통과해도 같은 물리적 박스가 후보 2개(support_type이 다르거나 경계가
+# 살짝 다른)로 겹쳐 잡히는 경우가 있을 수 있다(크레이트 더미에서 실제로 겪은 것과
+# 같은 종류) - 중심이 가까우면 하나만(먼저 만난 것) 채택한다.
+TABLE_BOX_DEDUP_RADIUS_M = 0.10
+table_real_boxes = []
+_kept_centers = []
+for b in _size_ok_table_boxes:
+    cx, cy = _table_box_center_xy(b)
+    if any(((cx - kx) ** 2 + (cy - ky) ** 2) ** 0.5 < TABLE_BOX_DEDUP_RADIUS_M for kx, ky in _kept_centers):
+        continue
+    table_real_boxes.append(b)
+    _kept_centers.append((cx, cy))
+
 table_boxes_data["boxes"] = table_real_boxes
 table_boxes_data["box_count"] = len(table_real_boxes)
 table_boxes_filtered_path = RESULTS_DIR / "table_boxes_filtered.json"
 RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 table_boxes_filtered_path.write_text(json.dumps(table_boxes_data, indent=2))
-print(f"[저장] {table_boxes_filtered_path} (floor 오탐 제외 {len(table_real_boxes)}/{_table_total}개 유지)", flush=True)
+print(f"[저장] {table_boxes_filtered_path} (알려진 박스 크기 매칭 {len(_size_ok_table_boxes)}/{_table_total}개, "
+      f"중복 제거 후 {len(table_real_boxes)}개 유지)", flush=True)
 
 # ================= 스캔 자세 2: 크레이트 (포인트클라우드 기반 점유영역 검출) =================
 # box_top_extractor.py(RANSAC 개별 박스 검출)는 애초에 "테이블 위에 흩어진 낱개 박스들을

@@ -3,8 +3,8 @@
 
 results/crate_demo/{table_boxes_filtered,trunk_map,placement_result}.json 세 개를
 읽어서 왼쪽엔 테이블 스캔 결과, 오른쪽엔 크레이트 내부(장애물로 등록된 더미 박스 2개 +
-알고리즘이 실제로 계산한 배치 4개)를 나란히 그린다. 36.py가 실제로 집어서 옮긴
-box_id=0만 강조.
+알고리즘이 실제로 계산한 배치)를 나란히 그린다. 36.py가 실제로 집어서 옮긴 박스
+(EXECUTED_ID, box_id는 스캔마다 바뀔 수 있음)만 강조.
 
 실행: perception/.venv 안에서 실행해야 함 (numpy<2 고정, 시스템 numpy 2.x와 ABI 충돌).
     source perception/.venv/bin/activate && python3 37.plot_crate_placement.py
@@ -29,7 +29,7 @@ INK_SECONDARY = "#52514e"
 INK_MUTED = "#898781"
 GRID = "#e1e0d9"
 BASELINE = "#c3c2b7"
-BLUE = "#2a78d6"    # 카테고리 슬롯1 - 실제 실행된 박스(box_id=0)
+BLUE = "#2a78d6"    # 카테고리 슬롯1 - 실제 실행된 박스(EXECUTED_ID)
 AQUA = "#1baf7a"    # 카테고리 슬롯3 - 알고리즘이 배치는 계산했지만 이번엔 안 옮긴 박스
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -39,7 +39,11 @@ TABLE_BOXES_JSON = RUN_DIR / "table_boxes_filtered.json"
 TRUNK_MAP_JSON = RUN_DIR / "trunk_map.json"
 PLACEMENT_JSON = RUN_DIR / "placement_result.json"
 
-EXECUTED_ID = "0"  # 36.crate_pick_to_place.py가 실제로 집어서 옮긴 박스(BOX_PICK_PRIM_PATH="/World/Box_Medium")
+# 36.crate_pick_to_place.py가 실제로 집어서 옮긴 박스(BOX_PICK_PRIM_PATH="/World/Box_Small").
+# box_id는 카메라 거리순으로 매 스캔마다 새로 매겨지므로 스캔이 바뀌면 이 값도 확인이
+# 필요하다 - results/crate_demo/table_boxes_filtered.json에서 dimensions가 Small
+# (0.20x0.15x0.12 근방)과 맞는 box_id를 확인할 것.
+EXECUTED_ID = "2"
 
 with open(TABLE_BOXES_JSON) as f:
     table_data = json.load(f)
@@ -150,7 +154,7 @@ legend_handles = [
 fig.legend(handles=legend_handles, loc="lower center", ncol=1, frameon=False,
            fontsize=9, labelcolor=INK_SECONDARY, bbox_to_anchor=(0.5, -0.08))
 
-fig.suptitle("Cart2Trunk: 박스 스캔 → 크레이트 스캔(장애물) → 적재 알고리즘 배치 → 실제 실행(box_id=0)",
+fig.suptitle(f"Cart2Trunk: 박스 스캔 → 크레이트 스캔(장애물) → 적재 알고리즘 배치 → 실제 실행(box_id={EXECUTED_ID})",
              fontsize=13, color=INK_PRIMARY, y=1.02, fontweight="bold")
 
 fig.tight_layout(rect=[0, 0.09, 1, 1])
