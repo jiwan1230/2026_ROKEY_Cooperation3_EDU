@@ -147,6 +147,14 @@ CHASSIS_TARGET_XY = (0.9, -0.55)
 PICK_HOVER_HEIGHT_ABOVE_BOX = 0.20
 RELEASE_CLEARANCE_ABOVE_FLOOR = 0.02  # release 시점에 박스 바닥과 크레이트 바닥 사이 남길 여유
 
+# place_hover -> place_release 하강(보통 0.15m)을 move_link6 한 번에 통째로 주면
+# RMPflow가 갑자기 0.15m 떨어진 목표를 향해 큰 보정 동작을 만들어낼 수 있다 - 이
+# 프로젝트에서 반복 확인된 "큰 점프 한 번보다 작은 점프 여러 번이 더 안정적으로
+# 수렴한다" 패턴(PICK/PLACE의 SAFE_TRANSIT_Z 단계적 설계와 동일한 이유)을 마지막
+# 하강 구간에도 그대로 적용한다. 특히 벽 두 개에 동시에 가까운 코너 자리(Small)는
+# 여유가 좁아서, 큰 점프의 초기 오버슈트가 그대로 충돌로 이어지기 쉽다.
+PLACE_DESCENT_SUBSTEPS = 3
+
 # 실측으로 확인된 문제: 박스를 순서대로 여러 개 옮길 때, 한 박스(성공이든 실패든)를
 # 다루고 난 뒤 곧장 다음 박스의 pick_hover로, 또는 텔레포트 직후 곧장 place_hover로
 # (대각선으로) 점프시키면 RMPflow가 예측 불가능하게 발산하거나 기존 장애물과
@@ -296,7 +304,14 @@ def snapshot(world, viewport, eye, target, fname, robot=None, chassis_pin=None):
             robot.set_angular_velocity(np.zeros(3))
     out = str(_THIS_DIR / fname)
     vp_util.capture_viewport_to_file(viewport, out)
-    for _ in range(5):
+    # capture_viewport_to_file은 비동기(캡처 요청 후 몇 프레임 뒤에야 실제 파일이
+    # 쓰인다) - 보통은 그 다음 snapshot() 호출의 앞쪽 스텝들이 우연히 이 flush를
+    # 대신 채워줘서 문제가 안 보였는데, 스크립트에서 마지막으로 호출되는 snapshot
+    # (다음 snapshot 호출이 없는 경우, 예: 전체 완료 후 마지막 전경 사진)은 그
+    # 여유가 없어서 파일이 끝내 갱신되지 않고 예전 파일이 그대로 아카이빙되는
+    # 버그를 실측으로 확인했다(mtime이 같은 실행의 다른 스크린샷보다 몇 분이나
+    # 앞서 있었음). 모든 호출에 동일하게 넉넉한 flush 여유를 준다.
+    for _ in range(30):
         world.step(render=True)
         if chassis_pin is not None:
             robot.set_world_pose(position=chassis_pin[0], orientation=chassis_pin[1])
@@ -646,7 +661,15 @@ for idx, placement in enumerate(placements):
             robot=robot, chassis_pin=chassis_pin,
 )
 
-    move_link6(world, controller, robot, place_release_pos, steps=300, hold_gripper_closed=True, label=f"place_release[{idx}]", chassis_pin=chassis_pin)
+    descent_span = place_hover_z - place_release_z
+    substep_moves = max(300 // PLACE_DESCENT_SUBSTEPS, 1)
+    for sub_i in range(1, PLACE_DESCENT_SUBSTEPS + 1):
+        sub_z = place_hover_z - descent_span * sub_i / PLACE_DESCENT_SUBSTEPS
+        sub_pos = (place_world_xy[0], place_world_xy[1], sub_z)
+        move_link6(
+            world, controller, robot, sub_pos, steps=substep_moves, hold_gripper_closed=True,
+            label=f"place_release_sub{sub_i}/{PLACE_DESCENT_SUBSTEPS}[{idx}]", chassis_pin=chassis_pin,
+        )
 
     robot.gripper.open()
 
