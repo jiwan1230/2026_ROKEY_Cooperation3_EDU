@@ -123,7 +123,8 @@ for p in placement_data["placements"]:
 unloadable = placement_data.get("unloadable", [])
 if unloadable:
     reasons = ", ".join(f"박스{u['box_id']}({u['reason']})" for u in unloadable)
-    ax_trunk.text(0.02, trunk_d + 0.03, f"미적재: {reasons}", fontsize=8.5, color=INK_MUTED, ha="left")
+    # "크레이트 내부 경계" 라벨과 같은 y에 두면 겹친다 - 그 위로 한 줄 더 띄운다.
+    ax_trunk.text(0.02, trunk_d + 0.09, f"미적재: {reasons}", fontsize=8.5, color=INK_MUTED, ha="left")
 
 ax_trunk.set_title("② 적재 알고리즘 배치 결과 (14_run_full_pipeline.py)", fontsize=12, color=INK_PRIMARY, loc="left", pad=12)
 ax_trunk.set_xlabel("x [m] (트렁크 로컬 - min corner가 원점)", color=INK_SECONDARY, fontsize=9)

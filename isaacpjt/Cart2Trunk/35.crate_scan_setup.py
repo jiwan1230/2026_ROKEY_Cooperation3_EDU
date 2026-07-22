@@ -168,14 +168,28 @@ CRATE_WALL_COLOR = (0.35, 0.35, 0.38)
 CRATE_FLOOR_COLOR = (0.30, 0.30, 0.33)
 
 # 더미 장애물 박스 2개 - 크레이트 양쪽 벽에 붙여서 가운데에 대상 박스가 들어갈 틈을 남긴다.
-DUMMY_BOX_SIZE = (0.12, 0.12, 0.12)
-DUMMY_MARGIN = 0.03  # 벽 안쪽면에서 더미 박스 중심까지의 여유
+# 원래는 x만 벽에 붙이고 y는 중앙(CRATE_CENTER_XY[1])이었는데, 그러면 목표 박스가 극점
+# 알고리즘 특성상 더미 바로 옆에 딱 붙어서 배치되는 경우가 많아(장애물 회피는 맞지만
+# 여유가 거의 없음) - 실측된 obstacle 크기가 실제보다 작게 잡히는 경우(스캔 오차)
+# 이 "딱 붙임"이 실제로는 겹침이 될 위험이 있다. x/y 둘 다 벽에 붙여서 실제 모서리에
+# 박아두면, 가운데(y 반대쪽 절반)가 어느 장애물과도 안 가까운 확실한 여유 공간이 된다.
+DUMMY_BOX_SIZE = (0.15, 0.15, 0.15)
+# 처음엔 DUMMY_MARGIN=0.01로 x/y 모서리에 동시에 박아봤다가 실측 실패 - 벽 두께
+# (CRATE_WALL_THICKNESS=0.02)까지 감안하면 사실상 벽과 겹치는 위치라 스폰 즉시
+# PhysX가 밀어냈고(스크린샷: 한쪽은 찌그러져 바닥에 눌리고 한쪽은 벽 위로 튕겨나감),
+# 그 결과 depth 스캔이 박스 대신 엉뚱한 z(-1.1~-1.7m)의 거대한 "floor" 오탐만 잡았다
+# (섀시-크레이트 벽 충돌 때와 같은 종류의 실수 - 모서리에 박아둘수록 여유를 더 줘야
+# 하는데 거꾸로 더 줄였음). 모서리 방향으로 밀되 벽에서 확실히 떨어지도록 여유를 키운다.
+DUMMY_MARGIN = 0.05  # 벽 안쪽면에서 더미 박스 중심까지의 여유
 _dummy_half_w = DUMMY_BOX_SIZE[0] / 2.0
+_dummy_half_d = DUMMY_BOX_SIZE[1] / 2.0
 _crate_x_min = CRATE_CENTER_XY[0] - CRATE_INNER_SIZE[0] / 2.0
 _crate_x_max = CRATE_CENTER_XY[0] + CRATE_INNER_SIZE[0] / 2.0
+_crate_y_min = CRATE_CENTER_XY[1] - CRATE_INNER_SIZE[1] / 2.0
+_dummy_corner_y = _crate_y_min + DUMMY_MARGIN + _dummy_half_d  # 둘 다 같은(y_min) 쪽 모서리에
 DUMMY_BOXES = [
-    ("DummyA", (_crate_x_min + DUMMY_MARGIN + _dummy_half_w, CRATE_CENTER_XY[1], CRATE_FLOOR_TOP_Z + DUMMY_BOX_SIZE[2] / 2.0)),
-    ("DummyB", (_crate_x_max - DUMMY_MARGIN - _dummy_half_w, CRATE_CENTER_XY[1], CRATE_FLOOR_TOP_Z + DUMMY_BOX_SIZE[2] / 2.0)),
+    ("DummyA", (_crate_x_min + DUMMY_MARGIN + _dummy_half_w, _dummy_corner_y, CRATE_FLOOR_TOP_Z + DUMMY_BOX_SIZE[2] / 2.0)),
+    ("DummyB", (_crate_x_max - DUMMY_MARGIN - _dummy_half_w, _dummy_corner_y, CRATE_FLOOR_TOP_Z + DUMMY_BOX_SIZE[2] / 2.0)),
 ]
 DUMMY_MASS_KG = 1.0
 
@@ -779,8 +793,12 @@ for _ in range(20):
 vp_util.capture_viewport_to_file(viewport, str(_THIS_DIR / "_verify_crate_scan_table_view.png"))
 print(f"[SCREENSHOT] _verify_crate_scan_table_view.png", flush=True)
 
-print("\n[대기] 지금 별도 터미널에서 다음을 실행하세요:\n"
-      f"  DISPLAY=:1 python3 {PERCEPTION_DIR / 'run_scan_once.py'} --marker {TABLE_SCAN_MARKER}\n", flush=True)
+print("\n[대기] 지금 별도 터미널에서 다음을 실행하세요 (venv/ROS2 환경 설정 포함):\n"
+      f"  source {PERCEPTION_DIR / '.venv/bin/activate'}\n"
+      f"  source /opt/ros/humble/setup.bash\n"
+      f"  export RMW_IMPLEMENTATION=rmw_fastrtps_cpp\n"
+      f"  cd {PERCEPTION_DIR}\n"
+      f"  DISPLAY=:1 python3 run_scan_once.py --marker {TABLE_SCAN_MARKER}\n", flush=True)
 hold_until_marker(world, TABLE_SCAN_MARKER, "테이블 스캔")
 
 table_jsons_after = set(SAVE_DIRECTORY.glob("all_boxes_corners_*.json"))
@@ -823,8 +841,12 @@ for _ in range(20):
 vp_util.capture_viewport_to_file(viewport, str(_THIS_DIR / "_verify_crate_scan_crate_view.png"))
 print(f"[SCREENSHOT] _verify_crate_scan_crate_view.png", flush=True)
 
-print("\n[대기] 지금 별도 터미널에서 다음을 실행하세요:\n"
-      f"  DISPLAY=:1 python3 {PERCEPTION_DIR / 'run_scan_once.py'} --marker {CRATE_SCAN_MARKER}\n", flush=True)
+print("\n[대기] 지금 별도 터미널에서 다음을 실행하세요 (venv/ROS2 환경 설정 포함):\n"
+      f"  source {PERCEPTION_DIR / '.venv/bin/activate'}\n"
+      f"  source /opt/ros/humble/setup.bash\n"
+      f"  export RMW_IMPLEMENTATION=rmw_fastrtps_cpp\n"
+      f"  cd {PERCEPTION_DIR}\n"
+      f"  DISPLAY=:1 python3 run_scan_once.py --marker {CRATE_SCAN_MARKER}\n", flush=True)
 hold_until_marker(world, CRATE_SCAN_MARKER, "크레이트 스캔")
 
 crate_jsons_after = set(SAVE_DIRECTORY.glob("all_boxes_corners_*.json"))
