@@ -31,6 +31,11 @@
 | 19 | 회전(rotation) 지원 여부 질문 | 사용자 질문("정자세로 안 들어가면 회전시켜서 적재하기도 하나?") | 기존에 이미 "회전 미고려(MVP 범위)"로 명시돼 있던 한계를 재확인 - 코드 변경 없음 | 없음 (기존 한계 재확인) |
 | 20 | 안전장치 테스트 1/4 - ⑯ 실제 차단 | 사용자 요청(⑥⑬⑮⑯을 순서대로 직접 테스트하고 싶다) | ⑯이 실제로 후보를 거부하는 사례를 처음으로 확인 - 목표 자리 자체는 여유가 있어도, 입구 쪽 더 높은 장애물 때문에 거부되고 안전한 다른 자리로 우회 배치됨 | `local_test_data/sketch_placement_test_scenario1_blocked_path.py` (신규), `local_test_data/_viz_helpers.py` (신규, 공용 시각화 헬퍼로 리팩터링) |
 | 21 | 안전장치 테스트 2/4 - 3단 쌓기 체인 | 사용자 요청 | ⑥ 픽업 순서는 정확(C→B→A)했지만 트렁크 배치는 카트의 탑 구조를 그대로 재현하지 않음(16번 원칙 재확인) + 데모 재배치 로직의 실제 버그(이중 등록으로 받침 비율이 부풀려져 기준 미달 후보가 통과) 발견·수정 + before 그림이 카트 안 실제 적재 관계를 안 보여주던 시각화 버그도 수정 | `local_test_data/sketch_placement_test_scenario2_three_tier_chain.py` (신규), `local_test_data/sketch_placement_test_obstacles.py` (버그 수정), `local_test_data/_viz_helpers.py` (`stack_on_id` 추가) |
+| 22 | 안전장치 테스트 3/4 - 회전 필요한 박스 | 사용자 요청 | 정자세로는 트렁크 폭보다 큰 박스가 실제로 미적재(SIZE_EXCEEDS_TRUNK) 처리되는 걸 숫자로 확인 - 이 시점엔 아직 회전 미지원이라 참고용 "회전했다면" 시험 배치만 별도로 보여줌 (26번에서 실제 자동 회전으로 해결됨) | `local_test_data/sketch_placement_test_scenario3_needs_rotation.py` (신규) |
+| 23 | 안전장치 테스트 4/4 - 완전 만석 트렁크 | 사용자 요청 | 트렁크를 장애물 2개로 65% 채운 뒤 카트 박스 4개를 시도 - 성공 1개 + ⑧의 미적재 사유 3가지(SIZE_EXCEEDS_TRUNK/INSUFFICIENT_REMAINING_VOLUME/NO_VALID_CANDIDATE_POSITION)가 한 시나리오에서 전부 정확히 구분되는 것을 처음 시도에서 확인 | `local_test_data/sketch_placement_test_scenario4_full_trunk.py` (신규) |
+| 24 | 박스-벽/박스-박스 마진(⑰) 추가 | 사용자 요청("박스끼리 딱 붙지 말고 여유를 두자", 1cm, 벽/박스 둘 다) | 검사만 넣으면 벽/박스에 붙는 자리 자체가 하나도 안 나와서 후보 생성도 같이 고쳐야 했음 + "벽 마진 자리가 하필 다른 박스와는 마진 미달"인 조합을 못 찾는 후보 누락 버그 발견·수정 + `12_verify_real_coords.py` 브루트포스 검증기가 이미 배치된 카트 박스를 빼먹고 세던 기존 버그까지 같이 발견·수정 | `17_margin_check.py` (신규), `03_extreme_point_candidates.py`, `07_placement_plan.py`, `10_verification.py`, `12_verify_real_coords.py` |
+| 25 | 마진 실측 데모 | 사용자 요청(시나리오 5) | 빈 트렁크에 박스 4개를 순서대로 배치해서 벽 간격·박스 간 간격을 전부 직접 계산 - 여러 쌍이 정확히 1.00cm 경계값에 걸려있어서 마진이 느슨하지 않고 최소치로 빡빡하게 지켜지고 있음을 확인 | `local_test_data/sketch_placement_test_scenario5_margin.py` (신규) |
+| 26 | 회전(⑱) 자동 적용 | 사용자 요청("회전시키는 알고리즘도 추가하자", 돌리기만 가능·눕히기/뒤집기 불가) | 정자세 실패 시 자동으로 90도 회전 재시도 - 실제 스캔 데이터(`run_20260720_200104`)에서 그동안 미적재였던 Medium 박스가 회전으로 정상 배치되는 실질적 개선 확인 + 데모 동기화 중 24번 마진 작업에서 빠뜨렸던 버그(후보 생성에 margin 파라미터 미전달)까지 같이 발견·수정 (`near_full` 데모 4/5 → 5/5 회복) | `18_rotation.py` (신규), `07_placement_plan.py`, `08_unloadable_reason.py`, 데모 스크립트 5개 |
 
 ---
 
@@ -723,6 +728,160 @@ new_plan = place_one_box_stacked_only(box, trunk, state_final, order=finalized[b
 
 ---
 
+## 22. 안전장치 테스트 3/4 — 회전이 필요한 박스 (당시엔 아직 미지원)
+
+**계기**: 20·21번에 이어 세 번째 시나리오로 "회전하면 들어가지만 지금은 회전을
+안 하는 상황"을 선정 - 19번에서 확인한 한계를 실제 숫자로 보여주려는 목적.
+
+**설계**: `Wide_Box`(가로 0.65m × 세로 0.30m)를 트렁크(폭 0.60m)에 배치. 정자세
+그대로는 가로가 트렁크 폭보다 커서 위치와 무관하게 애초에 불가능.
+
+**결과**: 실제 알고리즘 결과 - **미적재, 사유 `SIZE_EXCEEDS_TRUNK`** (⑧이 정확히
+분류). 참고용으로 90도 돌린 치수(0.30×0.65)로 별도 시험 배치를 해보니 문제없이
+들어감(x=0.14~0.44, y=0~0.65) - 회전을 지원했다면 놓칠 필요 없는 자리인데 당시엔
+시도조차 안 하고 포기하는 걸 실증. (이 한계는 26번에서 실제로 해소됨 - 이 라운드의
+스크립트가 그대로 26번에서 업데이트되어 재사용됨.)
+
+**결과 이미지**: `local_test_data/sketch_scenario3_before.png` / `sketch_scenario3_after.png`
+(26번에서 회전 지원 후 버전으로 다시 덮어써짐 - 이 라운드 당시 화면은 별도로
+안 남아있고, 최종본은 26번 항목에서 확인 가능)
+
+**검증**: 전체 pytest 48/48 그대로 안전 (핵심 알고리즘 미변경, 데모만 추가).
+
+---
+
+## 23. 안전장치 테스트 4/4 — 완전히 꽉 찬 트렁크
+
+**계기**: 마지막 네 번째 시나리오로 "진짜로 자리가 없는" 상황을 선정 - ⑧(미적재
+사유 분류)이 서로 다른 이유 세 가지를 정확히 구분하는지 한 번에 확인하려는 목적.
+
+**설계**: 큰 장애물 2개(트렁크의 약 65%를 차지)로 남는 공간을 L자 모양의 좁은
+틈만 남기고, 카트 박스 4개를 순서대로 시도:
+- `Small_Fit`: L자 틈에 맞는 크기 (성공 기대)
+- `Shape_Blocked`: 부피는 되는데 좁은 틈 모양에 안 맞는 크기 (`NO_VALID_CANDIDATE_POSITION` 기대)
+- `Volume_Squeeze`: 자체 크기는 트렁크에 들어가지만 남은 부피 자체가 부족 (`INSUFFICIENT_REMAINING_VOLUME` 기대)
+- `Too_Big_Overall`: 트렁크 폭보다 큼 (`SIZE_EXCEEDS_TRUNK` 기대)
+
+**결과**: 첫 시도에서 의도한 그대로 정확히 나옴 - `Small_Fit` 성공, 나머지 세
+박스가 각각 의도한 사유 코드로 정확히 분류됨. ⑧이 실전 복합 시나리오에서도
+정확하다는 걸 확인.
+
+**결과 이미지**: `local_test_data/sketch_scenario4_before.png` / `sketch_scenario4_after.png`
+
+![시나리오4 AFTER - 성공 1개 + 서로 다른 미적재 사유 3가지](local_test_data/sketch_scenario4_after.png)
+
+**검증**: 전체 pytest 48/48 그대로 안전.
+
+---
+
+## 24. 박스-벽 / 박스-박스 마진(⑰) 추가
+
+**계기**: 사용자가 "박스끼리 아예 딱 붙지 말고 아주 조금 여유 공간을 두는 게
+좋겠다"고 요청 - 그리퍼가 옆 박스/벽에 긁히지 않도록. 고정 마진 1cm, 박스-벽·
+박스-박스 둘 다 적용하기로 확정.
+
+**설계**: `17_margin_check.py` 신규 - `has_wall_margin()`(트렁크 옆벽·안쪽벽까지
+x/y 방향 확인, 바닥·천장은 제외), `has_box_margin()`(z 범위가 실제로 겹치는,
+즉 옆으로 나란한 박스와만 확인 - 위/아래로 쌓이는 관계는 완전히 맞닿아야
+하므로 대상 아님), `has_sufficient_margin()`(둘 다).
+
+**문제 1 - 검사만 넣으면 자리가 아예 안 나옴**: 벽/박스에 "딱 붙는" 자리를
+만드는 후보 생성(`generate_wall_flush_candidates`, `generate_box_flush_candidates`)은
+그대로 두고 검사만 추가하면, 모든 flush 후보가 마진 미달로 거부되어 벽 근처엔
+아무 것도 못 놓게 됨. 두 생성 함수에 `margin` 파라미터를 추가해서 "벽/박스에서
+마진만큼 뗀" 자리를 직접 만들도록 수정.
+
+**문제 2 - 조합 후보 누락 (실제 발견)**: "벽에서 마진만큼 뗀 자리"가 하필
+다른 박스와는 마진 미달로 너무 가까운 경우가 있는데, 그 조합("벽 마진" +
+"박스 마진" 둘 다 적용)을 만드는 후보가 없어서 실제로 있는 더 깊은 자리를
+못 찾는 경우를 발견 (7번·12번과 같은 클래스의 "후보 생성 완전성" 문제). 벽-플러시
+결과를 다시 박스-플러시 생성기에 넣어서 조합을 만드는 방식(`combo_flush`)으로 해결.
+
+```python
+# 07_placement_plan.py
+wall_flush = generate_wall_flush_candidates(box, trunk, state.candidates, margin=MARGIN)
+box_flush = generate_box_flush_candidates(box, trunk, state.candidates, state.placed, margin=MARGIN)
+combo_flush = generate_box_flush_candidates(box, trunk, wall_flush, state.placed, margin=MARGIN)
+candidate_pool = state.candidates | wall_flush | box_flush | combo_flush
+```
+
+**문제 3 - 검증 도구 자체의 기존 버그 발견**: 실제 스캔 데이터로 돌렸을 때
+"Medium이 진짜 있는데 못 찾은 것처럼" 나와서 조사해보니, `12_verify_real_coords.py`의
+브루트포스 교차검증기가 **이미 배치된 다른 카트 박스(Large)를 빼먹고** 원래
+스캔 장애물만으로 자리를 세고 있었음 - 마진과 무관한, 원래부터 있던 버그.
+픽업 순서대로 "실패한 박스보다 먼저 성공한 박스들"까지 포함하도록 고쳤더니
+"진짜로 자리 없음"으로 알고리즘 판단과 정확히 일치.
+
+**회귀 대응**: 여러 테스트가 "박스가 트렁크/다른 박스에 정확히 딱 맞음(슬랙 0)"을
+전제로 하고 있었는데, 마진 도입으로 슬랙이 최소 2×MARGIN은 있어야 성립하게
+바뀌어서 트렁크·박스 치수를 마진만큼 넉넉하게 재설계 (`10_verification.py`의
+Blocker 깊이 0.35→0.33 등).
+
+**검증**: TDD 11케이스(`tests/test_17_margin_check.py`), 전체 pytest 59/59,
+`10_verification.py` 5/5, `12_verify_real_coords.py` 이상 없음(수정된 브루트포스
+기준으로 "진짜로 자리 없음" 정확히 일치).
+
+---
+
+## 25. 마진 실측 데모
+
+**계기**: 24번 구현 직후, 실제 적재 결과에 마진이 적용되는지 눈으로/숫자로
+확인하고 싶다는 요청 - 다섯 번째 시나리오로 추가.
+
+**설계**: 장애물 없는 빈 트렁크에 박스 4개(Box_A~D)를 부피 큰 순으로 순서대로
+배치하고, 벽까지 거리·박스끼리 거리를 전부 직접 계산해서 콘솔에 cm 단위로 출력
+(그림에서 1cm는 눈으로 구분하기엔 너무 작아서).
+
+**결과**: 4/4 배치 성공, **모든 벽 간격·박스 간격이 1cm 이상** - 특히 여러
+쌍(`Box_A~Box_B`, `Box_C~Box_D`, 벽 쪽 다수)이 정확히 1.00cm 경계값에 걸려있어서,
+마진이 느슨하게 지켜지는 게 아니라 최소치로 빡빡하게 지켜지고 있다는 것까지 확인.
+
+**결과 이미지**: `local_test_data/sketch_scenario5_before.png` / `sketch_scenario5_after.png`
+
+![시나리오5 AFTER - 박스 4개, 전부 벽/서로 1cm 이상 간격 확보](local_test_data/sketch_scenario5_after.png)
+
+**검증**: 전체 pytest 59/59 그대로 안전.
+
+---
+
+## 26. 회전(⑱) 자동 적용
+
+**계기**: 마진(24·25번) 완료 직후, "회전시키는 알고리즘도 추가하자"는 요청.
+단, 로봇 그리퍼 특성상 박스를 눕히거나 뒤집는 건 불가능하고 **z축 기준으로
+돌리는 것(가로/세로 교환)만** 가능하다는 제약을 명확히 받음.
+
+**설계**: `18_rotation.py` 신규 - `rotate_box()`(가로/세로만 교환, 높이는 절대
+안 바뀜), `fits_dims_any_rotation()`(⑧의 SIZE_EXCEEDS_TRUNK 판단용, 회전
+감안해서 트렁크 자체 크기를 넘는지 확인). `07_placement_plan.py`의
+`place_one_box()`는 **정자세를 먼저 시도**하고, 그래도 자리가 없을 때만 90도
+돌린 자세로 재시도(불필요한 그리퍼 동작을 피하려고 정자세가 되면 안 돌림).
+`PlacementPlan`에 `rotated` 필드 추가. `08_unloadable_reason.py`도 회전
+감안하도록 수정 - 안 그러면 돌리면 들어가는 박스를 "재배치해도 소용없음"으로
+잘못 분류할 위험이 있었음.
+
+**실제 데이터로 확인된 개선**: `run_20260720_200104`에서 그동안 미적재
+(`NO_VALID_CANDIDATE_POSITION`)였던 `Medium` 박스가 이제 회전(0.4×0.3 →
+0.3×0.4)으로 정상 배치됨 - 실측 run 2건 모두 미적재 0건 달성.
+
+**부수 발견 - 24번 마진 동기화 때 빠뜨린 버그**: 데모 스크립트 5개의 로컬
+재구현에 회전을 동기화하던 중, 애초에 마진 동기화 때 `margin=MARGIN` 파라미터와
+`combo_flush` 조합을 빠뜨렸던 걸 발견 (필터만 걸고 후보 생성은 그대로 뒀던 것) -
+같이 고쳤더니 `near_full` 데모가 4/5(마진 도입 후 줄었던 상태)에서 5/5로
+회복됨, 진짜 개선임을 확인.
+
+**시나리오 3 업데이트**: 22번에서 만든 "회전 필요한 박스" 데모를, 이제 실제로
+`place_one_box()` 한 번 호출만으로 자동 배치 성공하도록 갱신 - 예전엔 미적재
+확인 + 참고용 별도 시험이 필요했는데, 지금은 그 과정 자체가 필요 없어짐.
+
+**결과 이미지 (22번 시나리오의 최종 갱신본)**: `local_test_data/sketch_scenario3_before.png` / `sketch_scenario3_after.png`
+
+![시나리오3 AFTER(갱신) - ⑱ 자동 회전으로 배치 성공](local_test_data/sketch_scenario3_after.png)
+
+**검증**: TDD 7케이스(`tests/test_18_rotation.py`), 전체 pytest 66/66,
+`10_verification.py` 5/5, `12_verify_real_coords.py` 실측 2건 모두 미적재 0건.
+
+---
+
 ## 파일별 최종 변경 요약
 
 | 파일 | 상태 | 이번 반복에서 추가/변경된 것 |
@@ -733,26 +892,31 @@ new_plan = place_one_box_stacked_only(box, trunk, state_final, order=finalized[b
 | `04_candidate_validity_check.py` | 기존 파일 수정 | `is_candidate_valid()` 하한 경계(x<0 등) 검사 추가 |
 | `05_candidate_scoring.py` | 기존 파일 수정 | `entrance_distance_ratio()`, `side_wall_distance_ratio()`, `WALL_A_WEIGHT`, `WALL_BC_WEIGHT` |
 | `06_loading_order_decision.py` | 기존 파일 수정 | `decide_loading_order()` 위상정렬 재작성 (픽업 순서 제약) |
-| `07_placement_plan.py` | 기존 파일 수정 | `generate_wall_flush_candidates()` + `generate_box_flush_candidates()` + `has_overhead_clearance()` 연결 |
+| `07_placement_plan.py` | 기존 파일 수정 | `generate_wall_flush_candidates()` + `generate_box_flush_candidates()`(마진 포함) + `has_overhead_clearance()` + `has_clear_approach_path()` + `has_sufficient_margin()` 연결, 회전(⑱) 폴백, `PlacementPlan.rotated` |
+| `08_unloadable_reason.py` | 기존 파일 수정 | `classify_unloadable_reason()`이 `fits_dims_any_rotation()` 사용하도록 수정 |
 | `13_support_check.py` | 신규 | 받침 확인 전체 |
 | `14_run_full_pipeline.py` | 신규 | 지완 실사용 CLI 진입점 |
 | `15_overhead_clearance_check.py` | 신규 | 상단 여유 공간(⑮) 확인 + 접근 경로 확인(⑯, `has_clear_approach_path`) |
-| `local_test_data/*.py` | 신규/수정 (11개 스크립트) | 손그림 시나리오 재현 + 시각화 + 인터랙티브 3D 편집기 + 안전장치 테스트 시나리오 |
+| `17_margin_check.py` | 신규 | 박스-벽/박스-박스 최소 간격(⑰) 확인 |
+| `18_rotation.py` | 신규 | 회전(⑱) 지원 - `rotate_box()`, `fits_dims_any_rotation()` |
+| `local_test_data/*.py` | 신규/수정 (13개 스크립트) | 손그림 시나리오 재현 + 시각화 + 인터랙티브 3D 편집기 + 안전장치 테스트 시나리오 5개 |
 | `local_test_data/_viz_helpers.py` | 신규 | 여러 스크립트가 복붙하던 3D+top-down 시각화 공용 헬퍼 (비포/애프터 쌍 생성) |
-| `local_test_data/*.png` | 신규 (11개 이미지) | 각 라운드/시나리오 결과 시각화 |
+| `local_test_data/*.png` | 신규/수정 (19개 이미지) | 각 라운드/시나리오 결과 시각화 |
 
 ## 테스트 현황
 
-- 최종 pytest: **48/48 통과** (`tests/` 디렉터리, ⑯ 신규 5케이스 포함)
+- 최종 pytest: **66/66 통과** (`tests/` 디렉터리, ⑰ 11케이스 + ⑱ 7케이스 포함)
 - `10_verification.py`: 5/5 통과
-- `12_verify_real_coords.py`: 실제 스캔 데이터(`run_20260720_160153`, `run_20260720_200104`) 2개 run 미적재 0건, 브루트포스 교차검증 통과
+- `12_verify_real_coords.py`: 실제 스캔 데이터(`run_20260720_160153`, `run_20260720_200104`) 2개 run **미적재 0건** (⑱ 도입 전엔 한 run에서 Medium 1건 미적재였음), 브루트포스 교차검증 통과 (검증기 자체의 기존 버그도 24번에서 발견·수정함)
 - `local_test_data/sketch_placement_test_obstacles.py`, `sketch_placement_test_scenario2_three_tier_chain.py`: 받침 비율(⑬ 기준, ≥80%) 자체 재검증 통과
 
 ## 확인된 한계 (코드 미변경, 알고 있는 채로 보류)
 
-- **회전 미지원**: 박스가 정자세로 안 들어가면 눕혀서라도 넣어보는 로직 없음 (19번). 로봇/그리퍼 제약 확인 후 결정.
 - **장애물 위 적층**: 받침 확인 로직이 "다른 박스"와 "차 바퀴 같은 장애물"을 구분 안 해서, 실제로는 둥글어서 평평하게 못 얹을 장애물 위에도 쌓일 수 있음 (9번에서 발견, 아직 미수정).
 - **VGP20 그리퍼 실측 없음**: `OVERHEAD_CLEARANCE=0.20`은 실제 그리퍼 CAD가 아니라 보수적 추정치 (13번).
 - **비전 `support_candidate_id` 매핑 미확정**: `rests_on_id`를 실제 비전 필드와 정확히 매핑하는 건 팀 확인 전이라 로더는 항상 `None`으로 둠 (14번).
 - **카트에서의 적재 구조(탑 모양)를 트렁크에서 그대로 재현 안 함**: 재배치가 "카트에서 집은 순서"대로 진행되다 보니, 먼저 집힌 작은 박스가 큰 발판을 먼저 차지해버려서 뒤에 집힌 박스가 원래 노렸던 자리에 못 쌓이고 밀려날 수 있음 (16번에서 2단으로 처음 확인, 21번에서 3단 체인으로 재확인). 진짜 탑을 재현하려면 재배치 순서 로직 자체를 바꿔야 함 - 아직 미착수.
 - **슬라이드인 적재(미착수)**: "2층 박스를 입구에서 걸쳐두고 밀어 넣는" 아이디어는 논의만 하고 설계는 아직 시작 안 함.
+
+> ✅ **회전 미지원 한계는 26번(⑱)에서 해소됨** - 정자세로 안 들어가면 자동으로
+> 90도 돌려서(가로/세로 교환만, 눕히기/뒤집기는 로봇 특성상 여전히 불가) 재시도한다.
