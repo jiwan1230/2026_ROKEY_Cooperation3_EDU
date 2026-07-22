@@ -214,10 +214,10 @@ CAMERA_INFO_TOPIC = "/camera/camera_info"
 CAMERA_FRAME_ID = "m0609_depth_camera_optical_frame"
 CAMERA_WIDTH, CAMERA_HEIGHT = 640, 480
 
-# ================= 마커 파일 핸드셰이크 (perception/run_scan_once.py와 짝) =================
+# ================= 마커 파일 핸드셰이크 (perception/run_scan_once.py와 짝, 테이블 스캔 전용 -
+# 크레이트 스캔은 get_pointcloud() 동기 호출로 바뀌면서 더 이상 마커가 필요 없다) =================
 SCAN_MARKER_DIR = Path("/tmp/claude-1000/-home-rokey-cobot3-ws/1a920049-f3c7-4d48-90f4-62c8e0fe71a3/scratchpad")
 TABLE_SCAN_MARKER = SCAN_MARKER_DIR / "scan_table.done"
-CRATE_SCAN_MARKER = SCAN_MARKER_DIR / "scan_crate.done"
 MAX_HOLD_STEPS = 6000  # 안전 타임아웃 (약 100초 상당, world.step 기준)
 
 
@@ -824,11 +824,22 @@ RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 table_boxes_filtered_path.write_text(json.dumps(table_boxes_data, indent=2))
 print(f"[저장] {table_boxes_filtered_path} (floor 오탐 제외 {len(table_real_boxes)}/{_table_total}개 유지)", flush=True)
 
-# ================= 스캔 자세 2: 크레이트 =================
-# 섀시를 크레이트 앞으로 잠깐 옮긴다 - 이 동안 감지되는 장애물 좌표는 이 임시 위치
-# 기준(crate_base_pos)으로 나오므로, 나중에 원래(테이블쪽) base_link 좌표계로 재투영해야
-# 한다(reproject_trunk_map.py와 같은 수학, 이번엔 세션이 아니라 같은 스크립트 안에서
-# 섀시를 옮겼다 되돌리는 경우라 파일 없이 바로 계산).
+# ================= 스캔 자세 2: 크레이트 (포인트클라우드 기반 점유영역 검출) =================
+# box_top_extractor.py(RANSAC 개별 박스 검출)는 애초에 "테이블 위에 흩어진 낱개 박스들을
+# 찾아라"는 문제를 풀도록 만들어졌지, "빈 컨테이너 안에 뭐가 얼마나 차 있나"를 묻는 문제용이
+# 아니다 - 그래서 크레이트에 그대로 쓰면 더미 박스를 "빈 크레이트라는 큰 박스 안에 든 작은
+# 박스"처럼 잘못 엮어 인식하는 사례가 나왔다. 실제 트렁크(13.export_trunk_map.py)를 스캔할
+# 때도 같은 이유로 박스 검출이 아니라 포인트클라우드를 그리드로 나눠 바닥보다 솟은 곳
+# (occupied region)을 찾는 방식을 썼다 - 크레이트도 결국 "컨테이너 내부에서 바닥 기준 돌출부
+# 찾기"라는 같은 문제이므로 그 방식을 그대로 가져온다. 크레이트는 우리가 만든 도형이라 벽/바닥
+# 경계(x_min/x_max/y_min/y_max/floor_z)를 스캔으로 추정할 필요가 없다(13.py는 실제 트렁크라
+# percentile로 추정해야 했음) - 알려진 상수를 그대로 aabb로 쓴다.
+#
+# get_pointcloud()는 카메라 자체 렌더 파이프라인(camera.add_distance_to_image_plane_to_frame()로
+# 이미 켜둔 depth 애노테이터)에서 바로 world 좌표 포인트클라우드를 뽑는 Isaac Sim 네이티브
+# API라, box_top_extractor.py처럼 별도 프로세스(run_scan_once.py)/ROS2/마커 파일 핸드셰이크가
+# 전혀 필요 없다 - 같은 프로세스 안에서 동기 호출로 끝난다(테이블 스캔은 낱개 박스 식별이 진짜
+# 필요하므로 box_top_extractor.py/마커 방식을 그대로 유지한다 - 위 테이블 스캔 섹션 참고).
 crate_base_pos, crate_base_quat, crate_R_base = reposition_chassis(controller, CRATE_ROBOT_XY, "크레이트 스캔용")
 converge_to_pose(controller, CRATE_SCAN_EYE, CRATE_SCAN_LOOK_AT, "크레이트 스캔", crate_base_pos, crate_base_quat, crate_R_base)
 
@@ -841,80 +852,132 @@ for _ in range(20):
 vp_util.capture_viewport_to_file(viewport, str(_THIS_DIR / "_verify_crate_scan_crate_view.png"))
 print(f"[SCREENSHOT] _verify_crate_scan_crate_view.png", flush=True)
 
-print("\n[대기] 지금 별도 터미널에서 다음을 실행하세요 (venv/ROS2 환경 설정 포함):\n"
-      f"  source {PERCEPTION_DIR / '.venv/bin/activate'}\n"
-      f"  source /opt/ros/humble/setup.bash\n"
-      f"  export RMW_IMPLEMENTATION=rmw_fastrtps_cpp\n"
-      f"  cd {PERCEPTION_DIR}\n"
-      f"  DISPLAY=:1 python3 run_scan_once.py --marker {CRATE_SCAN_MARKER}\n", flush=True)
-hold_until_marker(world, CRATE_SCAN_MARKER, "크레이트 스캔")
-
-crate_jsons_after = set(SAVE_DIRECTORY.glob("all_boxes_corners_*.json"))
-new_crate_jsons = crate_jsons_after - table_jsons_after
-if not new_crate_jsons:
-    raise RuntimeError("크레이트 스캔 후 새 all_boxes_corners_*.json이 없습니다.")
-crate_boxes_json_path = max(new_crate_jsons, key=lambda p: p.stat().st_mtime)
-print(f"[크레이트 스캔 결과] {crate_boxes_json_path}", flush=True)
+for _ in range(20):
+    world.step(render=True)
+pts_world = np.asarray(camera.get_pointcloud(world_frame=True))
+print(f"[크레이트 스캔] 포인트클라우드 {len(pts_world)}개 포인트 획득", flush=True)
 
 # ================= trunk_map.json 조립 (크레이트 vertices 하드코딩 + 더미 박스 obstacles) =================
-crate_boxes_data = json.loads(crate_boxes_json_path.read_text())
-# support_type=="floor"는 테이블 스캔에서도 나타난 것과 같은 종류의 오탐(빈 바닥면을
-# RANSAC이 박스로 잘못 분리)이다 - 더미 박스가 아니라 "빈 크레이트 바닥"인데 이걸
-# obstacle로 넣으면 알고리즘이 실제로는 비어있는 자리를 막힌 걸로 착각한다.
-# 진짜 더미 박스만(box_top으로 지지되는 것만) obstacles로 넣는다.
-def _box_footprint_wd(box):
-    xs = [c[0] for c in box["corners_m"]]
-    ys = [c[1] for c in box["corners_m"]]
-    return max(xs) - min(xs), max(ys) - min(ys)
+CRATE_OCCUPIED_CELL = 0.03           # grid cell 크기 (m) - 13.export_trunk_map.py의 OCCUPIED_CELL과 동일값
+CRATE_OCCUPIED_EDGE_MARGIN = 0.03    # 벽 근처 cell 제외 (크레이트가 작아서 13.py의 0.05보다 살짝 좁힘)
+CRATE_OCCUPIED_BUMP_THRESHOLD = 0.03  # local floor 기준값보다 이 높이(m) 이상 솟은 cell만 돌출부 후보
+CRATE_OCCUPIED_MIN_CELLS = 6         # 덩어리로 인정할 최소 cell 개수 (노이즈 방지)
+CRATE_OCCUPIED_MAX_AREA_FRACTION = 0.25   # 덩어리 하나가 interior의 이 비율을 넘으면 바닥 오검출로 보고 제외
+CRATE_OCCUPIED_MAX_Y_SPAN_FRACTION = 0.5  # 덩어리가 y폭 전체의 이 비율을 넘게 가로지르면 제외
+CRATE_OCCUPIED_MAX_HEIGHT_ABOVE_FLOOR = 0.35  # 이보다 높은 점(카메라/팔 자체 등)은 애초에 후보에서 제외
 
 
-# support_type=="box_top"이어도 실제 더미 박스 크기(DUMMY_BOX_SIZE≈0.12x0.12)와 전혀
-# 다른(크레이트 바닥 전체를 하나의 평면으로 잘못 묶은) 오탐이 섞여 나왔다 - 실측 확인,
-# 폭/깊이가 0.35x0.69로 크레이트 내부 전체와 맞먹었다. support_type 필터만으로는
-# 못 거르므로, 실제 더미 규격 근처(여유 두 배)인 것만 추가로 채택한다.
-DUMMY_SIZE_TOLERANCE = 2.0 * max(DUMMY_BOX_SIZE[0], DUMMY_BOX_SIZE[1])
-size_ok_boxes = [
-    b for b in crate_boxes_data["boxes"]
-    if b["support_type"] == "box_top" and all(d <= DUMMY_SIZE_TOLERANCE for d in _box_footprint_wd(b))
-]
+def detect_crate_obstacles_from_pointcloud(pts_world):
+    """13.export_trunk_map.py의 detect_occupied_regions()와 같은 그리드-돌출(occupied-region)
+    방식. 실제 트렁크와 달리 크레이트는 우리가 만든 도형이라 x/y/floor 경계를 percentile로 추정할
+    필요 없이 CRATE_CENTER_XY/CRATE_INNER_SIZE/CRATE_FLOOR_TOP_Z를 그대로 aabb로 쓴다."""
+    from scipy import ndimage
+
+    x_min = CRATE_CENTER_XY[0] - CRATE_INNER_SIZE[0] / 2.0
+    x_max = CRATE_CENTER_XY[0] + CRATE_INNER_SIZE[0] / 2.0
+    y_min = CRATE_CENTER_XY[1] - CRATE_INNER_SIZE[1] / 2.0
+    y_max = CRATE_CENTER_XY[1] + CRATE_INNER_SIZE[1] / 2.0
+    floor_z = CRATE_FLOOR_TOP_Z
+
+    inside = (
+        (pts_world[:, 0] >= x_min) & (pts_world[:, 0] <= x_max)
+        & (pts_world[:, 1] >= y_min) & (pts_world[:, 1] <= y_max)
+        & (pts_world[:, 2] >= floor_z - 0.02)
+        & (pts_world[:, 2] < floor_z + CRATE_OCCUPIED_MAX_HEIGHT_ABOVE_FLOOR)
+    )
+    band_pts = pts_world[inside]
+    print(f"[점유영역] 크레이트 내부/높이 범위로 자른 후 후보점: {len(pts_world)} -> {len(band_pts)}", flush=True)
+
+    nx = max(1, int((x_max - x_min) / CRATE_OCCUPIED_CELL))
+    ny = max(1, int((y_max - y_min) / CRATE_OCCUPIED_CELL))
+    x_edges = np.linspace(x_min, x_max, nx + 1)
+    y_edges = np.linspace(y_min, y_max, ny + 1)
+
+    ix = np.clip(np.digitize(band_pts[:, 0], x_edges) - 1, 0, nx - 1)
+    iy = np.clip(np.digitize(band_pts[:, 1], y_edges) - 1, 0, ny - 1)
+
+    local_min_z = np.full((nx, ny), np.nan)
+    for cx in range(nx):
+        for cy in range(ny):
+            sel = band_pts[(ix == cx) & (iy == cy), 2]
+            if len(sel) >= 3:
+                local_min_z[cx, cy] = np.percentile(sel, 5)
+
+    edge_margin_cells_x = max(1, int(CRATE_OCCUPIED_EDGE_MARGIN / CRATE_OCCUPIED_CELL))
+    edge_margin_cells_y = max(1, int(CRATE_OCCUPIED_EDGE_MARGIN / CRATE_OCCUPIED_CELL))
+    interior = np.zeros_like(local_min_z, dtype=bool)
+    interior[edge_margin_cells_x:nx - edge_margin_cells_x, edge_margin_cells_y:ny - edge_margin_cells_y] = True
+    interior &= ~np.isnan(local_min_z)
+    n_interior = int(np.count_nonzero(interior))
+    if n_interior == 0:
+        print("[점유영역] interior에 유효 데이터 없음 -> 검출 안 함", flush=True)
+        return []
+
+    floor_ref = float(np.median(local_min_z[interior]))
+    bump_mask = interior & (local_min_z > (floor_ref + CRATE_OCCUPIED_BUMP_THRESHOLD))
+    print(f"[점유영역] floor_ref(local median)={floor_ref:.3f} (설계값 floor_z={floor_z:.3f}) "
+          f"bump 후보 {int(np.count_nonzero(bump_mask))}/{n_interior} cell", flush=True)
+
+    labeled, n_blobs = ndimage.label(bump_mask, structure=np.ones((3, 3)))
+    y_span_total = y_max - y_min
+    blobs = []
+    for blob_id in range(1, n_blobs + 1):
+        blob = labeled == blob_id
+        n_cells = int(np.count_nonzero(blob))
+        area_fraction = n_cells / n_interior
+        if n_cells < CRATE_OCCUPIED_MIN_CELLS:
+            continue
+        if area_fraction > CRATE_OCCUPIED_MAX_AREA_FRACTION:
+            print(f"[점유영역] 덩어리(cell {n_cells}개)가 interior의 {area_fraction:.0%} 차지 "
+                  f"(> {CRATE_OCCUPIED_MAX_AREA_FRACTION:.0%}) - 바닥 전체 오검출 가능성 -> 제외", flush=True)
+            continue
+
+        cx_idx, cy_idx = np.nonzero(blob)
+        bx_min, bx_max = x_edges[cx_idx.min()], x_edges[cx_idx.max() + 1]
+        by_min, by_max = y_edges[cy_idx.min()], y_edges[cy_idx.max() + 1]
+        if (by_max - by_min) > CRATE_OCCUPIED_MAX_Y_SPAN_FRACTION * y_span_total:
+            print(f"[점유영역] 덩어리(cell {n_cells}개, y=[{by_min:.3f},{by_max:.3f}])가 폭 전체의 "
+                  f"{(by_max - by_min) / y_span_total:.0%} 가로질러 제외 (문턱/선반 등으로 추정)", flush=True)
+            continue
+
+        top_z = float(np.nanpercentile(local_min_z[blob], 90))
+        blobs.append({"x_min": float(bx_min), "x_max": float(bx_max),
+                      "y_min": float(by_min), "y_max": float(by_max),
+                      "z_min": floor_z, "z_max": top_z, "n_cells": n_cells})
+
+    blobs.sort(key=lambda b: -b["n_cells"])
+    if not blobs:
+        print("[점유영역] 조건을 만족하는 덩어리 없음 -> 검출 안 함", flush=True)
+    for i, b in enumerate(blobs, start=1):
+        print(f"[점유영역] dummy_box_{i}: x=[{b['x_min']:.3f},{b['x_max']:.3f}] "
+              f"y=[{b['y_min']:.3f},{b['y_max']:.3f}] z=[{b['z_min']:.3f},{b['z_max']:.3f}] "
+              f"(cell {b['n_cells']}개)", flush=True)
+    return blobs
 
 
-def _box_center_xy(box):
-    xs = [c[0] for c in box["corners_m"]]
-    ys = [c[1] for c in box["corners_m"]]
-    return (min(xs) + max(xs)) / 2.0, (min(ys) + max(ys)) / 2.0
+crate_blobs = detect_crate_obstacles_from_pointcloud(pts_world)
 
 
-# 더미 하나가 후보 2개(서로 살짝 다른 경계)로 겹쳐서 검출되는 경우가 실측에서 나왔다
-# (같은 자리에 box_id가 2개) - 중심이 가까운 것끼리는 같은 물리적 더미로 보고 하나만
-# (첫 번째로 만난 것) 채택한다.
-DEDUP_RADIUS = max(DUMMY_BOX_SIZE[0], DUMMY_BOX_SIZE[1])
-real_dummy_boxes = []
-kept_centers = []
-for b in size_ok_boxes:
-    cx, cy = _box_center_xy(b)
-    if any(((cx - kx) ** 2 + (cy - ky) ** 2) ** 0.5 < DEDUP_RADIUS for kx, ky in kept_centers):
-        continue
-    real_dummy_boxes.append(b)
-    kept_centers.append((cx, cy))
-false_positive_count = len(crate_boxes_data["boxes"]) - len(real_dummy_boxes)
-
-
-def reproject_temp_to_original(points_temp_base):
-    """크레이트 스캔 중 임시로 옮겼던 섀시 기준 base_link 좌표 -> world -> 원래(테이블쪽)
-    섀시 기준 base_link 좌표. reproject_trunk_map.py와 동일한 수학(세션이 아니라 같은
-    스크립트 안의 두 섀시 위치 사이 재투영)."""
-    pts = np.asarray(points_temp_base, dtype=np.float64)
-    pts_world = pts @ crate_R_base.T + crate_base_pos
-    return (pts_world - base_pos) @ R_base
+def _aabb_world_to_base_corners(b):
+    """world AABB(x_min/x_max/y_min/y_max/z_min/z_max) -> 8코너 -> 원래(테이블쪽) base_link
+    좌표. crate_vertices_base(위 655-658행)와 정확히 같은 world->base 변환 - get_pointcloud()가
+    이미 world 좌표를 주므로, 예전처럼 임시(크레이트쪽) base_link 프레임을 거쳐 재투영할 필요가
+    없다(그 프레임 자체가 애초에 box_top_extractor.py의 base_link-상대 corners_m 출력 때문에
+    필요했던 것)."""
+    corners_world = [
+        (x, y, z)
+        for x in (b["x_min"], b["x_max"])
+        for y in (b["y_min"], b["y_max"])
+        for z in (b["z_min"], b["z_max"])
+    ]
+    return [(R_base.T @ (np.array(c) - base_pos)).tolist() for c in corners_world]
 
 
 obstacles = [
-    {"name": f"dummy_box_{b['box_id']}", "vertices": reproject_temp_to_original(b["corners_m"]).tolist()}
-    for b in real_dummy_boxes
+    {"name": f"dummy_box_{i}", "vertices": _aabb_world_to_base_corners(b)}
+    for i, b in enumerate(crate_blobs, start=1)
 ]
-print(f"[장애물] 크레이트 스캔에서 {len(crate_boxes_data['boxes'])}개 검출, "
-      f"그중 box_top {len(obstacles)}개를 장애물로 채택 (바닥 오탐 {false_positive_count}개 제외)", flush=True)
+print(f"[장애물] 크레이트 포인트클라우드에서 {len(obstacles)}개 점유영역을 장애물로 채택", flush=True)
 
 trunk_map = {
     "frame": "m0609_base_link (crate vertices는 하드코딩, obstacles는 실측 스캔)",

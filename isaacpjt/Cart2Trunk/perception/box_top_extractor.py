@@ -116,9 +116,23 @@ MIN_PLANE_POINTS = 150
 MAX_PLANES = 12
 
 # 카메라 optical frame의 전방축은 +Z.
-# 박스 윗면이 카메라를 거의 정면으로 바라볼 때
-# 평면 법선의 Z성분 절댓값은 1에 가까워진다.
-CAMERA_FACING_NORMAL_DOT_MIN = 0.82
+#
+# 1차 필터:
+# 카메라를 어느 정도 바라보는 평면만 "대표 윗면 법선" 후보로 사용한다.
+# 기존 0.82보다 완화하되, 이 값만으로 최종 윗면을 결정하지 않는다.
+CAMERA_FACING_NORMAL_DOT_MIN = 0.70
+
+# 2차 필터:
+# 먼저 검출된 평면들 중 대표 윗면 법선을 정한 뒤,
+# 대표 법선과 거의 평행한 평면만 실제 박스 윗면 후보로 사용한다.
+#
+# 0.94는 약 20도 이내의 법선 차이만 허용한다.
+# 따라서 카메라가 조금 기울어져도 윗면은 유지하고,
+# 윗면과 거의 직각인 옆면(또는 다른 높이의 박스/테이블면)은 제외할 수 있다.
+TOP_NORMAL_CONSISTENCY_DOT_MIN = 0.94
+
+# 대표 법선 선택 시 평면 Point 수와 카메라 정면성을 함께 반영한다.
+REFERENCE_NORMAL_ALIGNMENT_POWER = 2.0
 
 
 # ============================================================
@@ -168,10 +182,10 @@ MAX_RAY_DISTANCE_M = 1.00
 MAX_RAY_DISTANCE_SPREAD_M = 0.060
 
 # ray 교점과 후보 평면의 실제 Point Cloud 사이 허용 거리
-BOUNDARY_HIT_DISTANCE_M = 0.090
+BOUNDARY_HIT_DISTANCE_M = 0.040
 
 # 네 ray 중 최소 몇 개가 후보 평면 근처를 지나야 하는지
-MIN_BOUNDARY_RAY_HITS = 1
+MIN_BOUNDARY_RAY_HITS = 3
 
 # 아래 박스 윗면 후보가 없을 때 바닥을 찾기 위한 설정
 FLOOR_RANSAC_MAX_PLANES = 8
@@ -384,6 +398,11 @@ class DepthTopmostBoxExtractor(Node):
         )
         self.get_logger().info(
             "Processing: every detected box-top candidate"
+        )
+        self.get_logger().info(
+            "Normal filter: "
+            f"camera>={CAMERA_FACING_NORMAL_DOT_MIN:.2f}, "
+            f"reference parallel>={TOP_NORMAL_CONSISTENCY_DOT_MIN:.2f}"
         )
         self.get_logger().info(
             "S: save one combined JSON and one combined PLY, Q: quit"
@@ -740,19 +759,30 @@ class DepthTopmostBoxExtractor(Node):
         self,
         scene_pcd: o3d.geometry.PointCloud,
     ) -> list[PlaneClusterCandidate]:
+        """
+        1. RANSAC으로 여러 평면을 먼저 검출한다.
+        2. 카메라를 어느 정도 바라보는 평면들 중 대표 윗면 법선을 구한다.
+        3. 대표 법선과 거의 평행한 평면만 박스 윗면 후보로 사용한다.
+        4. 각 평면 내부를 DBSCAN으로 분리하고 직사각형 조건을 검사한다.
+
+        이 방식은 CAMERA_FACING_NORMAL_DOT_MIN을 완화해도
+        옆면/다른 높이의 표면까지 윗면으로 섞여 들어오는 문제를 줄이기 위한 것이다.
+        """
         remaining = o3d.geometry.PointCloud(
             scene_pcd
         )
-
-        candidates: list[PlaneClusterCandidate] = []
-        candidate_id = 0
 
         camera_forward = np.array(
             [0.0, 0.0, 1.0],
             dtype=np.float64,
         )
 
-        for _ in range(MAX_PLANES):
+        detected_planes = []
+
+        # --------------------------------------------------------
+        # 1단계: RANSAC으로 평면들을 먼저 모두 수집
+        # --------------------------------------------------------
+        for plane_index in range(MAX_PLANES):
             if len(remaining.points) < MIN_PLANE_POINTS:
                 break
 
@@ -788,6 +818,15 @@ class DepthTopmostBoxExtractor(Node):
 
             normal /= normal_norm
 
+            # 법선 방향의 부호를 카메라 전방(+Z) 쪽으로 통일한다.
+            if float(
+                np.dot(
+                    normal,
+                    camera_forward,
+                )
+            ) < 0.0:
+                normal = -normal
+
             camera_alignment = abs(
                 float(
                     np.dot(
@@ -797,12 +836,94 @@ class DepthTopmostBoxExtractor(Node):
                 )
             )
 
-            # 카메라에서 정면에 가깝게 보이는 평면만 윗면 후보
+            detected_planes.append(
+                {
+                    "plane_index": plane_index,
+                    "cloud": plane_cloud,
+                    "normal": normal,
+                    "camera_alignment": camera_alignment,
+                    "point_count": len(inliers),
+                }
+            )
+
+        if not detected_planes:
+            return []
+
+        # --------------------------------------------------------
+        # 2단계: 대표 윗면 법선 선택
+        #
+        # 카메라를 어느 정도 바라보는 평면만 대상으로 하고,
+        # Point 수가 많고 카메라 정면성이 높은 평면을 선택한다.
+        # 바닥이 선택되더라도 박스 윗면과 평행하므로 문제없다.
+        # --------------------------------------------------------
+        reference_pool = [
+            plane
+            for plane in detected_planes
             if (
-                camera_alignment
-                < CAMERA_FACING_NORMAL_DOT_MIN
+                plane["camera_alignment"]
+                >= CAMERA_FACING_NORMAL_DOT_MIN
+            )
+        ]
+
+        if not reference_pool:
+            if self.frame_count % LOG_INTERVAL_FRAMES == 0:
+                best_alignment = max(
+                    plane["camera_alignment"]
+                    for plane in detected_planes
+                )
+                self.get_logger().warning(
+                    "No plane passed camera-facing filter. "
+                    f"best alignment={best_alignment:.3f}, "
+                    f"threshold={CAMERA_FACING_NORMAL_DOT_MIN:.3f}"
+                )
+            return []
+
+        reference_plane = max(
+            reference_pool,
+            key=lambda plane: (
+                float(plane["point_count"])
+                * (
+                    float(
+                        plane["camera_alignment"]
+                    )
+                    ** REFERENCE_NORMAL_ALIGNMENT_POWER
+                )
+            ),
+        )
+
+        reference_normal = np.asarray(
+            reference_plane["normal"],
+            dtype=np.float64,
+        )
+
+        candidates: list[PlaneClusterCandidate] = []
+        candidate_id = 0
+
+        # --------------------------------------------------------
+        # 3단계: 대표 법선과 평행한 평면만 DBSCAN/사각형 검사
+        # --------------------------------------------------------
+        for plane in detected_planes:
+            normal = np.asarray(
+                plane["normal"],
+                dtype=np.float64,
+            )
+
+            normal_consistency = abs(
+                float(
+                    np.dot(
+                        normal,
+                        reference_normal,
+                    )
+                )
+            )
+
+            if (
+                normal_consistency
+                < TOP_NORMAL_CONSISTENCY_DOT_MIN
             ):
                 continue
+
+            plane_cloud = plane["cloud"]
 
             labels = np.asarray(
                 plane_cloud.cluster_dbscan(
@@ -841,6 +962,17 @@ class DepthTopmostBoxExtractor(Node):
 
                 candidates.append(candidate)
                 candidate_id += 1
+
+        if self.frame_count % LOG_INTERVAL_FRAMES == 0:
+            self.get_logger().info(
+                "normal filter: "
+                f"planes={len(detected_planes)}, "
+                f"reference_alignment="
+                f"{reference_plane['camera_alignment']:.3f}, "
+                f"top_parallel_threshold="
+                f"{TOP_NORMAL_CONSISTENCY_DOT_MIN:.3f}, "
+                f"candidates={len(candidates)}"
+            )
 
         return candidates
 
