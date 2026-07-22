@@ -159,6 +159,56 @@ def generate_wall_flush_candidates(box: Box, trunk, candidates) -> Set[Tuple[flo
     return extra
 
 
+def _ranges_overlap(a: Tuple[float, float], b: Tuple[float, float]) -> bool:
+    """1차원 구간 두 개가 겹치는지 확인 (⑤ count_touching_faces와 같은 계산, 순환
+    import를 피하려고 여기 별도로 둠 - ⑤가 이미 ③을 불러오므로 반대 방향은 불가)."""
+    return a[0] < b[1] and a[1] > b[0]
+
+
+def generate_box_flush_candidates(box: Box, trunk, candidates, placed: List["PlacedBox"]) -> Set[Tuple[float, float, float]]:
+    """
+    "이 박스라면 이미 놓인 다른 박스 옆면에 딱 붙을 수 있는 자리" 후보를 추가로 만든다.
+
+    generate_wall_flush_candidates()는 트렁크 바깥쪽 벽(A/B/C)에 딱 붙는 자리는
+    커버하지만, "이미 놓인 다른 박스" 옆면에 딱 붙는 자리는 다루지 않는다. 실제
+    발견된 사례: 큰 박스가 먼저 벽 A 근처에 놓이면, 그다음 박스가 그 큰 박스
+    바로 앞(입구 쪽)에 딱 붙을 수 있는 자리가 물리적으로는 비어있는데도, 그 좌표를
+    만들어줄 기존 모서리가 없어서 후보 자체가 안 생기는 경우가 있었다.
+
+    이미 있는 후보들의 좌표를 재사용해서, 각 놓인 박스와 y/z(또는 x/z) 구간이
+    겹치는 조합마다 그 박스의 가까운 면·먼 면에 딱 붙는 변형을 둘 다 만든다.
+    "붙였을 때 실제로 다른 것과 안 겹치는지"는 여기서 판단하지 않고 ④(유효성
+    검사)에 그대로 맡긴다 - 겹치는 조합만 안 걸러내는 정도는 후보가 좀 늘어나는
+    것뿐이라 문제없고, 굳이 두 번 계산할 필요가 없다. 장애물 하나를 넘어서 그
+    뒤의 더 깊은 틈을 찾는 것까지는 다루지 않는다 (①과 같은 MVP 범위 - 바로
+    인접한 장애물까지만 본다).
+    """
+    extra: Set[Tuple[float, float, float]] = set()
+
+    for (x, y, z) in candidates:
+        x0, x1 = x, x + box.width
+        y0, y1 = y, y + box.depth
+        z0, z1 = z, z + box.height
+
+        for p in placed:
+            px0, px1 = p.x_range
+            py0, py1 = p.y_range
+            pz0, pz1 = p.z_range
+
+            # x축 방향: 이 박스의 y/z가 p와 겹치면, p의 가까운 면(입구 쪽)과
+            # 먼 면(안쪽) 각각에 딱 붙는 x로 바꿔치기
+            if _ranges_overlap((y0, y1), (py0, py1)) and _ranges_overlap((z0, z1), (pz0, pz1)):
+                extra.add((px0 - box.width, y, z))  # p 바로 앞(입구 쪽)에 붙음
+                extra.add((px1, y, z))              # p를 지나 바로 뒤(안쪽)에 붙음
+
+            # y축 방향: 이 박스의 x/z가 p와 겹치면, p의 양쪽 면에 딱 붙는 y로 바꿔치기
+            if _ranges_overlap((x0, x1), (px0, px1)) and _ranges_overlap((z0, z1), (pz0, pz1)):
+                extra.add((x, py0 - box.depth, z))
+                extra.add((x, py1, z))
+
+    return extra
+
+
 if __name__ == "__main__":
     # 간단 데모: 박스 하나 놓으면 후보가 어떻게 늘어나는지 확인
     state = ExtremePointState()

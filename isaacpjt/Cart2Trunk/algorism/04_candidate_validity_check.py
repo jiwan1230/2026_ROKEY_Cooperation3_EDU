@@ -73,6 +73,13 @@ def is_candidate_valid(x: float, y: float, z: float, box: "Box", trunk, placed: 
     if z + box.height > trunk.height + 1e-9:
         return False
 
+    # 아래쪽 경계(x<0 등)도 확인 - 지금까지는 register_placement()가 만드는 후보가
+    # 항상 0에서 시작해서 이 구멍이 드러난 적 없었는데, ③의
+    # generate_box_flush_candidates()가 "박스 폭이 앞쪽 빈 틈보다 넓은" 경우 음수
+    # 좌표를 계산해낼 수 있어서 실제로 필요해짐 (-1e-9는 위와 같은 이유의 여유값).
+    if x < -1e-9 or y < -1e-9 or z < -1e-9:
+        return False
+
     # 경계는 통과했으니, 이미 놓인 박스들과 하나라도 겹치면 무효
     candidate = PlacedBox(box=box, x=x, y=y, z=z)
     return not any(boxes_overlap(candidate, p) for p in placed)
