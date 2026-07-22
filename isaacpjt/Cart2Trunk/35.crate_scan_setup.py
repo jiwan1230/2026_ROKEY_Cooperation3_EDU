@@ -1086,13 +1086,18 @@ _run_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 _archive_dir = RESULTS_DIR / "runs" / f"{_run_stamp}_35scan"
 _archive_dir.mkdir(parents=True, exist_ok=True)
 _archived = []
+# 폴더 이름에 이미 타임스탬프가 있지만, 파일만 다른 곳으로 꺼내 보면 어느 실행인지
+# 구분이 안 된다(특히 PICK이 정밀해진 뒤로는 여러 실행의 스크린샷이 내용까지 완전히
+# 같은 경우가 실제로 있었다 - 버그가 아니라 결정론적으로 재현된 것이었지만, 파일명만
+# 보고는 구분이 안 돼서 혼란스러웠다) - 파일명 자체에도 타임스탬프를 접두어로 붙인다.
 for _f in list(_THIS_DIR.glob("_verify_crate_scan_*.png")) + [
     RESULTS_DIR / "table_boxes_filtered.json",
     RESULTS_DIR / "trunk_map.json",
 ]:
     if _f.exists():
-        shutil.copy2(_f, _archive_dir / _f.name)
-        _archived.append(_f.name)
+        _archived_name = f"{_run_stamp}_{_f.name}"
+        shutil.copy2(_f, _archive_dir / _archived_name)
+        _archived.append(_archived_name)
 print(f"[보관] {_archive_dir} 에 {len(_archived)}개 파일 복사: {_archived}", flush=True)
 
 print("\n[완료] 35.crate_scan_setup.py 끝.\n", flush=True)

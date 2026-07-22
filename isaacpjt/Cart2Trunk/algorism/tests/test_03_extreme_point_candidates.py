@@ -22,17 +22,26 @@ Box = _m03.Box
 PlacedBox = _m03.PlacedBox
 ExtremePointState = _m03.ExtremePointState
 is_candidate_valid = _m04.is_candidate_valid
+MARGIN = _m03.PLACEMENT_SAFETY_MARGIN_M
 
 
 def test_register_placement_finds_gap_behind_independent_obstacle():
     """
     장애물 A(왼쪽, 깊이 전체를 가로막음)와 장애물 B(A 뒤쪽 안쪽에만 있는 좁은 블록)를
-    등록하면, "B의 오른쪽 면(x=0.3)을 앞쪽 벽(y=0)까지 밀어서 만든 자리" (0.3, 0, 0)에
-    큰 박스가 들어갈 수 있어야 한다.
+    등록하면, "B의 오른쪽 면(x=0.3)에서 안전 여유(MARGIN)만큼 띄우고, 앞쪽 벽(y=0)
+    에서도 MARGIN만큼 띄운 자리" (0.3+MARGIN, MARGIN, 0)에 박스가 들어갈 수 있어야
+    한다(PLACEMENT_SAFETY_MARGIN_M 도입 이후 - 원래는 정확히 (0.3, 0.0, 0.0)에
+    딱 붙었었다).
 
     이 좌표는 A의 모서리(A 자신의 y=0 안에서만 나옴)나 B의 모서리(B 자신의 y=0.5에서만
     나옴) 중 어느 쪽에서도 그대로 나오지 않는다 - B의 x면과 A가 없는 y=0을 조합해야만
     나오는 좌표라서, "자기 모서리 3개만 보는" 지금 로직은 절대 못 찾는다.
+
+    target_box 폭은 0.7에서 0.6으로 줄였다 - 원래 0.7은 "장애물 여유 앞뒤로 딱 맞춰서
+    정확히 트렁크 끝까지" 채우는 값이라, 벽 안전 여유(x+width<=trunk.width-MARGIN)까지
+    새로 요구되면 물리적으로 더 이상 안 들어간다(테스트 시나리오 자체가 성립 불가) -
+    이 테스트의 핵심 검증 대상(장애물 사이 틈을 찾는 후보 생성)과는 무관한 여유이므로
+    폭만 줄여서 시나리오 자체는 유지한다.
     """
     trunk = Trunk(width=1.0, depth=1.0, height=0.5)
     state = ExtremePointState()
@@ -42,13 +51,13 @@ def test_register_placement_finds_gap_behind_independent_obstacle():
     state.register_placement(obstacle_a)
     state.register_placement(obstacle_b)
 
-    target_box = Box("Test", width=0.7, depth=0.5, height=0.15)
-    expected_pos = (0.3, 0.0, 0.0)
+    target_box = Box("Test", width=0.6, depth=0.5, height=0.15)
+    expected_pos = (0.3 + MARGIN, MARGIN, 0.0)
 
     assert is_candidate_valid(*expected_pos, target_box, trunk, state.placed), (
         "테스트 전제 오류: 기대 좌표 자체가 유효한 자리가 아님"
     )
     assert expected_pos in state.candidates, (
-        "장애물 B의 오른쪽 면을 앞쪽 벽까지 밀어서 만든 후보 (0.3, 0.0, 0.0)이 "
+        f"장애물 B의 오른쪽 면을 앞쪽 벽까지 밀어서 만든 후보 {expected_pos}가 "
         "candidates에 없음 -> register_placement가 이 틈을 못 찾고 있음"
     )

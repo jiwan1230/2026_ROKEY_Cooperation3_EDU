@@ -170,6 +170,6 @@ from datetime import datetime
 _run_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 _archive_dir = RUN_DIR / "runs" / f"{_run_stamp}_37plot"
 _archive_dir.mkdir(parents=True, exist_ok=True)
-shutil.copy2(out_path, _archive_dir / out_path.name)
-shutil.copy2(PLACEMENT_JSON, _archive_dir / PLACEMENT_JSON.name)
+shutil.copy2(out_path, _archive_dir / f"{_run_stamp}_{out_path.name}")
+shutil.copy2(PLACEMENT_JSON, _archive_dir / f"{_run_stamp}_{PLACEMENT_JSON.name}")
 print(f"[보관] {_archive_dir} 에 2개 파일 복사", flush=True)
