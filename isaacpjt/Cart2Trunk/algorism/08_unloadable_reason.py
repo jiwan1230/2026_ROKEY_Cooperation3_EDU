@@ -27,10 +27,11 @@ sys.path.insert(0, str(pathlib.Path(__file__).parent))
 _m03 = import_module("03_extreme_point_candidates")
 _m06 = import_module("06_loading_order_decision")
 _m07 = import_module("07_placement_plan")
+_m18 = import_module("18_rotation")
 
 Box = _m03.Box
 ExtremePointState = _m03.ExtremePointState
-fits_dims = _m03.fits_dims
+fits_dims_any_rotation = _m18.fits_dims_any_rotation
 decide_loading_order = _m06.decide_loading_order
 place_one_box = _m07.place_one_box
 PlacementPlan = _m07.PlacementPlan
@@ -62,8 +63,9 @@ def _remaining_free_volume(trunk, state: "ExtremePointState") -> float:
 
 def classify_unloadable_reason(box: "Box", trunk, state: "ExtremePointState") -> UnloadableReason:
     # 검사 순서가 중요: 셋 다 걸릴 수 있어도 "가장 근본적인 이유"부터 확인해서 반환한다.
-    # 1순위: 박스 자체가 트렁크보다 큼 (자리 배치와 무관하게 애초에 불가능)
-    if not fits_dims(box, trunk):
+    # 1순위: 박스 자체가 트렁크보다 큼 (자리 배치와 무관하게 애초에 불가능) - ⑱ 90도
+    # 회전한 자세까지 감안해서, 둘 다 안 맞을 때만 진짜 SIZE_EXCEEDS_TRUNK로 본다.
+    if not fits_dims_any_rotation(box, trunk):
         return UnloadableReason.SIZE_EXCEEDS_TRUNK
 
     # 2순위: 남은 부피 자체가 박스 부피보다 적음 (배치를 어떻게 하든 물리적으로 불가능)

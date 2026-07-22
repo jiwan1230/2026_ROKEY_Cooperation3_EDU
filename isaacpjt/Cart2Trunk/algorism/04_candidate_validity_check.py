@@ -22,7 +22,6 @@ _m03 = import_module("03_extreme_point_candidates")
 
 Box = _m03.Box
 PlacedBox = _m03.PlacedBox
-PLACEMENT_SAFETY_MARGIN_M = _m03.PLACEMENT_SAFETY_MARGIN_M
 
 
 def boxes_overlap(a: "PlacedBox", b: "PlacedBox") -> bool:
@@ -35,20 +34,6 @@ def boxes_overlap(a: "PlacedBox", b: "PlacedBox") -> bool:
     bz0, bz1 = b.z_range
     # 각 축마다 "구간이 겹치는가"(ax0 < bx1 and ax1 > bx0)를 확인.
     # 3축 전부 겹쳐야만 실제 3D 공간에서 두 박스가 겹치는 것 (하나라도 안 겹치면 안전).
-    return (ax0 < bx1 and ax1 > bx0) and (ay0 < by1 and ay1 > by0) and (az0 < bz1 and az1 > bz0)
-
-
-def _boxes_too_close(a: "PlacedBox", b: "PlacedBox", margin: float) -> bool:
-    """boxes_overlap()과 같은 AABB 겹침 판정이지만, a를 x/y(수평)로만 margin만큼
-    부풀린 뒤 검사한다 - 실제로는 안 겹쳐도 margin보다 가까우면 "너무 가깝다"고
-    본다. z(높이)는 부풀리지 않는다: 바닥에 딱 놓이는 것도, (allow_stacking일 때)
-    다른 박스 위에 딱 얹히는 것도 정상이라 그쪽에는 여유가 필요 없다."""
-    ax0, ax1 = a.x_range[0] - margin, a.x_range[1] + margin
-    ay0, ay1 = a.y_range[0] - margin, a.y_range[1] + margin
-    az0, az1 = a.z_range
-    bx0, bx1 = b.x_range
-    by0, by1 = b.y_range
-    bz0, bz1 = b.z_range
     return (ax0 < bx1 and ax1 > bx0) and (ay0 < by1 and ay1 > by0) and (az0 < bz1 and az1 > bz0)
 
 
@@ -77,32 +62,27 @@ def find_out_of_bounds(placed: List["PlacedBox"], trunk) -> List[str]:
 def is_candidate_valid(x: float, y: float, z: float, box: "Box", trunk, placed: List["PlacedBox"]) -> bool:
     """
     후보 좌표 (x,y,z)에 box를 놓았을 때 유효한지 종합 판단.
-    (경계 안 + 벽/장애물과 안전 여유 확보 + 기존 박스와 안 겹침)
-
-    벽 쪽(x/y 수평면) 경계와 다른 박스와의 간격은 PLACEMENT_SAFETY_MARGIN_M(0.01m)
-    이상 확보되도록 요구한다 - 03_extreme_point_candidates.py 모듈 docstring의
-    안전 여유 설명 참고. 후보 생성 쪽(register_placement/generate_wall_flush_
-    candidates)이 이미 이 여유를 두고 후보를 만들지만, 여기서도 같은 기준으로
-    다시 확인해서 다른 경로로 들어온 후보도 동일하게 걸러낸다(방어적 이중 검증).
-    z(바닥/높이 방향)는 여유를 두지 않는다 - 바닥에 딱 놓이는 것도, 트렁크 높이
-    한계에 딱 맞는 것도 정상이라 그쪽에는 여유가 필요 없다.
+    (경계 안 + 기존 박스와 안 겹침)
     """
     # 박스를 (x,y,z)에 놓았을 때 반대쪽 끝(x+width 등)이 트렁크 경계를 넘는지 확인.
     # +1e-9는 부동소수점 오차로 인해 "딱 맞는 경우"가 false로 튕기는 걸 방지하는 여유값.
-    if x < PLACEMENT_SAFETY_MARGIN_M - 1e-9:
+    if x + box.width > trunk.width + 1e-9:
         return False
-    if y < PLACEMENT_SAFETY_MARGIN_M - 1e-9:
-        return False
-    if x + box.width > trunk.width - PLACEMENT_SAFETY_MARGIN_M + 1e-9:
-        return False
-    if y + box.depth > trunk.depth - PLACEMENT_SAFETY_MARGIN_M + 1e-9:
+    if y + box.depth > trunk.depth + 1e-9:
         return False
     if z + box.height > trunk.height + 1e-9:
         return False
 
-    # 경계는 통과했으니, 이미 놓인 박스들과 안전 여유(x/y) 안에 들어오면 무효
+    # 아래쪽 경계(x<0 등)도 확인 - 지금까지는 register_placement()가 만드는 후보가
+    # 항상 0에서 시작해서 이 구멍이 드러난 적 없었는데, ③의
+    # generate_box_flush_candidates()가 "박스 폭이 앞쪽 빈 틈보다 넓은" 경우 음수
+    # 좌표를 계산해낼 수 있어서 실제로 필요해짐 (-1e-9는 위와 같은 이유의 여유값).
+    if x < -1e-9 or y < -1e-9 or z < -1e-9:
+        return False
+
+    # 경계는 통과했으니, 이미 놓인 박스들과 하나라도 겹치면 무효
     candidate = PlacedBox(box=box, x=x, y=y, z=z)
-    return not any(_boxes_too_close(candidate, p, PLACEMENT_SAFETY_MARGIN_M) for p in placed)
+    return not any(boxes_overlap(candidate, p) for p in placed)
 
 
 if __name__ == "__main__":

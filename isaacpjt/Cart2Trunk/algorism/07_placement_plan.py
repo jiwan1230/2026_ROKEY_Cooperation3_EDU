@@ -21,12 +21,21 @@ sys.path.insert(0, str(pathlib.Path(__file__).parent))
 _m03 = import_module("03_extreme_point_candidates")
 _m05 = import_module("05_candidate_scoring")
 _m13 = import_module("13_support_check")
+_m15 = import_module("15_overhead_clearance_check")
+_m17 = import_module("17_margin_check")
+_m18 = import_module("18_rotation")
 
 Box = _m03.Box
 PlacedBox = _m03.PlacedBox
 ExtremePointState = _m03.ExtremePointState
 generate_wall_flush_candidates = _m03.generate_wall_flush_candidates
+generate_box_flush_candidates = _m03.generate_box_flush_candidates
 is_candidate_valid_with_stacking = _m13.is_candidate_valid_with_stacking
+has_overhead_clearance = _m15.has_overhead_clearance
+has_clear_approach_path = _m15.has_clear_approach_path
+has_sufficient_margin = _m17.has_sufficient_margin
+MARGIN = _m17.MARGIN
+rotate_box = _m18.rotate_box
 score_candidate = _m05.score_candidate
 
 
@@ -36,9 +45,10 @@ class PlacementPlan:
     box_id: str
     order: int
     position: Tuple[float, float, float]      # 트렁크 로컬 좌표 (x, y, z)
-    dimensions: Tuple[float, float, float]     # (width, depth, height)
+    dimensions: Tuple[float, float, float]     # (width, depth, height) - 실제로 놓인 자세 기준
     score: float
     touches: int
+    rotated: bool = False  # True면 ⑱ 90도 회전(가로/세로 교환)된 자세로 놓인 것
 
 
 def place_one_box(
@@ -51,17 +61,51 @@ def place_one_box(
 
     allow_stacking=False(기본값)면 z>0 후보(박스 위에 놓는 자리)는 ⑬에서
     무조건 거부되어 지금의 1층 전용 동작과 동일하게 동작한다.
-    """
-    # [③ 보강] 순수 모서리 확장만으로는 못 만드는 "이 박스라면 벽에 딱 붙는 자리"를
-    # 지금 놓으려는 box 크기 기준으로 추가 생성 - state.candidates에는 저장하지
-    # 않고 이번 배치 판단에만 잠깐 섞어 쓴다 (다른 박스 크기에는 안 맞을 수 있어서)
-    candidate_pool = state.candidates | generate_wall_flush_candidates(box, trunk, state.candidates)
 
-    # [④+⑬] 후보 좌표들 중, 겹치지도 밖으로 나가지도 않고(④) 충분히
-    # 받쳐지는(⑬, allow_stacking일 때만) 것만 추림
+    [⑱ 회전] 먼저 정자세로 시도하고, 자리가 없을 때만 90도 돌린 자세(가로/세로
+    교환, 높이는 그대로 - 로봇이 눕히거나 뒤집는 건 불가능)로 한 번 더 시도한다.
+    정자세가 이미 되면 굳이 돌리지 않는다 (회전은 그리퍼 동작이 하나 더 필요함).
+    """
+    plan = _place_one_orientation(box, trunk, state, order, allow_stacking, rotated=False)
+    if plan is not None:
+        return plan
+    if box.width == box.depth:
+        return None  # 정사각형이면 돌려도 후보가 똑같아서 재시도할 의미 없음
+    return _place_one_orientation(rotate_box(box), trunk, state, order, allow_stacking, rotated=True)
+
+
+def _place_one_orientation(
+    box: "Box", trunk, state: "ExtremePointState", order: int,
+    allow_stacking: bool, rotated: bool,
+) -> Optional["PlacementPlan"]:
+    """place_one_box()의 실제 배치 로직 - 주어진 box의 치수(정자세 또는 이미
+    회전된 치수)를 그대로 하나의 "자세"로 취급해서 자리를 찾는다."""
+    # [③ 보강] 순수 모서리 확장만으로는 못 만드는 "이 박스라면 벽에 딱 붙는 자리"
+    # + "이미 놓인 다른 박스 옆면에 딱 붙는 자리"를 지금 놓으려는 box 크기 기준으로
+    # 추가 생성 - state.candidates에는 저장하지 않고 이번 배치 판단에만 잠깐 섞어
+    # 쓴다 (다른 박스 크기에는 안 맞을 수 있어서)
+    wall_flush = generate_wall_flush_candidates(box, trunk, state.candidates, margin=MARGIN)
+    box_flush = generate_box_flush_candidates(box, trunk, state.candidates, state.placed, margin=MARGIN)
+    # ⑰(마진) 도입 후 발견: "벽에 마진만큼 띄운 자리"가 하필 다른 박스와는 마진
+    # 미달로 너무 가까운 경우가 있다 - 그 자리에서 다시 그 박스를 피해 마진만큼
+    # 더 띄우는 조합("벽 마진" + "박스 마진" 둘 다 적용)은 각 생성기를 한 번씩만
+    # 돌려서는 안 나온다. wall_flush 결과를 다시 box-flush 생성기에 넣어서 조합을
+    # 만든다 (⑦이 아니라 ③+⑦ 조합 자체 확장 - 잘못된 후보가 섞여도 유효성 검사가
+    # 그대로 걸러내므로 안전하다).
+    combo_flush = generate_box_flush_candidates(box, trunk, wall_flush, state.placed, margin=MARGIN)
+    candidate_pool = state.candidates | wall_flush | box_flush | combo_flush
+
+    # [④+⑬+⑮+⑯+⑰] 후보 좌표들 중, 겹치지도 밖으로 나가지도 않고(④) 충분히
+    # 받쳐지고(⑬, allow_stacking일 때만) 로봇 팔이 위쪽으로 뺄 여유 공간도
+    # 충분하고(⑮, 최종 자리 기준) 거기까지 가는 길에 더 높이 솟은 걸 타고 넘지
+    # 않아도 되고(⑯, 입구~목표 사이 같은 y폭 장애물 기준) 벽/다른 박스와 딱
+    # 붙지 않고 최소 간격을 유지하는(⑰) 것만 추림
     valid_candidates = [
         (x, y, z) for (x, y, z) in candidate_pool
         if is_candidate_valid_with_stacking(x, y, z, box, trunk, state.placed, allow_stacking=allow_stacking)
+        and has_overhead_clearance(z, box, trunk)
+        and has_clear_approach_path(x, y, z, box, trunk, state.placed)
+        and has_sufficient_margin(x, y, z, box, trunk, state.placed)
     ]
 
     if not valid_candidates:
@@ -86,6 +130,7 @@ def place_one_box(
         dimensions=(box.width, box.depth, box.height),
         score=best_score,
         touches=best_touches,
+        rotated=rotated,
     )
 
 

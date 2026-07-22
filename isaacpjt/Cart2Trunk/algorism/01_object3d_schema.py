@@ -72,6 +72,12 @@ class Object3D:
     # None이면 아직 추적 로직이 없다는 뜻 (현재 상태).
     object_id: Optional[str] = None
 
+    # ⑥ 픽업 순서 제약용 - 이 박스가 카트 위에서 다른 어떤 박스 위에 얹혀 있는지
+    # (그 박스의 id). 없으면 None(바닥에 있거나 관계 정보 없음). 실제 비전 필드
+    # (support_candidate_id 등)와의 정확한 매핑은 아직 미확정 - load_boxes_from_vision_json()
+    # 참고.
+    rests_on_id: Optional[str] = None
+
     # 봉투 관련 필드는 Q3 논의가 끝날 때까지 사용하지 않음 (박스 전용으로 진행)
 
 
@@ -80,7 +86,7 @@ def object3d_to_box(obj: Object3D):
     Object3D(Vision 출력)를 03~08번 파일에서 쓰는 Box로 변환하는 어댑터.
     좌표계가 이미 통일돼 있으므로(Q2), 크기(size_xyz)만 그대로 옮기면 됨.
     위치(center_xyz)는 트렁크 로컬 오프셋 계산 후 ⑦에서 다시 계산하므로
-    여기서는 다루지 않음.
+    여기서는 다루지 않음. rests_on_id는 ⑥이 그대로 쓸 수 있게 끊기지 않고 넘긴다.
     """
     from importlib import import_module
     import sys, pathlib
@@ -90,7 +96,7 @@ def object3d_to_box(obj: Object3D):
     Box = import_module("03_extreme_point_candidates").Box
 
     w, d, h = obj.size_xyz
-    return Box(id=obj.id, width=w, depth=d, height=h)
+    return Box(id=obj.id, width=w, depth=d, height=h, rests_on_id=obj.rests_on_id)
 
 
 def load_boxes_from_vision_json(path) -> List[Object3D]:
