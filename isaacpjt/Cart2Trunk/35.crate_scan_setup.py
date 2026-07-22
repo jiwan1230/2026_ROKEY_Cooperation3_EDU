@@ -52,7 +52,12 @@ import os
 # 것도 직접 볼 수 있다. 자동 검증용으로 헤드리스가 필요하면 HEADLESS=1로 실행:
 #   HEADLESS=1 isaac_python 35.crate_scan_setup.py
 HEADLESS = os.environ.get("HEADLESS", "0") == "1"
-simulation_app = SimulationApp({"headless": HEADLESS})
+# GUI 렌더링은 헤드리스보다 훨씬 느리다(36.py에서 실측: 234초 vs 20~30초) - 해상도를
+# 낮춰서 물리 진행과 화면이 크게 벌어지지 않게 한다. 헤드리스 스크린샷 품질에는 영향 없음.
+_sim_app_config = {"headless": HEADLESS}
+if not HEADLESS:
+    _sim_app_config.update({"width": 640, "height": 480})
+simulation_app = SimulationApp(_sim_app_config)
 
 import json
 import subprocess

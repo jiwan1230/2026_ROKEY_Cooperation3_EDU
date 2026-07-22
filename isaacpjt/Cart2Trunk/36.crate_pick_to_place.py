@@ -39,7 +39,12 @@ import os
 # 기본은 GUI로 직접 보이게 - 자동 검증용으로 헤드리스가 필요하면 HEADLESS=1로 실행:
 #   HEADLESS=1 isaac_python 36.crate_pick_to_place.py
 HEADLESS = os.environ.get("HEADLESS", "0") == "1"
-simulation_app = SimulationApp({"headless": HEADLESS})
+# GUI로 실제 렌더링하면서 ~2000 스텝을 다 돌리면 실측 234초(헤드리스는 20~30초) - 화면
+# 해상도를 낮춰서 렌더링 부하를 줄인다. 헤드리스 스크린샷 품질에는 영향 없음(기본 해상도 유지).
+_sim_app_config = {"headless": HEADLESS}
+if not HEADLESS:
+    _sim_app_config.update({"width": 640, "height": 480})
+simulation_app = SimulationApp(_sim_app_config)
 
 from pathlib import Path
 import sys
@@ -55,6 +60,7 @@ from isaacsim.core.utils.rotations import euler_angles_to_quat
 from isaacsim.core.utils.viewports import set_camera_view
 from isaacsim.robot.manipulators.grippers.surface_gripper import SurfaceGripper
 from isaacsim.robot.manipulators.manipulators import SingleManipulator
+from isaacsim.core.prims import SingleRigidPrim
 
 _THIS_DIR = Path(__file__).resolve().parent
 M0609_DIR = _THIS_DIR.parent / "M0609"
@@ -186,8 +192,10 @@ def snapshot(world, viewport, eye, target, fname):
 
 
 def move_link6(world, controller, robot, target_pos, steps=WAYPOINT_STEPS, hold_gripper_closed=False, label=""):
-    """17/33.py와 동일."""
-    for _ in range(steps):
+    """17/33.py와 동일. GUI로 실제 렌더링하면 스텝당 시간이 헤드리스보다 훨씬 길어서
+    (실측 234초/2000스텝 vs 헤드리스 20~30초) 웨이포인트 하나가 몇십 초씩 걸릴 수
+    있다 - 중간 진행 로그가 없으면 "멈췄나?" 싶어진다. 100스텝마다 한 번씩 찍는다."""
+    for i in range(steps):
         actions = controller.forward(
             target_end_effector_position=np.array(target_pos, dtype=float),
             target_end_effector_orientation=DOWN_QUAT,
@@ -196,6 +204,8 @@ def move_link6(world, controller, robot, target_pos, steps=WAYPOINT_STEPS, hold_
         if hold_gripper_closed:
             robot.gripper.close()
         world.step(render=True)
+        if (i + 1) % 100 == 0:
+            print(f"  [진행{' ' + label if label else ''}] {i + 1}/{steps} 스텝", flush=True)
     ee_pos, _ = robot.end_effector.get_world_pose()
     err = np.linalg.norm(np.array(ee_pos) - np.array(target_pos))
     print(f"[웨이포인트{' ' + label if label else ''}] target={np.round(target_pos, 3)} "
@@ -379,8 +389,24 @@ snapshot(
 move_link6(world, controller, robot, place_release_pos, steps=300, hold_gripper_closed=True, label="place_release")
 
 robot.gripper.open()
-for _ in range(60):
+
+# 진짜 원인을 찾음: release 직전 박스는 그리퍼와 완전히 같은 속도(거의 0)로 300스텝
+# 동안 붙어있었다 - 조인트를 떼자마자 중력이 붙긴 했지만(z 0.72->0.509로 실제 낙하),
+# 그 몇 프레임 사이 속도가 PhysX의 sleep 임계값 아래로 유지되면서 "정지 상태"로
+# 오판돼 그대로 잠들어버린 것으로 보인다 - 헤드리스로 180스텝(3초)을 더 줘봐도
+# z=0.509에서 소수점까지 정확히 동일하게 멈춰있음을 실측 확인(사용자가 GUI에서 본
+# "안 떨어짐"이 실제 버그였음, 렌더링 지연이 아니었음). SingleRigidPrim으로 직접
+# 작은 속도를 줘서 강제로 깨운다.
+box_rigid_prim = SingleRigidPrim(BOX_PICK_PRIM_PATH)
+box_rigid_prim.initialize(physics_sim_view=world.physics_sim_view)
+box_rigid_prim.set_linear_velocity(np.array([0.0, 0.0, -0.3]))
+print(f"[낙하 유도] {BOX_PICK_PRIM_PATH}에 -z 속도 부여해서 sleep 상태 강제 해제", flush=True)
+
+for i in range(180):
     world.step(render=True)
+    if (i + 1) % 30 == 0:
+        _z = get_box_world_pos()[2]
+        print(f"  [낙하 확인] {i + 1}/180 스텝, 박스 z={_z:.3f}", flush=True)
 
 final_box_pos = get_box_world_pos()
 err_xy = np.linalg.norm(final_box_pos[:2] - np.array(PLACE_WORLD_XY))
