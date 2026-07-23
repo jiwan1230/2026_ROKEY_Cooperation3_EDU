@@ -97,37 +97,11 @@ def decide_reshuffle_or_call(reason: UnloadableReason) -> LoadingAction:
 # ⑥⑦⑧ 통합 파이프라인
 # ---------------------------------------------------------------------------
 
-def generate_loading_plan(
-    boxes: List["Box"], trunk, mode: str = "large_first", margin: Optional[float] = None,
-    allow_stacking: bool = False,
+def _run_strategy(
+    order: List["Box"], trunk, score_fn, margin: Optional[float], allow_stacking: bool,
 ) -> Tuple[List["PlacementPlan"], List[UnloadableItem]]:
-    """
-    boxes, trunk를 받아서:
-      1) [⑥] 정해진 순서로 시도 순서 고정
-      2) [⑦] 순서대로 하나씩 Extreme Point 최적 자리 찾아 배치
-      3) 자리를 못 찾으면 [⑧] 사유 코드 부여 (다음 박스는 계속 시도)
-
-    [mode] 사용자가 적재 정책을 고를 수 있게 하는 스위치.
-    - "large_first"(기본값): 부피 큰 것부터, 코어 기본 점수(입구 접근성 우선) -
-      지금까지의 동작과 완전히 동일 (하위 호환).
-    - "count_first": 부피 작은 것부터 + footprint growth 최소화 점수(⑤
-      score_count_first) - 최대한 많은 개수를 담는 게 목표인 현장용. 순서만
-      바꾸면 효과가 약해서 점수 기준도 같이 바뀐다 (실측 확인: 4/8 -> 7/8).
-
-    [margin] 벽/박스 최소 간격도 사용자가 조절 가능 (예: 냉동 물류는 냉기 순환용
-    으로 훨씬 큰 간격 필요). None(기본값)이면 17_margin_check.MARGIN 그대로.
-
-    [allow_stacking] 트렁크 1층이 꽉 찼을 때 2층·3층으로 자동으로 쌓을지 여부.
-    False(기본값)면 지금까지처럼 1층 전용(하위 호환). True로 켜면 ⑤ 점수 기준이
-    원래 "낮은 자리 우선"이라, 바닥에 자리가 있는 동안은 항상 바닥부터 채우고
-    바닥이 꽉 찬 뒤에야 자동으로 위층에 올라간다 - "몇 층까지"를 따로 지정할
-    필요 없이 트렁크 높이가 허락하는 한 필요한 만큼만 쌓인다. ⑬(받침 비율)·
-    ⑮(상단 여유 공간)가 이미 안전 기준을 지키면서 배치되는지 확인해준다.
-    """
-    order = decide_loading_order(boxes, mode=mode)  # [⑥] 모드에 맞는 순서로 정렬
+    """정해진 순서(order)를 [⑦] 하나씩 배치 시도하고 [⑧] 실패 사유를 분류하는 공통 루프."""
     state = ExtremePointState()          # 빈 트렁크 상태(후보는 (0,0,0) 하나)에서 시작
-    score_fn = score_count_first if mode == "count_first" else None
-
     plans: List["PlacementPlan"] = []
     unloadable: List[UnloadableItem] = []
     order_counter = 1
@@ -141,7 +115,7 @@ def generate_loading_plan(
             order_counter += 1  # 실제로 배치된 것만 순번을 늘림
         else:
             # 자리를 못 찾음 -> [⑧] 왜 못 찾았는지 사유를 분류.
-            # 이 박스만 건너뛰고 for문은 계속 돌아 다음 박스는 계속 시도한다 (전체 중단 X)
+            # 이 박스만 건너뛰고 계속 돌아 다음 박스는 계속 시도한다 (전체 중단 X)
             reason = classify_unloadable_reason(box, trunk, state)
             logger.info(f"[{box.id}] 미적재 - 사유: {reason.value}")
             unloadable.append(UnloadableItem(
@@ -150,6 +124,63 @@ def generate_loading_plan(
             ))
 
     return plans, unloadable
+
+
+def generate_loading_plan(
+    boxes: List["Box"], trunk, mode: str = "large_first", margin: Optional[float] = None,
+    allow_stacking: bool = False,
+) -> Tuple[List["PlacementPlan"], List[UnloadableItem]]:
+    """
+    boxes, trunk를 받아서:
+      1) [⑥] 정해진 순서로 시도 순서 고정
+      2) [⑦] 순서대로 하나씩 Extreme Point 최적 자리 찾아 배치
+      3) 자리를 못 찾으면 [⑧] 사유 코드 부여 (다음 박스는 계속 시도)
+
+    [mode] 사용자가 적재 정책을 고를 수 있게 하는 스위치.
+    - "large_first"(기본값): 부피 큰 것부터, 코어 기본 점수(입구 접근성 우선) -
+      지금까지의 동작과 완전히 동일 (하위 호환).
+    - "count_first": 최대한 많은 개수를 담는 게 목표인 현장용. "작은 것부터 +
+      footprint growth 최소화 점수(⑤ score_count_first)" 전략과 "큰 것부터 +
+      기본 점수(=large_first와 동일)" 전략을 둘 다 계산해서 더 많이 담기는
+      쪽을 채택한다(best-of-two).
+        - 이유(실측으로 확인된 문제): "항상 작은 것부터"만 쓰면, 박스 크기가
+          고르게 섞여 있을 때 작은 박스들이 공간을 잘게 조각내버려서 맨 뒤로
+          밀린 큰 박스가 들어갈 자리를 잃는 역효과가 있었다(큰 거 우선 모드
+          보다 오히려 더 적게 담김 - 예: 10개 중 large_first 10개, 이전
+          count_first 9개). large_first 전략이 항상 후보 두 개 중 하나로
+          포함되므로, count_first가 large_first보다 적게 담는 일은 이제 없다.
+        - 반대로 작은 박스가 많고 큰 박스는 적은 세트에서는 "작은 것부터"
+          전략이 여전히 이긴다(실측: 4/8 -> 7/8, 지금도 유지됨).
+
+    [margin] 벽/박스 최소 간격도 사용자가 조절 가능 (예: 냉동 물류는 냉기 순환용
+    으로 훨씬 큰 간격 필요). None(기본값)이면 17_margin_check.MARGIN 그대로.
+
+    [allow_stacking] 트렁크 1층이 꽉 찼을 때 2층·3층으로 자동으로 쌓을지 여부.
+    False(기본값)면 지금까지처럼 1층 전용(하위 호환). True로 켜면 ⑤ 점수 기준이
+    원래 "낮은 자리 우선"이라, 바닥에 자리가 있는 동안은 대체로 바닥부터 채우는
+    쪽으로 기울지만 절대 규칙은 아니다(입구 접근성 등 다른 점수 요소가 더 크면
+    바닥에 자리가 남아있어도 위층을 고를 수 있음) - "몇 층까지"를 따로 지정할
+    필요 없이 트렁크 높이가 허락하는 한 필요한 만큼만 쌓인다. ⑬(받침 비율)·
+    ⑮(상단 여유 공간)가 이미 안전 기준을 지키면서 배치되는지 확인해준다.
+    """
+    if mode == "count_first":
+        # 후보 A: 작은 것부터 + 공간재사용 점수 (기존 count_first)
+        order_small_first = decide_loading_order(boxes, mode="count_first")
+        plans_a, unloadable_a = _run_strategy(order_small_first, trunk, score_count_first, margin, allow_stacking)
+        # 후보 B: 큰 것부터 + 기본 점수 (large_first와 완전히 동일한 전략)
+        order_large_first = decide_loading_order(boxes, mode="large_first")
+        plans_b, unloadable_b = _run_strategy(order_large_first, trunk, None, margin, allow_stacking)
+
+        if len(plans_b) > len(plans_a):
+            logger.info(
+                f"count_first: 작은 것부터 전략({len(plans_a)}개)보다 큰 것부터 전략"
+                f"({len(plans_b)}개)이 더 많이 담겨 그쪽을 채택"
+            )
+            return plans_b, unloadable_b
+        return plans_a, unloadable_a
+
+    order = decide_loading_order(boxes, mode=mode)  # [⑥] 모드에 맞는 순서로 정렬
+    return _run_strategy(order, trunk, None, margin, allow_stacking)
 
 
 if __name__ == "__main__":
