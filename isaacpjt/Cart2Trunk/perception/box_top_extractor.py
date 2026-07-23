@@ -45,6 +45,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 import json
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -90,9 +91,23 @@ DEBUG_IMAGE_TOPIC = "/depth/topmost_box_debug"
 MIN_DEPTH_M = 0.10
 MAX_DEPTH_M = 5.00
 
-# 전체 영상 사용. 배경이 많으면 범위를 좁힐 수 있다.
-# (left, top, right, bottom), 0~1
-IMAGE_ROI = (0.00, 0.00, 1.00, 1.00)
+
+def _parse_image_roi() -> tuple[float, float, float, float]:
+    raw = os.environ.get("CART2TRUNK_IMAGE_ROI", "0.15,0.15,0.85,0.85")
+    try:
+        values = [float(item) for item in raw.split(",")]
+    except ValueError:
+        values = [0.15, 0.15, 0.85, 0.85]
+
+    if len(values) != 4:
+        values = [0.15, 0.15, 0.85, 0.85]
+
+    return tuple(values)  # type: ignore[return-value]
+
+
+# ROI를 중앙부로 좁혀 배경 오탐을 줄이고, 박스 윗면이 더 잘 맞도록 한다.
+# 기본값은 새 Vision 패스에서 검증한 값(0.15, 0.15, 0.85, 0.85)이다.
+IMAGE_ROI = _parse_image_roi()
 
 
 # ============================================================
@@ -108,7 +123,23 @@ OUTLIER_STD_RATIO = 2.0
 # RANSAC 평면 검출
 # ============================================================
 
-PLANE_DISTANCE_THRESHOLD_M = 0.006
+# 40번(적층/조밀 배치) 실측: RGB 프레임으로 가림/ROI 크롭이 아님을 확인한 뒤에도
+# Medium/Large의 윗면이 fill_ratio 0.52~0.59(새 0.60 임계값 바로 아래)로 자꾸
+# 기각되는 걸 디버그 로그로 추적한 결과, 실제로는 가려진 게 아니라 depth 노이즈가
+# 이 6mm 임계값을 국소적으로 넘는 부분에서 RANSAC이 같은 물리적 평면을 서로 다른
+# 반복(iteration)으로 쪼개버리고 있었다 - 쪼개진 조각은 DBSCAN도 따로 돌아서
+# 완전한 직사각형으로 합쳐지지 못하고 낮은 fill_ratio로 기각된다. 소량만 늘려서
+# (0.006->0.008) 분할 자체를 줄인다 - 원래 오탐 억제 목적(옆면/다른 높이 표면 분리)은
+# TOP_NORMAL_CONSISTENCY_DOT_MIN 등 다른 필터가 계속 담당하므로 과도하게 풀 필요는 없다.
+#
+# 44번(박스 개수 가변화) 실측: 지터로 기존 "Large"보다 더 큰 박스(0.2554x0.1799)가
+# 나온 실행에서, 그 윗면이 다시 두 조각(footprint 0.2554x0.0979와 0.2824x0.1573)으로
+# 쪼개져 둘 다 알려진 박스 크기 허용치(0.025m)를 살짝 못 미치는 차이(0.027m)로
+# 기각됐다 - 같은 평면 분할 문제가 "더 큰 평평한 표면일수록" 8mm로도 마진이
+# 빠듯하다는 뜻이므로, 같은 원칙으로 한 번 더 소량만 늘린다(0.008->0.010).
+PLANE_DISTANCE_THRESHOLD_M = float(
+    os.environ.get("CART2TRUNK_PLANE_DISTANCE_THRESHOLD_M", "0.010")
+)
 PLANE_RANSAC_N = 3
 PLANE_RANSAC_ITERATIONS = 500
 
@@ -148,10 +179,22 @@ MAX_BOX_SIDE_M = 1.50
 
 # minAreaRect 면적 중 실제 Point가 차지하는 비율.
 # 너무 낮으면 긴 띠, 불규칙 배경일 가능성이 높다.
-MIN_RECTANGULAR_FILL_RATIO = 0.35
+# 40번 Vision 패스가 처음엔 0.60으로 강하게 걸렀으나, 실측(RGB로 가림/ROI 크롭이
+# 아님을 확인)+디버그 로그로 Medium/Large의 정상적인(가려지지 않은) 윗면이 depth
+# 노이즈발 RANSAC 평면 분할 때문에 fill_ratio 0.52~0.59로 떨어져 매번 기각되는 걸
+# 확인했다 - 그 범위를 포괄하도록 0.50으로 낮춘다(PLANE_DISTANCE_THRESHOLD_M 소폭
+# 완화와 함께 적용 - 분할 자체도 줄이고, 그래도 남는 약간의 분할은 여기서 흡수).
+MIN_RECTANGULAR_FILL_RATIO = float(
+    os.environ.get("CART2TRUNK_MIN_RECTANGULAR_FILL_RATIO", "0.50")
+)
 
 # 너무 가느다란 평면 제외
 MAX_SIDE_ASPECT_RATIO = 8.0
+
+# select_support_candidate/detect_floor_boundary가 왜 거부했는지 코너별 수치를
+# 자세히 찍어본다 (적층 시나리오에서 윗면은 잡히는데 지지면 매칭에서 탈락하는
+# 원인을 실측으로 확인하기 위한 진단용 - 평소엔 꺼둔다).
+DEBUG_SUPPORT = os.environ.get("CART2TRUNK_DEBUG_SUPPORT", "0") == "1"
 
 
 # ============================================================
@@ -194,7 +237,16 @@ FLOOR_DISTANCE_THRESHOLD_M = 0.012
 FLOOR_RANSAC_ITERATIONS = 1200
 FLOOR_NORMAL_DOT_MIN = 0.94
 FLOOR_MIN_AREA_M2 = 0.12
-FLOOR_BOUNDARY_HIT_DISTANCE_M = 0.12
+# 40번(적층 시나리오) 실측: 스택된 박스(Large 밑, Small 위) 주변은 다른 박스들과
+# 더 촘촘하게 배치되고 위쪽 박스에 가려져서, Large 테두리의 실제 지지면(테이블)은
+# 법선/높이 전부 정확히 검출되는데도 그 코너 근처에 "실제로 관측된" 테이블 포인트가
+# 0.12m보다 훨씬 멀리(0.16~0.25m) 떨어져 있어 매번 기각되는 것을 CART2TRUNK_DEBUG_SUPPORT=1
+# 진단 로그로 직접 확인했다(no lower boundary or floor). 원래 0.12m는 박스가 서로
+# 떨어져 있던 이전 배치용 값 - 지지 평면 자체(법선/높이/기울기)는 이미 검증되므로,
+# 그 평면 위의 관측 포인트가 조금 멀리 있어도(가려짐) 받아들이도록 완화한다.
+FLOOR_BOUNDARY_HIT_DISTANCE_M = float(
+    os.environ.get("CART2TRUNK_FLOOR_BOUNDARY_HIT_DISTANCE_M", "0.30")
+)
 
 # 현실적인 박스 높이 범위
 MIN_BOX_HEIGHT_M = 0.035
@@ -302,6 +354,13 @@ class DepthTopmostBoxExtractor(Node):
         self.fy: Optional[float] = None
         self.cx: Optional[float] = None
         self.cy: Optional[float] = None
+
+        # depth_to_points() 직후, 전처리 전의 raw point cloud(카메라 좌표계) - 여러
+        # 프레임을 합쳐서 한 번만 검출하는 누적 모드(run_scan_once_accumulate.py)가
+        # 프레임마다 이걸 읽어서 쌓는다. 매 프레임 그냥 덮어써질 뿐이라 기존 단일
+        # 프레임 검출 동작에는 전혀 영향 없다.
+        self.latest_raw_scene_points = np.empty((0, 3), dtype=np.float32)
+        self.latest_header = None  # 누적 모드가 합친 point cloud를 퍼블리시할 때 쓸 (frame_id, stamp)
 
         # 현재 프레임에서 복원에 성공한 모든 박스 결과
         # 각 원소:
@@ -421,41 +480,33 @@ class DepthTopmostBoxExtractor(Node):
         self.cx = float(msg.k[2])
         self.cy = float(msg.k[5])
 
-    def depth_callback(
-        self,
-        msg: Image,
-    ) -> None:
-        if not self.camera_intrinsics_ready():
-            return
+    def process_scene_cloud(self, scene_pcd, header, depth_shape=(0, 0)):
+        """전처리된 point cloud 하나에서 박스 후보를 검출하고, 각 후보의 받침면/
+        8꼭짓점까지 복원해서 self.latest_boxes/latest_all_top_points/
+        latest_all_completed_points를 채우고 관련 토픽을 퍼블리시한다.
 
-        depth = self.convert_depth_message(msg)
-        if depth is None:
-            return
+        depth_callback(프레임 하나)과 누적 모드(run_scan_once_accumulate.py, 여러
+        프레임을 합친 point cloud 하나)가 공유하는 핵심 로직 - 원래 depth_callback
+        안에 그대로 있던 코드를 옮긴 것뿐, 로직은 전혀 안 바뀌었다.
+        `depth_shape`는 select_support_candidate()의 형식상 인자일 뿐 내부에서
+        안 쓰이므로(`del image_shape`) 아무 값이나 넘겨도 무방하다.
 
-        self.frame_count += 1
-
-        scene_points = self.depth_to_points(
-            depth
-        )
-
-        if len(scene_points) < MIN_PLANE_POINTS:
-            return
-
-        scene_pcd = self.preprocess_cloud(
-            scene_points
-        )
-
+        반환값: candidates (호출부가 디버그 이미지를 그릴 때 필요해서 그대로 돌려줌).
+        """
         processed_points = np.asarray(
             scene_pcd.points,
             dtype=np.float32,
         )
 
         if len(processed_points) < MIN_PLANE_POINTS:
-            return
+            self.latest_boxes = []
+            self.latest_all_top_points = np.empty((0, 3), dtype=np.float32)
+            self.latest_all_completed_points = np.empty((0, 3), dtype=np.float32)
+            return []
 
         self.publish_cloud(
             processed_points[::SCENE_PUBLISH_STRIDE],
-            msg.header,
+            header,
             self.scene_cloud_publisher,
         )
 
@@ -480,7 +531,7 @@ class DepthTopmostBoxExtractor(Node):
             support = self.select_support_candidate(
                 top_candidate,
                 candidates,
-                depth.shape,
+                depth_shape,
             )
             support_type = "box_top"
 
@@ -496,7 +547,10 @@ class DepthTopmostBoxExtractor(Node):
                 self.get_logger().warning(
                     "Candidate "
                     f"{top_candidate.candidate_id}: "
-                    "no lower boundary or floor."
+                    "no lower boundary or floor. "
+                    f"footprint=({top_candidate.width:.3f},{top_candidate.height:.3f}) "
+                    f"center={np.round(top_candidate.center, 3).tolist()} "
+                    f"fill_ratio={top_candidate.fill_ratio:.3f}"
                 )
                 continue
 
@@ -559,7 +613,7 @@ class DepthTopmostBoxExtractor(Node):
                 self.latest_all_top_points[
                     ::TOP_PUBLISH_STRIDE
                 ],
-                msg.header,
+                header,
                 self.top_cloud_publisher,
             )
         else:
@@ -575,13 +629,13 @@ class DepthTopmostBoxExtractor(Node):
 
             self.publish_cloud(
                 self.latest_all_completed_points,
-                msg.header,
+                header,
                 self.completed_cloud_publisher,
             )
 
             self.publish_all_box_corners(
                 self.latest_boxes,
-                msg.header,
+                header,
             )
         else:
             self.latest_all_completed_points = np.empty(
@@ -589,8 +643,40 @@ class DepthTopmostBoxExtractor(Node):
                 dtype=np.float32,
             )
             self.publish_delete_markers(
-                msg.header
+                header
             )
+
+        return candidates
+
+    def depth_callback(
+        self,
+        msg: Image,
+    ) -> None:
+        if not self.camera_intrinsics_ready():
+            return
+
+        depth = self.convert_depth_message(msg)
+        if depth is None:
+            return
+
+        self.frame_count += 1
+
+        scene_points = self.depth_to_points(
+            depth
+        )
+        self.latest_raw_scene_points = scene_points
+        self.latest_header = msg.header
+
+        if len(scene_points) < MIN_PLANE_POINTS:
+            return
+
+        scene_pcd = self.preprocess_cloud(
+            scene_points
+        )
+
+        candidates = self.process_scene_cloud(
+            scene_pcd, msg.header, depth.shape
+        )
 
         debug_image = self.create_all_boxes_debug_image(
             depth=depth,
@@ -921,6 +1007,13 @@ class DepthTopmostBoxExtractor(Node):
                 normal_consistency
                 < TOP_NORMAL_CONSISTENCY_DOT_MIN
             ):
+                if DEBUG_SUPPORT:
+                    pts = np.asarray(plane["cloud"].points)
+                    self.get_logger().info(
+                        f"[DEBUG plane] plane_idx={plane['plane_index']} "
+                        f"points={plane['point_count']} center={np.round(pts.mean(axis=0), 3).tolist()}: "
+                        f"normal_consistency={normal_consistency:.3f} < {TOP_NORMAL_CONSISTENCY_DOT_MIN} -> reject whole plane"
+                    )
                 continue
 
             plane_cloud = plane["cloud"]
@@ -945,6 +1038,13 @@ class DepthTopmostBoxExtractor(Node):
                 )
 
                 if len(cluster_indices) < MIN_CLUSTER_POINTS:
+                    if DEBUG_SUPPORT and len(cluster_indices) >= 10:
+                        cluster_pts = np.asarray(plane_cloud.points)[cluster_indices]
+                        self.get_logger().info(
+                            f"[DEBUG cluster] plane_idx={plane['plane_index']} label={label}: "
+                            f"points={len(cluster_indices)} < MIN_CLUSTER_POINTS({MIN_CLUSTER_POINTS}) "
+                            f"center={np.round(cluster_pts.mean(axis=0), 3).tolist()} -> drop"
+                        )
                     continue
 
                 cluster = plane_cloud.select_by_index(
@@ -955,6 +1055,8 @@ class DepthTopmostBoxExtractor(Node):
                     candidate_id=candidate_id,
                     cluster=cluster,
                     plane_normal=normal,
+                    debug_plane_index=plane["plane_index"],
+                    debug_label=int(label),
                 )
 
                 if candidate is None:
@@ -981,6 +1083,8 @@ class DepthTopmostBoxExtractor(Node):
         candidate_id: int,
         cluster: o3d.geometry.PointCloud,
         plane_normal: np.ndarray,
+        debug_plane_index: Optional[int] = None,
+        debug_label: Optional[int] = None,
     ) -> Optional[PlaneClusterCandidate]:
         points = np.asarray(
             cluster.points,
@@ -1024,6 +1128,12 @@ class DepthTopmostBoxExtractor(Node):
             <= width
             <= MAX_BOX_SIDE_M
         ):
+            if DEBUG_SUPPORT:
+                self.get_logger().info(
+                    f"[DEBUG make_candidate] plane_idx={debug_plane_index} label={debug_label} "
+                    f"points={len(points)} center={np.round(center, 3).tolist()}: "
+                    f"width={width:.3f} out of [{MIN_BOX_SIDE_M},{MAX_BOX_SIDE_M}] -> reject"
+                )
             return None
 
         if not (
@@ -1031,11 +1141,24 @@ class DepthTopmostBoxExtractor(Node):
             <= height
             <= MAX_BOX_SIDE_M
         ):
+            if DEBUG_SUPPORT:
+                self.get_logger().info(
+                    f"[DEBUG make_candidate] plane_idx={debug_plane_index} label={debug_label} "
+                    f"points={len(points)} center={np.round(center, 3).tolist()}: "
+                    f"height={height:.3f} out of [{MIN_BOX_SIDE_M},{MAX_BOX_SIDE_M}] -> reject"
+                )
             return None
 
         aspect_ratio = width / max(height, 1e-8)
 
         if aspect_ratio > MAX_SIDE_ASPECT_RATIO:
+            if DEBUG_SUPPORT:
+                self.get_logger().info(
+                    f"[DEBUG make_candidate] plane_idx={debug_plane_index} label={debug_label} "
+                    f"points={len(points)} center={np.round(center, 3).tolist()}: "
+                    f"aspect_ratio={aspect_ratio:.2f} > {MAX_SIDE_ASPECT_RATIO} "
+                    f"(width={width:.3f}, height={height:.3f}) -> reject"
+                )
             return None
 
         rectangle_area = width * height
@@ -1052,6 +1175,15 @@ class DepthTopmostBoxExtractor(Node):
         )
 
         if fill_ratio < MIN_RECTANGULAR_FILL_RATIO:
+            if DEBUG_SUPPORT:
+                base_center = center @ self._base_R.T + self._base_t
+                self.get_logger().info(
+                    f"[DEBUG make_candidate] plane_idx={debug_plane_index} label={debug_label} "
+                    f"points={len(points)} center_cam={np.round(center, 3).tolist()} "
+                    f"center_base={np.round(base_center, 3).tolist()} "
+                    f"footprint=({width:.3f},{height:.3f}): "
+                    f"fill_ratio={fill_ratio:.3f} < {MIN_RECTANGULAR_FILL_RATIO} -> reject"
+                )
             return None
 
         rectangle_points_2d = cv2.boxPoints(
@@ -1124,10 +1256,23 @@ class DepthTopmostBoxExtractor(Node):
 
         floor_candidates = []
 
+        if DEBUG_SUPPORT:
+            self.get_logger().info(
+                f"[DEBUG floor] top={top.candidate_id} "
+                f"footprint=({top.width:.3f},{top.height:.3f}) "
+                f"corners_z={np.round(top_corners[:, 2], 3).tolist()} "
+                f"scene_points={len(remaining.points)}"
+            )
+
         for plane_index in range(
             FLOOR_RANSAC_MAX_PLANES
         ):
             if len(remaining.points) < FLOOR_MIN_POINTS:
+                if DEBUG_SUPPORT:
+                    self.get_logger().info(
+                        f"[DEBUG floor] top={top.candidate_id} plane_index={plane_index}: "
+                        f"remaining points {len(remaining.points)} < FLOOR_MIN_POINTS, stop"
+                    )
                 break
 
             plane_model, inliers = remaining.segment_plane(
@@ -1186,6 +1331,12 @@ class DepthTopmostBoxExtractor(Node):
             )
 
             if parallel_score < FLOOR_NORMAL_DOT_MIN:
+                if DEBUG_SUPPORT:
+                    self.get_logger().info(
+                        f"[DEBUG floor] top={top.candidate_id} plane_index={plane_index} "
+                        f"points={len(points)}: parallel_score={parallel_score:.3f} "
+                        f"< {FLOOR_NORMAL_DOT_MIN} -> reject"
+                    )
                 continue
 
             denominator = float(
@@ -1211,6 +1362,12 @@ class DepthTopmostBoxExtractor(Node):
             if np.any(
                 ray_distances < MIN_RAY_DISTANCE_M
             ):
+                if DEBUG_SUPPORT:
+                    self.get_logger().info(
+                        f"[DEBUG floor] top={top.candidate_id} plane_index={plane_index}: "
+                        f"ray_distances={np.round(ray_distances, 3).tolist()} "
+                        f"has value < MIN_RAY_DISTANCE_M({MIN_RAY_DISTANCE_M}) -> reject"
+                    )
                 continue
 
             median_distance = float(
@@ -1222,6 +1379,11 @@ class DepthTopmostBoxExtractor(Node):
                 <= median_distance
                 <= MAX_RAY_DISTANCE_M
             ):
+                if DEBUG_SUPPORT:
+                    self.get_logger().info(
+                        f"[DEBUG floor] top={top.candidate_id} plane_index={plane_index}: "
+                        f"median_distance={median_distance:.3f} out of range -> reject"
+                    )
                 continue
 
             spread = float(
@@ -1230,6 +1392,12 @@ class DepthTopmostBoxExtractor(Node):
             )
 
             if spread > MAX_RAY_DISTANCE_SPREAD_M:
+                if DEBUG_SUPPORT:
+                    self.get_logger().info(
+                        f"[DEBUG floor] top={top.candidate_id} plane_index={plane_index}: "
+                        f"spread={spread:.3f} > MAX_RAY_DISTANCE_SPREAD_M({MAX_RAY_DISTANCE_SPREAD_M}) "
+                        f"ray_distances={np.round(ray_distances, 3).tolist()} -> reject"
+                    )
                 continue
 
             # 평면의 실제 넓이를 로컬 2D convex hull로 계산
@@ -1253,6 +1421,11 @@ class DepthTopmostBoxExtractor(Node):
             )
 
             if observed_area < FLOOR_MIN_AREA_M2:
+                if DEBUG_SUPPORT:
+                    self.get_logger().info(
+                        f"[DEBUG floor] top={top.candidate_id} plane_index={plane_index}: "
+                        f"observed_area={observed_area:.3f} < FLOOR_MIN_AREA_M2({FLOOR_MIN_AREA_M2}) -> reject"
+                    )
                 continue
 
             intersections = (
@@ -1286,7 +1459,19 @@ class DepthTopmostBoxExtractor(Node):
             )
 
             if hit_count < MIN_BOUNDARY_RAY_HITS:
+                if DEBUG_SUPPORT:
+                    self.get_logger().info(
+                        f"[DEBUG floor] top={top.candidate_id} plane_index={plane_index}: "
+                        f"nearest_distances={np.round(nearest_distances, 3).tolist()} "
+                        f"hit_count={hit_count} < MIN_BOUNDARY_RAY_HITS({MIN_BOUNDARY_RAY_HITS}) -> reject"
+                    )
                 continue
+
+            if DEBUG_SUPPORT:
+                self.get_logger().info(
+                    f"[DEBUG floor] top={top.candidate_id} plane_index={plane_index}: ACCEPTED as floor "
+                    f"(median_distance={median_distance:.3f}, spread={spread:.3f}, hit_count={hit_count})"
+                )
 
             # 디버그 및 dataclass 호환용 바닥 사각형
             rectangle = cv2.minAreaRect(
@@ -1496,11 +1681,22 @@ class DepthTopmostBoxExtractor(Node):
             )
 
         if not ranked:
+            if DEBUG_SUPPORT:
+                self.get_logger().info(
+                    f"[DEBUG box_top support] top={top.candidate_id}: "
+                    f"no other top candidate qualifies as support -> falling back to floor"
+                )
             return None
 
         ranked.sort(
             key=lambda item: item[:4]
         )
+        if DEBUG_SUPPORT:
+            self.get_logger().info(
+                f"[DEBUG box_top support] top={top.candidate_id}: "
+                f"ACCEPTED support candidate={ranked[0][4].candidate_id} "
+                f"(median_distance={ranked[0][0]:.3f})"
+            )
         return ranked[0][4]
 
     @staticmethod

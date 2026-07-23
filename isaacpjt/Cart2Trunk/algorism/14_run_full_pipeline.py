@@ -94,6 +94,7 @@ def run_pipeline(trunk_map_path, boxes_path, allow_stacking: bool = False) -> di
             "dimensions": list(plan.dimensions),
             "score": plan.score,
             "touches": plan.touches,
+            "rotated": plan.rotated,
         })
 
     return {

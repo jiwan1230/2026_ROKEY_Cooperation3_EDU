@@ -11,6 +11,7 @@ placement_result.json의 모든 box_id를 "실행됨"으로 강조한다.
     source perception/.venv/bin/activate && python3 37.plot_crate_placement.py
 """
 import json
+import textwrap
 from pathlib import Path
 
 import matplotlib
@@ -126,17 +127,24 @@ for p in placement_data["placements"]:
                   color=INK_PRIMARY, fontweight="bold" if executed else "normal")
 
 unloadable = placement_data.get("unloadable", [])
+_unloadable_n_lines = 1
 if unloadable:
     reasons = ", ".join(f"박스{u['box_id']}({u['reason']})" for u in unloadable)
+    # 박스 개수가 늘면(44.py) 미적재 목록도 같이 길어져서 한 줄로는 이미지 폭을 넘어
+    # 잘릴 수 있다(실측 확인) - 고정 너비로 줄바꿈해서 항상 캔버스 안에 들어오게 한다.
+    wrapped = textwrap.fill(f"미적재: {reasons}", width=55)
+    _unloadable_n_lines = wrapped.count("\n") + 1
     # "크레이트 내부 경계" 라벨과 같은 y에 두면 겹친다 - 그 위로 한 줄 더 띄운다.
-    ax_trunk.text(0.02, trunk_d + 0.09, f"미적재: {reasons}", fontsize=8.5, color=INK_MUTED, ha="left")
+    # va="bottom"이라 줄이 늘어날수록 텍스트 블록이 위로 자라므로, 아래 ylim도
+    # _unloadable_n_lines에 맞춰 같이 늘려야 한다.
+    ax_trunk.text(0.02, trunk_d + 0.09, wrapped, fontsize=8.5, color=INK_MUTED, ha="left", va="bottom")
 
 ax_trunk.set_title("② 적재 알고리즘 배치 결과 (14_run_full_pipeline.py)", fontsize=12, color=INK_PRIMARY, loc="left", pad=12)
 ax_trunk.set_xlabel("x [m] (트렁크 로컬 - min corner가 원점)", color=INK_SECONDARY, fontsize=9)
 ax_trunk.set_ylabel("y [m]", color=INK_SECONDARY, fontsize=9)
 ax_trunk.set_aspect("equal")
 ax_trunk.set_xlim(-0.08, trunk_w + 0.08)
-ax_trunk.set_ylim(-0.08, trunk_d + 0.15)
+ax_trunk.set_ylim(-0.08, trunk_d + 0.15 + 0.05 * (_unloadable_n_lines - 1))
 ax_trunk.grid(True, color=GRID, linewidth=0.7)
 ax_trunk.set_axisbelow(True)
 for spine in ax_trunk.spines.values():
@@ -152,15 +160,21 @@ legend_handles = [
     Rectangle((0, 0), 1, 1, facecolor="none", edgecolor=INK_MUTED, hatch="///", linewidth=1.3,
               label="장애물(더미 박스, 실측 스캔) - 알고리즘이 피해서 배치"),
 ]
-fig.legend(handles=legend_handles, loc="lower center", ncol=1, frameon=False,
-           fontsize=9, labelcolor=INK_SECONDARY, bbox_to_anchor=(0.5, -0.08))
+legend = fig.legend(handles=legend_handles, loc="lower center", ncol=1, frameon=False,
+                     fontsize=9, labelcolor=INK_SECONDARY, bbox_to_anchor=(0.5, -0.08))
 
-fig.suptitle(f"Cart2Trunk: 박스 스캔 → 크레이트 스캔(장애물) → 적재 알고리즘 배치 → 실제 실행({len(EXECUTED_IDS)}개 전부)",
-             fontsize=13, color=INK_PRIMARY, y=1.02, fontweight="bold")
+suptitle = fig.suptitle(f"Cart2Trunk: 박스 스캔 → 크레이트 스캔(장애물) → 적재 알고리즘 배치 → 실제 실행({len(EXECUTED_IDS)}개 전부)",
+                        fontsize=13, color=INK_PRIMARY, y=1.02, fontweight="bold")
 
-fig.tight_layout(rect=[0, 0.09, 1, 1])
+# tight_layout()과 savefig(bbox_inches="tight")를 같이 쓰면 서로 다른 여백 계산이
+# 충돌한다 - 특히 "미적재" 목록/범례처럼 실행마다 길이가 달라지는 축 밖 텍스트가 있으면
+# 그 크기 차이에 따라 두 서브플롯이 겹쳐 보이는 등 예측 불가능하게 깨질 수 있다(실측
+# 확인: 박스 개수가 늘어 미적재 목록이 길어진 실행에서 실제로 깨짐). tight_layout()은
+# 빼고, 축 밖에 있는 legend/suptitle을 bbox_extra_artists로 명시해서 savefig의
+# bbox_inches="tight" 한 번으로만 전체 여백을 계산하게 한다.
 out_path = SCRIPT_DIR / "_crate_05_placement_flow.png"
-fig.savefig(out_path, dpi=150, facecolor=SURFACE, bbox_inches="tight")
+fig.savefig(out_path, dpi=150, facecolor=SURFACE, bbox_inches="tight",
+            bbox_extra_artists=[legend, suptitle])
 print(f"[SAVED] {out_path}")
 
 # ================= 이번 실행 결과를 날짜별 폴더에 보관 (35/36.py와 동일) =================

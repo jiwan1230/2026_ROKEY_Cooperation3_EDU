@@ -53,8 +53,11 @@ def test_fits_dims_any_rotation_false_when_neither_fits():
 
 
 def test_place_one_box_rotates_when_normal_orientation_does_not_fit():
-    """정자세(가로 0.65)로는 안 들어가지만 90도 돌리면(가로 0.30) 들어가는 경우."""
-    trunk = Trunk(width=0.6, depth=0.73, height=0.5)
+    """정자세(가로 0.65)로는 안 들어가지만 90도 돌리면(가로 0.30) 들어가는 경우.
+    depth=0.80: 회전된 깊이(0.65) + 양쪽 벽 마진(2*MARGIN=0.10, 그리퍼가 박스보다
+    커서 0.01->0.05로 올라간 뒤 값)이 들어갈 만큼 - 0.73으로는 마진 확보 시
+    회전해도 안 들어가서 이 테스트의 의도(회전 자체의 성공)를 검증할 수 없었다."""
+    trunk = Trunk(width=0.6, depth=0.80, height=0.5)
     state = ExtremePointState()
     box = Box("Wide", width=0.65, depth=0.30, height=0.15)
 
