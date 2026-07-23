@@ -33,10 +33,8 @@ MARGIN = _m17.MARGIN
 
 def test_generate_wall_flush_candidates_adds_wall_a_variant():
     """
-    기존 후보 (0, 0.31, 0)이 있을 때, 폭 0.28짜리 박스라면 "벽 A(x=width쪽)에서
-    안전 여유(MARGIN)만큼 띄운" 좌표 (trunk.width - box.width - MARGIN, 0.31, 0)도
-    추가로 만들어져야 한다(딱 붙는 대신 여유를 둔다 - PLACEMENT_SAFETY_MARGIN_M
-    도입 이후).
+    기존 후보 (0, 0.31, 0)이 있을 때, 폭 0.28짜리 박스라면 "벽 A(x=width쪽)에 딱
+    붙는" 좌표 (trunk.width - box.width, 0.31, 0)도 추가로 만들어져야 한다.
     """
     trunk = Trunk(width=0.6, depth=0.73, height=0.4)  # entrance_near_x 기본값 True
     box = Box("Wide", width=0.28, depth=0.07, height=0.15)
@@ -44,14 +42,13 @@ def test_generate_wall_flush_candidates_adds_wall_a_variant():
 
     extra = generate_wall_flush_candidates(box, trunk, existing, margin=MARGIN)
 
-    assert (0.6 - 0.28 - MARGIN, 0.31, 0.0) in extra
+    assert (0.6 - 0.28, 0.31, 0.0) in extra
 
 
 def test_generate_wall_flush_candidates_adds_wall_b_and_c_variants():
     """
-    기존 후보 (0.2, 0.1, 0)이 있을 때, 깊이 0.07짜리 박스라면 벽 C(y=0)에서
-    MARGIN만큼 띄운 (0.2, MARGIN, 0)과 벽 B(y=depth쪽)에서 MARGIN만큼 띄운
-    (0.2, depth-0.07-MARGIN, 0)도 추가돼야 한다.
+    기존 후보 (0.2, 0.1, 0)이 있을 때, 깊이 0.07짜리 박스라면 벽 C(y=0)에 붙는
+    (0.2, 0, 0)과 벽 B(y=depth쪽)에 붙는 (0.2, depth-0.07, 0)도 추가돼야 한다.
     """
     trunk = Trunk(width=0.6, depth=0.73, height=0.4)
     box = Box("Thin", width=0.1, depth=0.07, height=0.15)
@@ -59,8 +56,8 @@ def test_generate_wall_flush_candidates_adds_wall_b_and_c_variants():
 
     extra = generate_wall_flush_candidates(box, trunk, existing, margin=MARGIN)
 
-    assert (0.2, MARGIN, 0.0) in extra
-    assert (0.2, 0.73 - 0.07 - MARGIN, 0.0) in extra
+    assert (0.2, 0.0, 0.0) in extra
+    assert (0.2, 0.73 - 0.07, 0.0) in extra
 
 
 def test_place_one_box_finds_deep_spot_that_pure_corner_extension_misses():

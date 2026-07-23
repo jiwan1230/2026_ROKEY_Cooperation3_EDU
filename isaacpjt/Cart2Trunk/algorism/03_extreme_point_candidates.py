@@ -20,23 +20,6 @@
 from dataclasses import dataclass, field
 from typing import List, Optional, Set, Tuple
 
-# 벽/장애물/다른 박스와 항상 이만큼은 띄운다(x/y 수평 방향에만 적용 - 바닥(z=0)은
-# 박스가 실제로 놓여야 하는 면이라 띄우지 않는다). 실제 로봇 팔로 실행해보니, 극점
-# 알고리즘이 계획하는 "벽/장애물에 딱 붙는" 자리는 여유가 0이라 실행 오차(수 cm)를
-# 조금도 못 흡수했다 - PLACE 하강 중 인접 장애물을 옆에서 스치며 박스가 물리
-# 엔진에 의해 폭발적으로 튕겨나가는 걸 실측(화면 녹화)으로 확인했다. 계획 단계에서
-# 부터 여유를 두면 그 실행 오차를 흡수할 수 있다.
-#
-# 0.01(1cm)로는 부족한 경우를 실측으로 확인: 벽 두 개가 만나는 코너 자리(예:
-# x_max/y_max 벽에 동시에 flush)는 각 축 여유가 개별적으로는 기준을 만족해도,
-# 실행 중 위치 오차가 두 축에 동시에 실린 채로 하강하면(코너라 도망갈 방향이
-# 없음) 1cm를 그대로 먹어버려 벽 모서리를 스치며 폭발했다(Small 박스, sub2에서
-# 박스 전체가 벽 상단 아래로 완전히 잠기는 순간 발산 - 하강 스텝을 5cm 단위로
-# 쪼개도 동일 지점에서 재현되어, 스텝 크기가 아니라 여유 자체가 원인임을 확인).
-# 코너 전용 로직 대신 여유값 자체를 2cm로 올려 모든 벽/장애물 접촉에 균일하게
-# 더 큰 버퍼를 준다.
-PLACEMENT_SAFETY_MARGIN_M = 0.02
-
 
 @dataclass(frozen=True)
 class Box:
@@ -88,31 +71,25 @@ class ExtremePointState:
     """
     placed: List[PlacedBox] = field(default_factory=list)
     candidates: Set[Tuple[float, float, float]] = field(
-        default_factory=lambda: {(PLACEMENT_SAFETY_MARGIN_M, PLACEMENT_SAFETY_MARGIN_M, 0.0)}
+        default_factory=lambda: {(0.0, 0.0, 0.0)}
     )
 
     def _slide_to_wall_or_obstacle(self, point: Tuple[float, float, float], slide_axis: int) -> float:
         """
         point를 slide_axis 방향으로 0쪽(벽 쪽)으로 밀었을 때, 가장 먼저 부딪히는
         지점을 반환한다. 그 축 위에서 다른 두 좌표를 가로막는 placed 박스가 없으면
-        벽까지, 있으면 그 중 point에 가장 가까운 박스의 먼 쪽 면에서 멈춘다.
-
-        슬라이드 축이 x/y(수평)면 벽/장애물 모두 PLACEMENT_SAFETY_MARGIN_M만큼
-        띄운 지점에서 멈춘다. z(높이) 축은 바닥에 그대로 놓여야 하므로 띄우지 않는다
-        (allow_stacking이 꺼져 있는 지금은 z 슬라이드 자체가 실질적으로 안 쓰이지만,
-        나중을 위해 명시적으로 구분해둔다).
+        벽(0.0)까지, 있으면 그 중 point에 가장 가까운 박스의 먼 쪽 면에서 멈춘다.
         """
         coords = list(point)
         target = coords[slide_axis]
         other_axes = [i for i in range(3) if i != slide_axis]
-        margin = PLACEMENT_SAFETY_MARGIN_M if slide_axis != 2 else 0.0
 
-        best = margin
+        best = 0.0
         for p in self.placed:
             p_ranges = (p.x_range, p.y_range, p.z_range)
             # 미는 축이 아닌 나머지 두 축에서, point가 이 박스의 범위 안에 걸치는지 확인
             if all(p_ranges[i][0] - 1e-9 <= coords[i] <= p_ranges[i][1] + 1e-9 for i in other_axes):
-                far_face = p_ranges[slide_axis][1] + margin
+                far_face = p_ranges[slide_axis][1]
                 if far_face <= target + 1e-9 and far_face > best:
                     best = far_face
         return best
@@ -133,14 +110,11 @@ class ExtremePointState:
         self.placed.append(placed_box)  # 배치 완료된 박스 목록에 추가
 
         # 새로 놓인 박스의 오른쪽(x+width) / 안쪽(y+depth) / 위쪽(z+height) 끝점을
-        # 다음 박스가 놓일 수도 있는 새 후보로 추가한다 (③ 극점 알고리즘의 핵심 동작).
-        # x/y(수평) 끝점은 PLACEMENT_SAFETY_MARGIN_M만큼 더 밀어서, 다음 박스가 이
-        # 박스와 딱 붙지 않고 항상 최소 여유를 두게 한다. z(위쪽) 끝점은 그대로 둔다 -
-        # allow_stacking으로 그 위에 쌓을 때는 실제로 맞닿아야 하므로 여유가 없어야 한다.
+        # 다음 박스가 놓일 수도 있는 새 후보로 추가한다 (③ 극점 알고리즘의 핵심 동작)
         raw_corners = [
-            (placed_box.x + b.width + PLACEMENT_SAFETY_MARGIN_M, placed_box.y, placed_box.z),   # x축으로 만든 모서리
-            (placed_box.x, placed_box.y + b.depth + PLACEMENT_SAFETY_MARGIN_M, placed_box.z),   # y축으로 만든 모서리
-            (placed_box.x, placed_box.y, placed_box.z + b.height),  # z축으로 만든 모서리 (여유 없음)
+            (placed_box.x + b.width, placed_box.y, placed_box.z),   # x축으로 만든 모서리
+            (placed_box.x, placed_box.y + b.depth, placed_box.z),   # y축으로 만든 모서리
+            (placed_box.x, placed_box.y, placed_box.z + b.height),  # z축으로 만든 모서리
         ]
         for corner in raw_corners:
             self.candidates.add(corner)
