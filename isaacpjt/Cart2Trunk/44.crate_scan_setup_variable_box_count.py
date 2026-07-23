@@ -142,7 +142,7 @@ TABLE_BOX_SIZE_JITTER = 0.15  # 기준 치수 대비 ±15%
 # [44.py] 박스 개수를 3개(Small/Medium/Large) 고정에서 벗어나 자유롭게 바꿀 수 있게
 # 일반화 - 여기 값만 바꾸면 된다(3~5 정도 권장; SAFE_PLACEMENT_RECT/MIN_BOX_GAP_M
 # 대비 너무 많으면 거부 샘플링이 자주 실패해 폴백 위치로 밀려날 수 있다).
-NUM_TABLE_BOXES = 5
+NUM_TABLE_BOXES = 4
 
 # 이름: 개수와 무관하게 "Box1"(가장 작음) ~ "BoxN"(가장 큼)으로 자동 생성 - 기존
 # Small/Medium/Large라는 3개 고정 이름을 일반화한 것.
@@ -305,8 +305,11 @@ CRATE_FLOOR_COLOR = (0.30, 0.30, 0.33)
 # 겹치게(DUMMY_MIN_GAP_M) 거부 샘플링으로 뽑는다. 더미는 RANSAC+이미지 ROI가 아니라
 # 포인트클라우드+"이미 아는 크레이트 영역" 기반으로 검출되므로(아래 "크레이트 스캔"
 # 섹션 참고), 카메라 화각을 따로 계산할 필요 없이 "크레이트 벽 안쪽"만 지키면 된다.
-DUMMY_BOX_BASE_SIZE = (0.15, 0.15, 0.15)
-DUMMY_BOX_SIZE_JITTER = 0.15  # 테이블 박스와 같은 비율의 ±지터
+DUMMY_BOX_BASE_SIZE = (0.10, 0.10, 0.10)
+DUMMY_BOX_SIZE_JITTER = 0.10  # 테이블 박스와 같은 비율의 ±지터
+
+# DUMMY_BOX_BASE_SIZE = (0.15, 0.15, 0.15)
+# DUMMY_BOX_SIZE_JITTER = 0.15  # 테이블 박스와 같은 비율의 ±지터
 DUMMY_MARGIN = 0.05  # 벽 안쪽면에서 더미 박스 자신의 가장자리까지 최소 여유(DUMMY_MIN_GAP_M과 같은 값 - 벽도 "이미 있는 물체" 취급)
 DUMMY_MIN_GAP_M = 0.05  # 더미 둘끼리 최소 간격 - 너무 가까우면 포인트클라우드 점유영역이 하나로 뭉쳐 오탐 위험
 DUMMY_PLACEMENT_MAX_ATTEMPTS = 200
