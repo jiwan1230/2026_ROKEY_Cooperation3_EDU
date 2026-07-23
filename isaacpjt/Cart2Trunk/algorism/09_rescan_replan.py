@@ -24,18 +24,27 @@
 더 정교하게 만들 수 있음.
 """
 
+import logging
 import sys, pathlib
-from typing import List
+from typing import List, Optional
 from importlib import import_module
+
+logger = logging.getLogger(__name__)
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 _m03 = import_module("03_extreme_point_candidates")
+_m05 = import_module("05_candidate_scoring")
+_m06 = import_module("06_loading_order_decision")
+_m07 = import_module("07_placement_plan")
 _m08 = import_module("08_unloadable_reason")
 
 Box = _m03.Box
 ExtremePointState = _m03.ExtremePointState
 PlacedBox = _m03.PlacedBox
 generate_loading_plan = _m08.generate_loading_plan
+decide_loading_order = _m06.decide_loading_order
+place_one_box = _m07.place_one_box
+score_count_first = _m05.score_count_first
 
 RESCAN_TRIGGER_POLICY = "PER_PLACEMENT"  # 지완 답변 확정: 박스 1개 놓을 때마다 1회
 
@@ -60,36 +69,38 @@ def rebuild_state_from_rescan(rescanned_placed_boxes: List["PlacedBox"]) -> "Ext
     return state
 
 
-def replan_after_rescan(remaining_boxes: List["Box"], trunk, rescanned_placed_boxes: List["PlacedBox"]):
+def replan_after_rescan(
+    remaining_boxes: List["Box"], trunk, rescanned_placed_boxes: List["PlacedBox"],
+    mode: str = "large_first", margin: Optional[float] = None,
+):
     """
     재스캔 트리거(PER_PLACEMENT)가 발생할 때마다 호출.
     보수적 가정 버전: 재스캔으로 확인된 박스들로 상태를 다시 만들고,
     remaining_boxes(카트에 남은 것으로 알려진 박스)에 대해 이어서 계획한다.
+
+    mode/margin은 08_unloadable_reason.generate_loading_plan()과 같은 뜻 -
+    trunk_map_planner_node.py(ROS2)가 실제로 호출하는 게 08의 generate_loading_
+    plan()이 아니라 이 함수라서, 사용자가 고른 모드/마진이 로봇까지 실제로
+    전달되려면 여기도 지원해야 한다.
     """
     # 재스캔 결과로 트렁크 상태(놓인 박스 + 후보 좌표)를 처음부터 다시 구성
     state = rebuild_state_from_rescan(rescanned_placed_boxes)
-
-    from importlib import import_module as im
-    _m06 = im("06_loading_order_decision")
-    _m07 = im("07_placement_plan")
-    decide_loading_order = _m06.decide_loading_order
-    place_one_box = _m07.place_one_box
+    score_fn = score_count_first if mode == "count_first" else None
 
     # 남은 박스만 대상으로 [⑥][⑦]을 그대로 다시 수행 (기존 배치는 이미 state에 반영됨)
-    order = decide_loading_order(remaining_boxes)
+    order = decide_loading_order(remaining_boxes, mode=mode)
     plans, unloadable = [], []
     order_counter = len(rescanned_placed_boxes) + 1  # 순번은 기존에 놓인 개수 다음부터 이어감
 
     for box in order:
-        plan = place_one_box(box, trunk, state, order_counter)
+        plan = place_one_box(box, trunk, state, order_counter, score_fn=score_fn, margin=margin)
         if plan is not None:
             plans.append(plan)
             order_counter += 1
         else:
-            from importlib import import_module as im2
-            m08 = im2("08_unloadable_reason")
-            reason = m08.classify_unloadable_reason(box, trunk, state)
-            unloadable.append(m08.UnloadableItem(
+            reason = _m08.classify_unloadable_reason(box, trunk, state)
+            logger.info(f"[{box.id}] 미적재 - 사유: {reason.value}")
+            unloadable.append(_m08.UnloadableItem(
                 box_id=box.id, reason=reason,
                 detail=f"{box.id} - 사유: {reason.value}",
             ))

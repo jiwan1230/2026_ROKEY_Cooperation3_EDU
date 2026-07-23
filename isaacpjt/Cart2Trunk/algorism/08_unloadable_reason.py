@@ -17,14 +17,18 @@
 generate_loading_plan()도 함께 있음.
 """
 
+import logging
 import sys, pathlib
 from dataclasses import dataclass
 from enum import Enum
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 from importlib import import_module
+
+logger = logging.getLogger(__name__)
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 _m03 = import_module("03_extreme_point_candidates")
+_m05 = import_module("05_candidate_scoring")
 _m06 = import_module("06_loading_order_decision")
 _m07 = import_module("07_placement_plan")
 _m18 = import_module("18_rotation")
@@ -35,6 +39,7 @@ fits_dims_any_rotation = _m18.fits_dims_any_rotation
 decide_loading_order = _m06.decide_loading_order
 place_one_box = _m07.place_one_box
 PlacementPlan = _m07.PlacementPlan
+score_count_first = _m05.score_count_first
 
 
 class UnloadableReason(Enum):
@@ -93,16 +98,27 @@ def decide_reshuffle_or_call(reason: UnloadableReason) -> LoadingAction:
 # ---------------------------------------------------------------------------
 
 def generate_loading_plan(
-    boxes: List["Box"], trunk
+    boxes: List["Box"], trunk, mode: str = "large_first", margin: Optional[float] = None,
 ) -> Tuple[List["PlacementPlan"], List[UnloadableItem]]:
     """
     boxes, trunk를 받아서:
-      1) [⑥] 부피 큰 순서로 시도 순서 고정
+      1) [⑥] 정해진 순서로 시도 순서 고정
       2) [⑦] 순서대로 하나씩 Extreme Point 최적 자리 찾아 배치
       3) 자리를 못 찾으면 [⑧] 사유 코드 부여 (다음 박스는 계속 시도)
+
+    [mode] 사용자가 적재 정책을 고를 수 있게 하는 스위치.
+    - "large_first"(기본값): 부피 큰 것부터, 코어 기본 점수(입구 접근성 우선) -
+      지금까지의 동작과 완전히 동일 (하위 호환).
+    - "count_first": 부피 작은 것부터 + footprint growth 최소화 점수(⑤
+      score_count_first) - 최대한 많은 개수를 담는 게 목표인 현장용. 순서만
+      바꾸면 효과가 약해서 점수 기준도 같이 바뀐다 (실측 확인: 4/8 -> 7/8).
+
+    [margin] 벽/박스 최소 간격도 사용자가 조절 가능 (예: 냉동 물류는 냉기 순환용
+    으로 훨씬 큰 간격 필요). None(기본값)이면 17_margin_check.MARGIN 그대로.
     """
-    order = decide_loading_order(boxes)  # [⑥] 부피 큰 순서로 정렬된 시도 순서
+    order = decide_loading_order(boxes, mode=mode)  # [⑥] 모드에 맞는 순서로 정렬
     state = ExtremePointState()          # 빈 트렁크 상태(후보는 (0,0,0) 하나)에서 시작
+    score_fn = score_count_first if mode == "count_first" else None
 
     plans: List["PlacementPlan"] = []
     unloadable: List[UnloadableItem] = []
@@ -110,7 +126,7 @@ def generate_loading_plan(
 
     for box in order:
         # [⑦] 현재 state 기준으로 이 박스의 최적 자리를 찾아 배치 시도
-        plan = place_one_box(box, trunk, state, order_counter)
+        plan = place_one_box(box, trunk, state, order_counter, score_fn=score_fn, margin=margin)
         if plan is not None:
             plans.append(plan)
             order_counter += 1  # 실제로 배치된 것만 순번을 늘림
@@ -118,6 +134,7 @@ def generate_loading_plan(
             # 자리를 못 찾음 -> [⑧] 왜 못 찾았는지 사유를 분류.
             # 이 박스만 건너뛰고 for문은 계속 돌아 다음 박스는 계속 시도한다 (전체 중단 X)
             reason = classify_unloadable_reason(box, trunk, state)
+            logger.info(f"[{box.id}] 미적재 - 사유: {reason.value}")
             unloadable.append(UnloadableItem(
                 box_id=box.id, reason=reason,
                 detail=f"{box.id}(부피 {box.volume*1000:.1f}L) - 사유: {reason.value}",

@@ -163,16 +163,35 @@ def _print_failure(f):
 
 
 if __name__ == "__main__":
-    NUM_TRIALS = 500
-    SEED = 42
-    print(f"무작위 스트레스 테스트 시작 ({NUM_TRIALS}번 시행, seed={SEED})")
-    passed, failures = run_stress_test(NUM_TRIALS, SEED)
-    print(f"\n통과: {passed}/{NUM_TRIALS}")
-    if failures:
-        print(f"실패: {len(failures)}건")
-        for f in failures[:10]:  # 너무 많으면 앞 10건만
+    import time
+
+    # 발표/포트폴리오용: 서로 다른 시드 5개로 총 1,700회를 한 번의 실행으로
+    # 재현한다 - 원래는 이 세션 중 5번 따로 실행해서 나온 숫자였는데(500 +
+    # 300*4), 명령어 하나로 재현 가능하게 정리해둠.
+    SEED_BATCHES = [(42, 500), (1, 300), (7, 300), (999, 300), (123456, 300)]
+
+    start = time.time()
+    total_trials = 0
+    total_passed = 0
+    all_failures = []
+
+    for seed, num_trials in SEED_BATCHES:
+        print(f"시드 {seed}: {num_trials}번 시행 중...")
+        passed, failures = run_stress_test(num_trials, seed)
+        total_trials += num_trials
+        total_passed += passed
+        all_failures.extend(failures)
+        print(f"  -> {passed}/{num_trials} 통과")
+
+    elapsed = time.time() - start
+    print(f"\n{'=' * 60}")
+    print(f"전체 합계: {total_passed}/{total_trials} 통과 ({elapsed:.1f}초 소요)")
+    if all_failures:
+        print(f"실패: {len(all_failures)}건")
+        for f in all_failures[:10]:  # 너무 많으면 앞 10건만
             _print_failure(f)
-        if len(failures) > 10:
-            print(f"  ... 외 {len(failures) - 10}건 더 있음")
+        if len(all_failures) > 10:
+            print(f"  ... 외 {len(all_failures) - 10}건 더 있음")
     else:
         print("전부 통과 - 위반 사항 없음")
+    print("=" * 60)

@@ -35,12 +35,23 @@ _m03 = import_module("03_extreme_point_candidates")
 Box = _m03.Box
 
 
-def decide_loading_order(boxes: List["Box"]) -> List["Box"]:
+def decide_loading_order(boxes: List["Box"], mode: str = "large_first") -> List["Box"]:
     """
-    "지금 위에 아무것도 안 얹혀서 픽업 가능한 박스들 중 부피가 큰 것부터" 순서로
-    정렬한다 (BR-09 부피 우선 + 픽업 순서 제약). rests_on_id가 전부 없으면
-    순수 부피 내림차순과 동일하게 동작한다.
+    "지금 위에 아무것도 안 얹혀서 픽업 가능한 박스들 중" 부피 기준으로 정렬한다
+    (픽업 순서 제약은 두 모드 다 동일하게 지킴 - 모드가 바꾸는 건 그 안에서
+    "큰 것부터"냐 "작은 것부터"냐뿐).
+
+    mode="large_first"(기본값): 부피 큰 것부터 (BR-09 원래 원칙 - 안정적인 배치
+    우선). rests_on_id가 전부 없으면 순수 부피 내림차순과 동일하게 동작한다.
+
+    mode="count_first": 부피 작은 것부터 - 큰 박스가 먼저 좋은 틈을 차지해버려서
+    작은 박스들이 들어갈 자리가 없어지는 걸 방지, 최대한 많은 개수를 담는 게
+    목표인 현장(예: 소형 물류센터)용. 08_unloadable_reason.generate_loading_plan()
+    의 같은 이름 mode와 짝을 이뤄서, 점수 기준(⑤)까지 같이 바꿔야 실제 효과가
+    난다(순서만 바꿔서는 효과가 약함 - industry_scenarios/scenario2_warehouse_
+    density.py에서 실측 확인).
     """
+    picker = max if mode == "large_first" else min
     remaining = {b.id: b for b in boxes}
     order: List["Box"] = []
 
@@ -49,7 +60,7 @@ def decide_loading_order(boxes: List["Box"]) -> List["Box"]:
         blocked_ids = {b.rests_on_id for b in remaining.values() if b.rests_on_id is not None}
         available = [b for b in remaining.values() if b.id not in blocked_ids]
 
-        next_box = max(available, key=lambda b: b.volume)
+        next_box = picker(available, key=lambda b: b.volume)
         order.append(next_box)
         del remaining[next_box.id]
 

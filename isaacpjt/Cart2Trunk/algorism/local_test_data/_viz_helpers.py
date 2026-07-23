@@ -161,20 +161,25 @@ def draw_scene(
     # stack_on_id로 얹힌 관계가 있으면 나란히가 아니라 실제로 쌓인 모양으로 그린다.
     wx = -0.05
     col_of, z_of, _level_of = _resolve_waiting_layout(waiting_boxes)
+    # 대기 칸이 많으면(예: 8개+) 트렁크 깊이보다 훨씬 넓게 늘어질 수 있어서, 축
+    # 범위를 대기 칸이 실제로 차지하는 만큼 늘려준다 - 안 그러면 뒤쪽 칸이 잘려서
+    # 안 보인다.
+    max_waiting_y = max([0.10 + col_of[wb.box_id] * 0.20 + wb.depth for wb in waiting_boxes], default=0.0)
+    view_depth = max(trunk_depth, max_waiting_y)
     for wb in waiting_boxes:
         wy = 0.10 + col_of[wb.box_id] * 0.20
         _draw_cuboid(ax3d, wx - wb.width, wy, z_of[wb.box_id], wb.width, wb.depth, wb.height,
                      facecolor=wb.color, edgecolor=wb.color, alpha=0.4, linestyle="--")
 
     ax3d.set_xlim(wx - 0.3, G + trunk_width)
-    ax3d.set_ylim(0, trunk_depth)
+    ax3d.set_ylim(0, view_depth)
     ax3d.set_zlim(0, trunk_height)
     ax3d.set_xlabel("x (m)")
     ax3d.set_ylabel("y (m)")
     ax3d.set_zlabel("z (m)")
     ax3d.set_title(subtitle_3d, fontsize=10)
     ax3d.legend(loc="upper left", fontsize=7)
-    ax3d.set_box_aspect((G + trunk_width - (wx - 0.3), trunk_depth, trunk_height))
+    ax3d.set_box_aspect((G + trunk_width - (wx - 0.3), view_depth, trunk_height))
 
     # ---- 오른쪽: 2D top-down ----
     ax2d = fig.add_subplot(1, 2, 2)
@@ -208,7 +213,7 @@ def draw_scene(
         ax2d.text(wx - 0.15, -0.06, "카트(대기 중)", fontsize=8, ha="center", color="dimgray")
 
     ax2d.set_xlim(wx - 0.35, G + trunk_width + 0.05)
-    ax2d.set_ylim(-0.1, trunk_depth + 0.05)
+    ax2d.set_ylim(-0.1, view_depth + 0.05)
     ax2d.set_xlabel("x (m)")
     ax2d.set_ylabel("y (m)")
     ax2d.set_title(subtitle_2d, fontsize=10)
