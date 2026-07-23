@@ -171,6 +171,31 @@ class SegmentedControl(tk.Canvas):
         self._var.set(self._segments[idx][1])
 
 
+class ToggleSwitch(tk.Canvas):
+    """iOS 스타일 on/off 스위치 - tk.Checkbutton의 각진 네이티브 체크박스 대신."""
+
+    def __init__(self, parent, variable, width=46, height=26, **kwargs):
+        super().__init__(parent, width=width, height=height, highlightthickness=0,
+                          bg=parent["bg"], **kwargs)
+        self._var = variable
+        self._sw_w, self._sw_h = width, height
+        self.bind("<Button-1>", lambda e: self._var.set(not self._var.get()))
+        self.bind("<Enter>", lambda e: self.configure(cursor="hand2"))
+        self._var.trace_add("write", lambda *_: self._draw())
+        self._draw()
+
+    def _draw(self):
+        self.delete("all")
+        on = bool(self._var.get())
+        track_fill = Palette.success if on else Palette.segment_bg
+        self.create_polygon(_rounded_rect_points(0, 0, self._sw_w, self._sw_h, self._sw_h / 2),
+                             smooth=True, fill=track_fill, outline="")
+        r = self._sw_h / 2 - 2
+        cx = self._sw_w - self._sw_h / 2 if on else self._sw_h / 2
+        cy = self._sw_h / 2
+        self.create_oval(cx - r, cy - r, cx + r, cy + r, fill="white", outline="")
+
+
 class Card(tk.Frame):
     """옅은 테두리 + 여백을 가진 카드형 컨테이너 (iOS의 "타일" 섹션 느낌)."""
 
@@ -302,13 +327,19 @@ class PlannerGUI(tk.Tk):
                                  relief="solid", bd=1)
         margin_entry.grid(row=1, column=1, sticky="w", padx=(28, 0), pady=(4, 0), ipady=3)
 
+        self._field_label(row2, "2층↑ 쌓기 허용").grid(row=0, column=2, sticky="w", padx=(28, 0))
+        stacking_frame = tk.Frame(row2, bg=Palette.surface)
+        stacking_frame.grid(row=1, column=2, sticky="w", padx=(28, 0), pady=(4, 0))
+        self.stacking_var = tk.BooleanVar(value=False)
+        ToggleSwitch(stacking_frame, self.stacking_var).pack(side="left")
+
         self.run_button = RoundedButton(row2, "▶  실행", self._run, width=140, height=38)
-        self.run_button.grid(row=1, column=2, sticky="w", padx=(28, 0), pady=(4, 0))
+        self.run_button.grid(row=1, column=3, sticky="w", padx=(28, 0), pady=(4, 0))
 
         self.status_var = tk.StringVar(value="준비됨")
         tk.Label(row2, textvariable=self.status_var, font=Font.caption,
                  fg=Palette.text_secondary, bg=Palette.surface).grid(
-            row=1, column=3, sticky="w", padx=(16, 0), pady=(4, 0)
+            row=1, column=4, sticky="w", padx=(16, 0), pady=(4, 0)
         )
 
         # ---- 3행: 박스 목록 JSON (접이식 느낌으로 작게, 필요할 때만 손으로 수정) ----
@@ -390,12 +421,13 @@ class PlannerGUI(tk.Tk):
         mode = self.mode_var.get()
         margin_str = self.margin_var.get().strip()
         margin = float(margin_str) if margin_str else None
+        allow_stacking = self.stacking_var.get()
 
         self.status_var.set("계산 중...")
         self.update_idletasks()
 
         plans, unloadable, trunk, obstacles = plan_from_trunk_map_data(
-            data, cart_boxes_raw, mode=mode, margin=margin
+            data, cart_boxes_raw, mode=mode, margin=margin, allow_stacking=allow_stacking
         )
         effective_margin = margin if margin is not None else DEFAULT_MARGIN
 
@@ -425,7 +457,8 @@ class PlannerGUI(tk.Tk):
             fixed_obstacles=fixed_obstacles,
             placed_boxes=[
                 SceneBox(p.box_id, p.position[0], p.position[1], p.position[2],
-                         p.dimensions[0], p.dimensions[1], p.dimensions[2], _color_for_box_id(p.box_id))
+                         p.dimensions[0], p.dimensions[1], p.dimensions[2], _color_for_box_id(p.box_id),
+                         dashed=(p.position[2] > 1e-6))
                 for p in plans
             ],
             waiting_boxes=[
@@ -433,7 +466,8 @@ class PlannerGUI(tk.Tk):
                           box_by_id[u.box_id]["height"], _color_for_box_id(u.box_id))
                 for u in unloadable
             ],
-            title=f"After - mode={mode}, margin={effective_margin:.2f}m ({len(plans)}/{len(cart_boxes_raw)}개 적재)",
+            title=f"After - mode={mode}, margin={effective_margin:.2f}m, "
+                  f"쌓기={'허용' if allow_stacking else '1층전용'} ({len(plans)}/{len(cart_boxes_raw)}개 적재)",
             out_path=str(after_path),
         )
 
@@ -441,7 +475,8 @@ class PlannerGUI(tk.Tk):
         self._pil_originals["after"] = Image.open(after_path).copy()
         self._render_images()
 
-        log_lines = [f"[{run_name}] mode={mode}, margin={effective_margin:.2f}m -> {len(plans)}/{len(cart_boxes_raw)}개 배치"]
+        log_lines = [f"[{run_name}] mode={mode}, margin={effective_margin:.2f}m, "
+                     f"쌓기={'허용' if allow_stacking else '1층전용'} -> {len(plans)}/{len(cart_boxes_raw)}개 배치"]
         for p in plans:
             log_lines.append(f"  PLACED {p.box_id}: pos=({p.position[0]:.2f},{p.position[1]:.2f},{p.position[2]:.2f}) rotated={p.rotated}")
         for u in unloadable:

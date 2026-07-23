@@ -99,6 +99,7 @@ def decide_reshuffle_or_call(reason: UnloadableReason) -> LoadingAction:
 
 def generate_loading_plan(
     boxes: List["Box"], trunk, mode: str = "large_first", margin: Optional[float] = None,
+    allow_stacking: bool = False,
 ) -> Tuple[List["PlacementPlan"], List[UnloadableItem]]:
     """
     boxes, trunk를 받아서:
@@ -115,6 +116,13 @@ def generate_loading_plan(
 
     [margin] 벽/박스 최소 간격도 사용자가 조절 가능 (예: 냉동 물류는 냉기 순환용
     으로 훨씬 큰 간격 필요). None(기본값)이면 17_margin_check.MARGIN 그대로.
+
+    [allow_stacking] 트렁크 1층이 꽉 찼을 때 2층·3층으로 자동으로 쌓을지 여부.
+    False(기본값)면 지금까지처럼 1층 전용(하위 호환). True로 켜면 ⑤ 점수 기준이
+    원래 "낮은 자리 우선"이라, 바닥에 자리가 있는 동안은 항상 바닥부터 채우고
+    바닥이 꽉 찬 뒤에야 자동으로 위층에 올라간다 - "몇 층까지"를 따로 지정할
+    필요 없이 트렁크 높이가 허락하는 한 필요한 만큼만 쌓인다. ⑬(받침 비율)·
+    ⑮(상단 여유 공간)가 이미 안전 기준을 지키면서 배치되는지 확인해준다.
     """
     order = decide_loading_order(boxes, mode=mode)  # [⑥] 모드에 맞는 순서로 정렬
     state = ExtremePointState()          # 빈 트렁크 상태(후보는 (0,0,0) 하나)에서 시작
@@ -126,7 +134,8 @@ def generate_loading_plan(
 
     for box in order:
         # [⑦] 현재 state 기준으로 이 박스의 최적 자리를 찾아 배치 시도
-        plan = place_one_box(box, trunk, state, order_counter, score_fn=score_fn, margin=margin)
+        plan = place_one_box(box, trunk, state, order_counter, score_fn=score_fn, margin=margin,
+                              allow_stacking=allow_stacking)
         if plan is not None:
             plans.append(plan)
             order_counter += 1  # 실제로 배치된 것만 순번을 늘림

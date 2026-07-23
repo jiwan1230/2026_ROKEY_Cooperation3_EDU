@@ -71,17 +71,17 @@ def rebuild_state_from_rescan(rescanned_placed_boxes: List["PlacedBox"]) -> "Ext
 
 def replan_after_rescan(
     remaining_boxes: List["Box"], trunk, rescanned_placed_boxes: List["PlacedBox"],
-    mode: str = "large_first", margin: Optional[float] = None,
+    mode: str = "large_first", margin: Optional[float] = None, allow_stacking: bool = False,
 ):
     """
     재스캔 트리거(PER_PLACEMENT)가 발생할 때마다 호출.
     보수적 가정 버전: 재스캔으로 확인된 박스들로 상태를 다시 만들고,
     remaining_boxes(카트에 남은 것으로 알려진 박스)에 대해 이어서 계획한다.
 
-    mode/margin은 08_unloadable_reason.generate_loading_plan()과 같은 뜻 -
-    trunk_map_planner_node.py(ROS2)가 실제로 호출하는 게 08의 generate_loading_
-    plan()이 아니라 이 함수라서, 사용자가 고른 모드/마진이 로봇까지 실제로
-    전달되려면 여기도 지원해야 한다.
+    mode/margin/allow_stacking은 08_unloadable_reason.generate_loading_plan()과
+    같은 뜻 - trunk_map_planner_node.py(ROS2)가 실제로 호출하는 게 08의
+    generate_loading_plan()이 아니라 이 함수라서, 사용자가 고른 모드/마진/쌓기
+    허용 여부가 로봇까지 실제로 전달되려면 여기도 지원해야 한다.
     """
     # 재스캔 결과로 트렁크 상태(놓인 박스 + 후보 좌표)를 처음부터 다시 구성
     state = rebuild_state_from_rescan(rescanned_placed_boxes)
@@ -93,7 +93,8 @@ def replan_after_rescan(
     order_counter = len(rescanned_placed_boxes) + 1  # 순번은 기존에 놓인 개수 다음부터 이어감
 
     for box in order:
-        plan = place_one_box(box, trunk, state, order_counter, score_fn=score_fn, margin=margin)
+        plan = place_one_box(box, trunk, state, order_counter, score_fn=score_fn, margin=margin,
+                              allow_stacking=allow_stacking)
         if plan is not None:
             plans.append(plan)
             order_counter += 1
