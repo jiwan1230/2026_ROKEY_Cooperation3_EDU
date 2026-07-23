@@ -125,3 +125,51 @@ def test_place_one_box_leaves_margin_between_boxes():
     x_gap = max(x1 - (x2 + box2.width), x2 - (x1 + box1.width))
     y_gap = max(y1 - (y2 + box2.depth), y2 - (y1 + box1.depth))
     assert x_gap >= MARGIN - 1e-9 or y_gap >= MARGIN - 1e-9
+
+
+# ---------------------------------------------------------------------------
+# "HMI 화면 설계 가이드라인" 문서가 요구하는 마진 4종 분리(박스간/벽면/천장/
+# 장애물) 중 벽면·장애물 부분 - box_margin(margin)과 별개로 wall_margin/
+# obstacle_margin을 따로 줄 수 있어야 한다.
+# ---------------------------------------------------------------------------
+
+def test_has_sufficient_margin_wall_margin_override_is_independent_of_box_margin():
+    """wall_margin을 margin과 다르게 주면 벽 판정에는 wall_margin이 쓰이고
+    박스-박스 판정에는 그대로 margin(box_margin)이 쓰여야 한다."""
+    trunk = Trunk(width=1.0, depth=1.0, height=1.0)
+    box = Box("A", width=0.2, depth=0.2, height=0.2)
+    # 벽에서 0.05m 떨어짐: wall_margin=0.05면 통과, wall_margin=0.1이면 거부
+    assert has_sufficient_margin(0.05, 0.5, 0.0, box, trunk, [], margin=0.02, wall_margin=0.05) is True
+    assert has_sufficient_margin(0.05, 0.5, 0.0, box, trunk, [], margin=0.02, wall_margin=0.10) is False
+
+
+def test_has_sufficient_margin_wall_margin_defaults_to_margin_when_not_given():
+    """wall_margin을 안 주면 margin(box_margin) 값을 그대로 씀 - 하위 호환."""
+    trunk = Trunk(width=1.0, depth=1.0, height=1.0)
+    box = Box("A", width=0.2, depth=0.2, height=0.2)
+    assert has_sufficient_margin(0.05, 0.5, 0.0, box, trunk, [], margin=0.05) is True
+    assert has_sufficient_margin(0.04, 0.5, 0.0, box, trunk, [], margin=0.05) is False
+
+
+def test_obstacle_margin_applies_only_to_boxes_flagged_as_obstacle():
+    """is_obstacle=True인 PlacedBox와의 간격은 obstacle_margin으로, 일반 카트
+    박스와의 간격은 그대로 margin(box_margin)으로 판정해야 한다."""
+    trunk = Trunk(width=2.0, depth=2.0, height=1.0)
+    obstacle = PlacedBox(box=Box("Wheel", 0.3, 0.3, 0.2, is_obstacle=True), x=0.0, y=0.5, z=0.0)
+    cart_box = PlacedBox(box=Box("N", 0.3, 0.3, 0.2), x=1.0, y=0.5, z=0.0)
+    candidate = Box("C", width=0.2, depth=0.2, height=0.2)
+
+    # 장애물에서 0.05m: obstacle_margin=0.05면 통과, obstacle_margin=0.1이면 거부
+    # (y=0.5로 둘 다 벽 마진은 넉넉히 통과하게 잡아서, 여기서 갈리는 건 오직 박스-박스/장애물 판정뿐)
+    assert has_sufficient_margin(0.35, 0.5, 0.0, candidate, trunk, [obstacle],
+                                  margin=0.02, obstacle_margin=0.05) is True
+    assert has_sufficient_margin(0.35, 0.5, 0.0, candidate, trunk, [obstacle],
+                                  margin=0.02, obstacle_margin=0.10) is False
+    # 일반 카트 박스는 obstacle_margin이 아니라 margin(0.02)으로 판정되어야 함
+    assert has_sufficient_margin(0.65, 0.5, 0.0, candidate, trunk, [cart_box],
+                                  margin=0.02, obstacle_margin=0.10) is True
+
+
+def test_box_is_obstacle_defaults_to_false():
+    box = Box("A", width=0.2, depth=0.2, height=0.2)
+    assert box.is_obstacle is False

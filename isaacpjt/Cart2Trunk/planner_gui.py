@@ -348,7 +348,7 @@ class PlannerGUI(tk.Tk):
                                          width=100, height=30, radius=15)
         self.gen_button.pack(side="left", padx=(10, 0))
 
-        # ---- 2행: 적재 모드(세그먼트) / 마진 ----
+        # ---- 2행: 적재 모드(세그먼트) / 쌓기 / 실행 ----
         row2 = tk.Frame(inner, bg=Palette.surface)
         row2.pack(fill="x", pady=(16, 0))
 
@@ -359,27 +359,70 @@ class PlannerGUI(tk.Tk):
             self.mode_var, width=240, height=34)
         self.mode_control.grid(row=1, column=0, sticky="w", pady=(4, 0))
 
-        self._field_label(row2, f"마진 (m · 기본 {DEFAULT_MARGIN})").grid(row=0, column=1, sticky="w", padx=(28, 0))
-        self.margin_var = tk.StringVar(value="")
-        self.margin_entry = tk.Entry(row2, textvariable=self.margin_var, width=10, font=Font.body,
-                                      relief="solid", bd=1)
-        self.margin_entry.grid(row=1, column=1, sticky="w", padx=(28, 0), pady=(4, 0), ipady=3)
-
-        self._field_label(row2, "2층↑ 쌓기 허용").grid(row=0, column=2, sticky="w", padx=(28, 0))
+        self._field_label(row2, "2층↑ 쌓기 허용").grid(row=0, column=1, sticky="w", padx=(28, 0))
         stacking_frame = tk.Frame(row2, bg=Palette.surface)
-        stacking_frame.grid(row=1, column=2, sticky="w", padx=(28, 0), pady=(4, 0))
+        stacking_frame.grid(row=1, column=1, sticky="w", padx=(28, 0), pady=(4, 0))
         self.stacking_var = tk.BooleanVar(value=False)
         self.stacking_switch = ToggleSwitch(stacking_frame, self.stacking_var)
         self.stacking_switch.pack(side="left")
 
         self.run_button = RoundedButton(row2, "① 계획 계산", self._run, width=140, height=38)
-        self.run_button.grid(row=1, column=3, sticky="w", padx=(28, 0), pady=(4, 0))
+        self.run_button.grid(row=1, column=2, sticky="w", padx=(28, 0), pady=(4, 0))
 
         self.status_var = tk.StringVar(value="준비됨")
         tk.Label(row2, textvariable=self.status_var, font=Font.caption,
                  fg=Palette.text_secondary, bg=Palette.surface).grid(
-            row=1, column=4, sticky="w", padx=(16, 0), pady=(4, 0)
+            row=1, column=3, sticky="w", padx=(16, 0), pady=(4, 0)
         )
+
+        # ---- 2-b행: 안전 마진 4종 ("HMI 화면 설계 가이드라인" 문서 4절) - 전부
+        # 비워두면 각자 기본값(margin=17_margin_check.MARGIN, ceiling=15_overhead_
+        # clearance_check.OVERHEAD_CLEARANCE)을 그대로 쓴다. ----
+        row2b = tk.Frame(inner, bg=Palette.surface)
+        row2b.pack(fill="x", pady=(16, 0))
+
+        margin_fields = [
+            (f"박스 간격 (m · 기본 {DEFAULT_MARGIN})", "margin_var"),
+            ("벽면 간격 (m · 기본 박스간격과 동일)", "wall_margin_var"),
+            ("천장 여유 (m · 기본 0.20)", "ceiling_margin_var"),
+            ("장애물 간격 (m · 기본 박스간격과 동일)", "obstacle_margin_var"),
+        ]
+        self.margin_entries = []
+        for col, (label, var_name) in enumerate(margin_fields):
+            self._field_label(row2b, label).grid(row=0, column=col, sticky="w", padx=(0 if col == 0 else 28, 0))
+            var = tk.StringVar(value="")
+            setattr(self, var_name, var)
+            entry = tk.Entry(row2b, textvariable=var, width=10, font=Font.body, relief="solid", bd=1)
+            entry.grid(row=1, column=col, sticky="w", padx=(0 if col == 0 else 28, 0), pady=(4, 0), ipady=3)
+            self.margin_entries.append(entry)
+
+        # ---- 2-c행: 적재 우선순위 슬라이더 2축 + 회전 허용 토글 ----
+        row2c = tk.Frame(inner, bg=Palette.surface)
+        row2c.pack(fill="x", pady=(16, 0))
+
+        self._field_label(row2c, "입구 우선 ↔ 깊은 위치 우선").grid(row=0, column=0, sticky="w")
+        self.entrance_pref_var = tk.DoubleVar(value=1.0)
+        self.entrance_pref_scale = tk.Scale(
+            row2c, from_=-1.0, to=1.0, resolution=0.1, orient="horizontal", length=200,
+            variable=self.entrance_pref_var, showvalue=True, font=Font.caption,
+            bg=Palette.surface, highlightthickness=0, troughcolor=Palette.segment_bg)
+        self.entrance_pref_scale.grid(row=1, column=0, sticky="w", pady=(4, 0))
+
+        self._field_label(row2c, "공간활용률 우선 ↔ 안정성 우선(접촉면 가중치)").grid(
+            row=0, column=1, sticky="w", padx=(28, 0))
+        self.contact_pref_var = tk.DoubleVar(value=1.0)
+        self.contact_pref_scale = tk.Scale(
+            row2c, from_=0.0, to=2.0, resolution=0.1, orient="horizontal", length=200,
+            variable=self.contact_pref_var, showvalue=True, font=Font.caption,
+            bg=Palette.surface, highlightthickness=0, troughcolor=Palette.segment_bg)
+        self.contact_pref_scale.grid(row=1, column=1, sticky="w", padx=(28, 0), pady=(4, 0))
+
+        self._field_label(row2c, "박스 90도 회전 허용").grid(row=0, column=2, sticky="w", padx=(28, 0))
+        rotation_frame = tk.Frame(row2c, bg=Palette.surface)
+        rotation_frame.grid(row=1, column=2, sticky="w", padx=(28, 0), pady=(4, 0))
+        self.allow_rotation_var = tk.BooleanVar(value=True)
+        self.rotation_switch = ToggleSwitch(rotation_frame, self.allow_rotation_var)
+        self.rotation_switch.pack(side="left")
 
         # ---- 3행: 박스 목록 JSON (접이식 느낌으로 작게, 필요할 때만 손으로 수정) ----
         row3 = tk.Frame(inner, bg=Palette.surface)
@@ -481,15 +524,28 @@ class PlannerGUI(tk.Tk):
 
         cart_boxes_raw = json.loads(self.box_text.get("1.0", "end"))
         mode = self.mode_var.get()
-        margin_str = self.margin_var.get().strip()
-        margin = float(margin_str) if margin_str else None
+
+        def _parse_optional_float(var):
+            s = var.get().strip()
+            return float(s) if s else None
+
+        margin = _parse_optional_float(self.margin_var)
+        wall_margin = _parse_optional_float(self.wall_margin_var)
+        obstacle_margin = _parse_optional_float(self.obstacle_margin_var)
+        ceiling_margin = _parse_optional_float(self.ceiling_margin_var)
+        entrance_preference = self.entrance_pref_var.get()
+        contact_preference = self.contact_pref_var.get()
         allow_stacking = self.stacking_var.get()
+        allow_rotation = self.allow_rotation_var.get()
 
         self.status_var.set("계산 중...")
         self.update_idletasks()
 
         plans, unloadable, trunk, obstacles = plan_from_trunk_map_data(
-            data, cart_boxes_raw, mode=mode, margin=margin, allow_stacking=allow_stacking
+            data, cart_boxes_raw, mode=mode, margin=margin, allow_stacking=allow_stacking,
+            allow_rotation=allow_rotation, wall_margin=wall_margin, obstacle_margin=obstacle_margin,
+            ceiling_margin=ceiling_margin, entrance_preference=entrance_preference,
+            contact_preference=contact_preference,
         )
         effective_margin = margin if margin is not None else DEFAULT_MARGIN
 
@@ -538,7 +594,10 @@ class PlannerGUI(tk.Tk):
         self._render_images()
 
         log_lines = [f"[{run_name}] mode={mode}, margin={effective_margin:.2f}m, "
-                     f"쌓기={'허용' if allow_stacking else '1층전용'} -> {len(plans)}/{len(cart_boxes_raw)}개 배치"]
+                     f"쌓기={'허용' if allow_stacking else '1층전용'}, "
+                     f"회전={'허용' if allow_rotation else '비허용'}, "
+                     f"입구/깊이축={entrance_preference:+.1f}, 접촉면가중치={contact_preference:.1f} "
+                     f"-> {len(plans)}/{len(cart_boxes_raw)}개 배치"]
         for p in plans:
             log_lines.append(f"  PLACED {p.box_id}: pos=({p.position[0]:.2f},{p.position[1]:.2f},{p.position[2]:.2f}) rotated={p.rotated}")
         for u in unloadable:
@@ -561,7 +620,13 @@ class PlannerGUI(tk.Tk):
         self._last_run_parameters = {
             "mode": mode,
             "margin": effective_margin,
+            "wall_margin": wall_margin,
+            "obstacle_margin": obstacle_margin,
+            "ceiling_margin": ceiling_margin,
             "allow_stacking": allow_stacking,
+            "allow_rotation": allow_rotation,
+            "entrance_preference": entrance_preference,
+            "contact_preference": contact_preference,
         }
         self._pending_task = None
         self._set_plan_state("COMPUTED")
@@ -588,14 +653,19 @@ class PlannerGUI(tk.Tk):
     def _set_params_enabled(self, enabled: bool):
         combo_state = "readonly" if enabled else "disabled"
         entry_state = "normal" if enabled else "disabled"
+        scale_state = "normal" if enabled else "disabled"
         self.trunk_map_combo.configure(state=combo_state)
         self.box_preset_combo.configure(state=combo_state)
         self.box_count_spin.configure(state=entry_state)
-        self.margin_entry.configure(state=entry_state)
+        for entry in self.margin_entries:
+            entry.configure(state=entry_state)
+        self.entrance_pref_scale.configure(state=scale_state)
+        self.contact_pref_scale.configure(state=scale_state)
         self.box_text.configure(state=entry_state)
         self.gen_button.set_enabled(enabled)
         self.mode_control.set_enabled(enabled)
         self.stacking_switch.set_enabled(enabled)
+        self.rotation_switch.set_enabled(enabled)
         self.run_button.set_enabled(enabled)
 
     def _append_log(self, text: str):

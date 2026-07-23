@@ -62,7 +62,9 @@ class PlacementPlan:
 def place_one_box(
     box: "Box", trunk, state: "ExtremePointState", order: int,
     allow_stacking: bool = False, score_fn=None, margin: Optional[float] = None,
-    extra_validity_fn=None,
+    extra_validity_fn=None, allow_rotation: bool = True,
+    wall_margin: Optional[float] = None, obstacle_margin: Optional[float] = None,
+    ceiling_margin: Optional[float] = None,
 ) -> Optional["PlacementPlan"]:
     """
     현재 상태(state)에서 box 하나를 놓을 최선의 자리를 찾아 배치한다.
@@ -91,39 +93,64 @@ def place_one_box(
     확장점(예: 위험물 비호환 인접 금지). 기존 ④⑬⑮⑯⑰ 체인 뒤에 AND로 추가로
     끼워 넣는다 - None(기본값)이면 아무 것도 추가로 거르지 않는다(하위 호환).
     has_sufficient_margin과 같은 시그니처 (x, y, z, box, trunk, placed) -> bool.
+
+    [allow_rotation] "HMI 화면 설계 가이드라인" 문서의 "박스 90도 회전 허용"
+    토글. True(기본값)면 지금까지처럼 정자세 실패 시 90도 회전을 재시도한다
+    (하위 호환). False면 정자세로 안 들어가면 바로 실패 처리 - 재시도 자체를
+    안 한다.
+
+    [wall_margin/obstacle_margin/ceiling_margin] 문서의 나머지 마진 슬라이더
+    3종(벽면 간격/장애물 간격/천장 간격) - 전부 None(기본값)이면 margin(박스
+    간격)과 17_margin_check.MARGIN / 15_overhead_clearance_check.
+    OVERHEAD_CLEARANCE 그대로 쓴다(하위 호환). 17_margin_check.
+    has_sufficient_margin/15_overhead_clearance_check.has_overhead_clearance
+    참고.
     """
     logger.info(f"[{box.id}] 시도 (부피 {box.volume*1000:.1f}L, {box.width}x{box.depth}x{box.height})")
-    plan = _place_one_orientation(box, trunk, state, order, allow_stacking, rotated=False, score_fn=score_fn, margin=margin, extra_validity_fn=extra_validity_fn)
+    kwargs = dict(score_fn=score_fn, margin=margin, extra_validity_fn=extra_validity_fn,
+                  wall_margin=wall_margin, obstacle_margin=obstacle_margin, ceiling_margin=ceiling_margin)
+    plan = _place_one_orientation(box, trunk, state, order, allow_stacking, rotated=False, **kwargs)
     if plan is not None:
         return plan
+    if not allow_rotation:
+        return None  # 회전 자체가 비허용 - 재시도 안 함
     if box.width == box.depth:
         return None  # 정사각형이면 돌려도 후보가 똑같아서 재시도할 의미 없음
     logger.debug(f"[{box.id}] 정자세 실패 -> 90도 회전 재시도")
-    return _place_one_orientation(rotate_box(box), trunk, state, order, allow_stacking, rotated=True, score_fn=score_fn, margin=margin, extra_validity_fn=extra_validity_fn)
+    return _place_one_orientation(rotate_box(box), trunk, state, order, allow_stacking, rotated=True, **kwargs)
 
 
 def _place_one_orientation(
     box: "Box", trunk, state: "ExtremePointState", order: int,
     allow_stacking: bool, rotated: bool, score_fn=None, margin: Optional[float] = None,
     extra_validity_fn=None,
+    wall_margin: Optional[float] = None, obstacle_margin: Optional[float] = None,
+    ceiling_margin: Optional[float] = None,
 ) -> Optional["PlacementPlan"]:
     """place_one_box()의 실제 배치 로직 - 주어진 box의 치수(정자세 또는 이미
     회전된 치수)를 그대로 하나의 "자세"로 취급해서 자리를 찾는다."""
     _margin = margin if margin is not None else MARGIN
+    _wall_margin = wall_margin if wall_margin is not None else _margin
+    _ceiling_margin = ceiling_margin if ceiling_margin is not None else _m15.OVERHEAD_CLEARANCE
 
     # [③ 보강] 순수 모서리 확장만으로는 못 만드는 "이 박스라면 벽에 딱 붙는 자리"
     # + "이미 놓인 다른 박스 옆면에 딱 붙는 자리"를 지금 놓으려는 box 크기 기준으로
     # 추가 생성 - state.candidates에는 저장하지 않고 이번 배치 판단에만 잠깐 섞어
-    # 쓴다 (다른 박스 크기에는 안 맞을 수 있어서)
-    wall_flush = generate_wall_flush_candidates(box, trunk, state.candidates, margin=_margin)
-    box_flush = generate_box_flush_candidates(box, trunk, state.candidates, state.placed, margin=_margin)
+    # 쓴다 (다른 박스 크기에는 안 맞을 수 있어서). wall_flush는 wall_margin으로
+    # 생성해야 한다 - margin(box_margin)으로만 생성하면(과거 버그) has_wall_margin이
+    # 더 큰 wall_margin을 요구할 때 그 후보가 거부되고 대안이 없어 배치가 실패한다
+    # (obstacle_margin과 같은 종류의 버그였음 - generate_box_flush_candidates 참고).
+    wall_flush = generate_wall_flush_candidates(box, trunk, state.candidates, margin=_wall_margin)
+    box_flush = generate_box_flush_candidates(box, trunk, state.candidates, state.placed, margin=_margin,
+                                               obstacle_margin=obstacle_margin)
     # ⑰(마진) 도입 후 발견: "벽에 마진만큼 띄운 자리"가 하필 다른 박스와는 마진
     # 미달로 너무 가까운 경우가 있다 - 그 자리에서 다시 그 박스를 피해 마진만큼
     # 더 띄우는 조합("벽 마진" + "박스 마진" 둘 다 적용)은 각 생성기를 한 번씩만
     # 돌려서는 안 나온다. wall_flush 결과를 다시 box-flush 생성기에 넣어서 조합을
     # 만든다 (⑦이 아니라 ③+⑦ 조합 자체 확장 - 잘못된 후보가 섞여도 유효성 검사가
     # 그대로 걸러내므로 안전하다).
-    combo_flush = generate_box_flush_candidates(box, trunk, wall_flush, state.placed, margin=_margin)
+    combo_flush = generate_box_flush_candidates(box, trunk, wall_flush, state.placed, margin=_margin,
+                                                 obstacle_margin=obstacle_margin)
     candidate_pool = state.candidates | wall_flush | box_flush | combo_flush
 
     # [④+⑬+⑮+⑯+⑰] 후보 좌표들 중, 겹치지도 밖으로 나가지도 않고(④) 충분히
@@ -134,9 +161,10 @@ def _place_one_orientation(
     valid_candidates = [
         (x, y, z) for (x, y, z) in candidate_pool
         if is_candidate_valid_with_stacking(x, y, z, box, trunk, state.placed, allow_stacking=allow_stacking)
-        and has_overhead_clearance(z, box, trunk)
-        and has_clear_approach_path(x, y, z, box, trunk, state.placed)
-        and has_sufficient_margin(x, y, z, box, trunk, state.placed, margin=_margin)
+        and has_overhead_clearance(z, box, trunk, clearance=_ceiling_margin)
+        and has_clear_approach_path(x, y, z, box, trunk, state.placed, clearance=_ceiling_margin)
+        and has_sufficient_margin(x, y, z, box, trunk, state.placed, margin=_margin,
+                                   wall_margin=wall_margin, obstacle_margin=obstacle_margin)
         and (extra_validity_fn is None or extra_validity_fn(x, y, z, box, trunk, state.placed))
     ]
 

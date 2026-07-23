@@ -122,7 +122,9 @@ _DEFAULT_CART_BOXES = [
 
 def plan_from_trunk_map_data(
     data: dict, cart_boxes_raw: list, mode: str = "large_first", margin=None,
-    allow_stacking: bool = False,
+    allow_stacking: bool = False, allow_rotation: bool = True,
+    wall_margin=None, obstacle_margin=None, ceiling_margin=None,
+    entrance_preference: float = 1.0, contact_preference: float = 1.0,
 ) -> tuple:
     """
     trunk_map.json(dict)과 카트 박스 목록(dict 리스트)을 받아
@@ -132,16 +134,20 @@ def plan_from_trunk_map_data(
     돌려주는 이유: 결과 이미지를 그리려면 배치 결과뿐 아니라 트렁크 크기와
     장애물 위치도 필요해서다.
 
-    allow_stacking=True면 트렁크 1층이 꽉 찼을 때 자동으로 2층·3층에 쌓는다
-    (08_unloadable_reason.generate_loading_plan()의 같은 인자 참고 - 바닥에
-    자리가 있는 동안은 항상 바닥부터 채움).
+    나머지 파라미터는 09_rescan_replan.replan_after_rescan()과 같은 뜻 - 거기
+    docstring 참고 ("HMI 화면 설계 가이드라인" 문서의 마진 4종/우선순위 슬라이더/
+    회전 허용 토글).
     """
     world_map = load_trunk_from_world_map(data)  # 이미 dict 지원 (HANDOFF.md 5절)
     trunk, offset = world_map.to_bounding_trunk()
     obstacles = load_obstacles_from_world_map(data, offset)
     cart_boxes = [Box(**b) for b in cart_boxes_raw]
-    plans, unloadable = replan_after_rescan(cart_boxes, trunk, obstacles, mode=mode, margin=margin,
-                                             allow_stacking=allow_stacking)
+    plans, unloadable = replan_after_rescan(
+        cart_boxes, trunk, obstacles, mode=mode, margin=margin, allow_stacking=allow_stacking,
+        allow_rotation=allow_rotation, wall_margin=wall_margin, obstacle_margin=obstacle_margin,
+        ceiling_margin=ceiling_margin, entrance_preference=entrance_preference,
+        contact_preference=contact_preference,
+    )
     return plans, unloadable, trunk, obstacles
 
 
@@ -270,10 +276,28 @@ class TrunkMapPlannerNode(Node):
         self.declare_parameter("allow_stacking", False)
         self._allow_stacking = self.get_parameter("allow_stacking").value
 
+        self.declare_parameter("allow_rotation", True)
+        self._allow_rotation = self.get_parameter("allow_rotation").value
+
+        # -1.0 = "지정 안 함" 센티널 (margin과 같은 관례)
+        self.declare_parameter("wall_margin", -1.0)
+        self.declare_parameter("obstacle_margin", -1.0)
+        self.declare_parameter("ceiling_margin", -1.0)
+        self._wall_margin = self._none_if_unset(self.get_parameter("wall_margin").value)
+        self._obstacle_margin = self._none_if_unset(self.get_parameter("obstacle_margin").value)
+        self._ceiling_margin = self._none_if_unset(self.get_parameter("ceiling_margin").value)
+
+        self.declare_parameter("entrance_preference", 1.0)
+        self.declare_parameter("contact_preference", 1.0)
+        self._entrance_preference = self.get_parameter("entrance_preference").value
+        self._contact_preference = self.get_parameter("contact_preference").value
+
         self.get_logger().info(
             f"적재 정책: loading_mode={self._loading_mode}, "
             f"margin={'기본값' if self._margin is None else self._margin}, "
-            f"쌓기={'허용' if self._allow_stacking else '1층전용'}"
+            f"쌓기={'허용' if self._allow_stacking else '1층전용'}, "
+            f"회전={'허용' if self._allow_rotation else '비허용'}, "
+            f"entrance_preference={self._entrance_preference}, contact_preference={self._contact_preference}"
         )
 
         self.declare_parameter("save_image", True)
@@ -290,6 +314,11 @@ class TrunkMapPlannerNode(Node):
         )
         self.get_logger().info(f"{TRUNK_MAP_TOPIC} 구독 시작 (QoS: reliable + transient_local)")
 
+    @staticmethod
+    def _none_if_unset(value: float):
+        """margin과 같은 관례: 음수는 '지정 안 함' 센티널 -> None(코어 기본값 사용)."""
+        return value if value >= 0.0 else None
+
     def _on_trunk_map(self, msg: String) -> None:
         try:
             data = json.loads(msg.data)
@@ -299,7 +328,10 @@ class TrunkMapPlannerNode(Node):
 
         plans, unloadable, trunk, obstacles = plan_from_trunk_map_data(
             data, self._cart_boxes_raw, mode=self._loading_mode, margin=self._margin,
-            allow_stacking=self._allow_stacking,
+            allow_stacking=self._allow_stacking, allow_rotation=self._allow_rotation,
+            wall_margin=self._wall_margin, obstacle_margin=self._obstacle_margin,
+            ceiling_margin=self._ceiling_margin, entrance_preference=self._entrance_preference,
+            contact_preference=self._contact_preference,
         )
         _log_plan_result(self.get_logger().info, data, plans, unloadable, len(self._cart_boxes_raw))
 
@@ -313,13 +345,18 @@ class TrunkMapPlannerNode(Node):
 
 
 def _run_test_file(path: str, mode: str, margin, save_image: bool, cart_boxes_raw: list,
-                    allow_stacking: bool = False) -> None:
+                    allow_stacking: bool = False, allow_rotation: bool = True,
+                    wall_margin=None, obstacle_margin=None, ceiling_margin=None,
+                    entrance_preference: float = 1.0, contact_preference: float = 1.0) -> None:
     """ROS2 없이 파일 기반으로 파이프라인만 먼저 확인 (HANDOFF.md 8절 공통 액션 아이템)."""
     box_summary = ", ".join(f"{b['id']}({b['width']}x{b['depth']}x{b['height']})" for b in cart_boxes_raw)
     print(f"카트 박스 {len(cart_boxes_raw)}개: {box_summary}")
     data = json.loads(pathlib.Path(path).read_text())
     plans, unloadable, trunk, obstacles = plan_from_trunk_map_data(
-        data, cart_boxes_raw, mode=mode, margin=margin, allow_stacking=allow_stacking
+        data, cart_boxes_raw, mode=mode, margin=margin, allow_stacking=allow_stacking,
+        allow_rotation=allow_rotation, wall_margin=wall_margin, obstacle_margin=obstacle_margin,
+        ceiling_margin=ceiling_margin, entrance_preference=entrance_preference,
+        contact_preference=contact_preference,
     )
     _log_plan_result(print, data, plans, unloadable, len(cart_boxes_raw))
 
@@ -348,6 +385,15 @@ def main():
                          help="카트 박스 목록을 담은 JSON 파일 경로 - --cart-boxes-json 대신 쓸 수 있음 (둘 다 주면 이쪽이 우선)")
     parser.add_argument("--allow-stacking", action="store_true",
                          help="트렁크 1층이 꽉 차면 자동으로 2층·3층에 쌓기 허용 (기본은 1층 전용)")
+    parser.add_argument("--no-rotation", action="store_true",
+                         help="박스 90도 회전 재시도를 끔 (기본은 허용)")
+    parser.add_argument("--wall-margin", type=float, default=None, help="벽 간격(m) - 생략하면 --margin 값 그대로")
+    parser.add_argument("--obstacle-margin", type=float, default=None, help="장애물 간격(m) - 생략하면 --margin 값 그대로")
+    parser.add_argument("--ceiling-margin", type=float, default=None, help="천장 여유(m) - 생략하면 15_overhead_clearance_check.OVERHEAD_CLEARANCE(0.20m)")
+    parser.add_argument("--entrance-preference", type=float, default=1.0,
+                         help="입구(-1)~깊은위치(+1) 우선순위 축 (기본 1.0=지금까지 동작과 동일)")
+    parser.add_argument("--contact-preference", type=float, default=1.0,
+                         help="접촉면(공간활용/안정성 근사) 가중치 배율 (기본 1.0=지금까지 동작과 동일)")
     args, ros_args = parser.parse_known_args()
 
     logging.basicConfig(level=getattr(logging, args.log_level), format="[%(name)s] %(message)s")
@@ -360,7 +406,10 @@ def main():
         else:
             cart_boxes_raw = _DEFAULT_CART_BOXES
         _run_test_file(args.test_file, args.mode, args.margin, save_image=not args.no_image,
-                        cart_boxes_raw=cart_boxes_raw, allow_stacking=args.allow_stacking)
+                        cart_boxes_raw=cart_boxes_raw, allow_stacking=args.allow_stacking,
+                        allow_rotation=not args.no_rotation, wall_margin=args.wall_margin,
+                        obstacle_margin=args.obstacle_margin, ceiling_margin=args.ceiling_margin,
+                        entrance_preference=args.entrance_preference, contact_preference=args.contact_preference)
         return
 
     rclpy.init(args=ros_args)

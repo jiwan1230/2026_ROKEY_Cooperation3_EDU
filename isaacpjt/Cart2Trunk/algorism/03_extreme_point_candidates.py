@@ -43,6 +43,14 @@ class Box:
     # 기존 테스트/스크립트는 이 필드를 모르는 채로 Box를 만든다).
     initial_yaw: float = 0.0
 
+    # 이 Box가 카트 물품이 아니라 트렁크 안 고정 장애물(휠하우스 등)인지 여부.
+    # "HMI 화면 설계 가이드라인" 문서가 요구하는 "장애물 간격" 슬라이더를 "박스
+    # 간격"과 별개로 다루려면(⑰ has_sufficient_margin의 obstacle_margin), 어떤
+    # PlacedBox가 장애물인지 구분할 방법이 필요해서 추가. 02_trunk_space_state.
+    # load_obstacles_from_world_map()이 True로 설정해서 만든다. 기본값 False
+    # (일반 카트 박스).
+    is_obstacle: bool = False
+
     # 이 박스가 몇 번째 정류장에서 내려지는지 (1=첫 배송지) - 카트/트렁크 시나리오와
     # 무관한 범용 필드라 여기 코어에 둔다. industry_scenarios/scenario1_delivery_
     # truck.py가 "나중 정류장(숫자 큰 것)부터 트렁크 깊숙이 싣는다"(LIFO)는 정책에
@@ -196,7 +204,8 @@ def _ranges_overlap(a: Tuple[float, float], b: Tuple[float, float]) -> bool:
 
 
 def generate_box_flush_candidates(
-    box: Box, trunk, candidates, placed: List["PlacedBox"], margin: float = 0.0
+    box: Box, trunk, candidates, placed: List["PlacedBox"], margin: float = 0.0,
+    obstacle_margin: Optional[float] = None,
 ) -> Set[Tuple[float, float, float]]:
     """
     "이 박스라면 이미 놓인 다른 박스 옆면에 (margin만큼 띄우고) 붙을 수 있는 자리"
@@ -230,17 +239,22 @@ def generate_box_flush_candidates(
             px0, px1 = p.x_range
             py0, py1 = p.y_range
             pz0, pz1 = p.z_range
+            # p가 장애물이면 margin 대신 obstacle_margin만큼 뗀 자리를 생성한다 - 안
+            # 그러면(버그로 실제 발견됨) obstacle_margin > margin일 때 장애물 옆 후보가
+            # 항상 margin 거리로만 생기고, ⑰ 유효성 검사는 obstacle_margin을 요구해서
+            # 그 후보가 거부되는데 대안 후보가 아예 없어 배치 전체가 실패해버린다.
+            required = obstacle_margin if (p.box.is_obstacle and obstacle_margin is not None) else margin
 
             # x축 방향: 이 박스의 y/z가 p와 겹치면, p의 가까운 면(입구 쪽)과
-            # 먼 면(안쪽)에서 각각 margin만큼 뗀 x로 바꿔치기
+            # 먼 면(안쪽)에서 각각 required만큼 뗀 x로 바꿔치기
             if _ranges_overlap((y0, y1), (py0, py1)) and _ranges_overlap((z0, z1), (pz0, pz1)):
-                extra.add((px0 - box.width - margin, y, z))  # p 바로 앞(입구 쪽), margin만큼 띄움
-                extra.add((px1 + margin, y, z))              # p를 지나 바로 뒤(안쪽), margin만큼 띄움
+                extra.add((px0 - box.width - required, y, z))  # p 바로 앞(입구 쪽), required만큼 띄움
+                extra.add((px1 + required, y, z))              # p를 지나 바로 뒤(안쪽), required만큼 띄움
 
-            # y축 방향: 이 박스의 x/z가 p와 겹치면, p의 양쪽 면에서 margin만큼 뗀 y로 바꿔치기
+            # y축 방향: 이 박스의 x/z가 p와 겹치면, p의 양쪽 면에서 required만큼 뗀 y로 바꿔치기
             if _ranges_overlap((x0, x1), (px0, px1)) and _ranges_overlap((z0, z1), (pz0, pz1)):
-                extra.add((x, py0 - box.depth - margin, z))
-                extra.add((x, py1 + margin, z))
+                extra.add((x, py0 - box.depth - required, z))
+                extra.add((x, py1 + required, z))
 
     return extra
 

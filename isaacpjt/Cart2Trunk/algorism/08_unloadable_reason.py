@@ -40,6 +40,7 @@ decide_loading_order = _m06.decide_loading_order
 place_one_box = _m07.place_one_box
 PlacementPlan = _m07.PlacementPlan
 score_count_first = _m05.score_count_first
+make_weighted_score_fn = _m05.make_weighted_score_fn
 
 
 class UnloadableReason(Enum):
@@ -99,6 +100,8 @@ def decide_reshuffle_or_call(reason: UnloadableReason) -> LoadingAction:
 
 def _run_strategy(
     order: List["Box"], trunk, score_fn, margin: Optional[float], allow_stacking: bool,
+    allow_rotation: bool = True, wall_margin: Optional[float] = None,
+    obstacle_margin: Optional[float] = None, ceiling_margin: Optional[float] = None,
 ) -> Tuple[List["PlacementPlan"], List[UnloadableItem]]:
     """정해진 순서(order)를 [⑦] 하나씩 배치 시도하고 [⑧] 실패 사유를 분류하는 공통 루프."""
     state = ExtremePointState()          # 빈 트렁크 상태(후보는 (0,0,0) 하나)에서 시작
@@ -109,7 +112,9 @@ def _run_strategy(
     for box in order:
         # [⑦] 현재 state 기준으로 이 박스의 최적 자리를 찾아 배치 시도
         plan = place_one_box(box, trunk, state, order_counter, score_fn=score_fn, margin=margin,
-                              allow_stacking=allow_stacking)
+                              allow_stacking=allow_stacking, allow_rotation=allow_rotation,
+                              wall_margin=wall_margin, obstacle_margin=obstacle_margin,
+                              ceiling_margin=ceiling_margin)
         if plan is not None:
             plans.append(plan)
             order_counter += 1  # 실제로 배치된 것만 순번을 늘림
@@ -128,7 +133,10 @@ def _run_strategy(
 
 def generate_loading_plan(
     boxes: List["Box"], trunk, mode: str = "large_first", margin: Optional[float] = None,
-    allow_stacking: bool = False,
+    allow_stacking: bool = False, allow_rotation: bool = True,
+    wall_margin: Optional[float] = None, obstacle_margin: Optional[float] = None,
+    ceiling_margin: Optional[float] = None,
+    entrance_preference: float = 1.0, contact_preference: float = 1.0,
 ) -> Tuple[List["PlacementPlan"], List[UnloadableItem]]:
     """
     boxes, trunk를 받아서:
@@ -162,14 +170,35 @@ def generate_loading_plan(
     바닥에 자리가 남아있어도 위층을 고를 수 있음) - "몇 층까지"를 따로 지정할
     필요 없이 트렁크 높이가 허락하는 한 필요한 만큼만 쌓인다. ⑬(받침 비율)·
     ⑮(상단 여유 공간)가 이미 안전 기준을 지키면서 배치되는지 확인해준다.
+
+    [allow_rotation/wall_margin/obstacle_margin/ceiling_margin] ⑦
+    place_one_box()의 같은 이름 파라미터를 그대로 전달만 한다 - 자세한 설명은
+    거기 docstring 참고.
+
+    [entrance_preference/contact_preference] "적재 우선순위" 슬라이더 중
+    "입구 우선↔깊은 위치 우선"·"공간활용률 우선↔안정성 우선" 2축(⑤
+    make_weighted_score_fn 참고). 기본값(1.0, 1.0)이 아니면, mode가 원래
+    고르는 점수 함수(large_first의 기본 score_candidate, count_first의
+    score_count_first) 대신 이 가중치로 만든 점수 함수를 쓴다 - 사용자가
+    슬라이더를 직접 조정했다는 건 mode의 기본 전략보다 그 선호를 우선하겠다는
+    뜻으로 본다. 두 슬라이더 다 기본값이면 지금까지와 완전히 동일(하위 호환).
     """
+    weighted_fn = None
+    if entrance_preference != 1.0 or contact_preference != 1.0:
+        weighted_fn = make_weighted_score_fn(entrance_preference, contact_preference)
+
+    extra_kwargs = dict(allow_rotation=allow_rotation, wall_margin=wall_margin,
+                         obstacle_margin=obstacle_margin, ceiling_margin=ceiling_margin)
+
     if mode == "count_first":
-        # 후보 A: 작은 것부터 + 공간재사용 점수 (기존 count_first)
+        # 후보 A: 작은 것부터 + 공간재사용 점수 (기존 count_first) - 가중치 슬라이더가
+        # 조정됐으면 그쪽을 우선
         order_small_first = decide_loading_order(boxes, mode="count_first")
-        plans_a, unloadable_a = _run_strategy(order_small_first, trunk, score_count_first, margin, allow_stacking)
-        # 후보 B: 큰 것부터 + 기본 점수 (large_first와 완전히 동일한 전략)
+        score_a = weighted_fn if weighted_fn is not None else score_count_first
+        plans_a, unloadable_a = _run_strategy(order_small_first, trunk, score_a, margin, allow_stacking, **extra_kwargs)
+        # 후보 B: 큰 것부터 + 기본 점수(또는 가중치 점수) - large_first와 동일한 전략
         order_large_first = decide_loading_order(boxes, mode="large_first")
-        plans_b, unloadable_b = _run_strategy(order_large_first, trunk, None, margin, allow_stacking)
+        plans_b, unloadable_b = _run_strategy(order_large_first, trunk, weighted_fn, margin, allow_stacking, **extra_kwargs)
 
         if len(plans_b) > len(plans_a):
             logger.info(
@@ -180,7 +209,7 @@ def generate_loading_plan(
         return plans_a, unloadable_a
 
     order = decide_loading_order(boxes, mode=mode)  # [⑥] 모드에 맞는 순서로 정렬
-    return _run_strategy(order, trunk, None, margin, allow_stacking)
+    return _run_strategy(order, trunk, weighted_fn, margin, allow_stacking, **extra_kwargs)
 
 
 if __name__ == "__main__":

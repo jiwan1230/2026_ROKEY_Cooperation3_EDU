@@ -217,7 +217,8 @@ def load_obstacles_from_world_map(raw_scan_data, offset: Tuple[float, float, flo
         x_min, y_min, z_min = min(xs), min(ys), min(zs)
         x_max, y_max, z_max = max(xs), max(ys), max(zs)
         box = Box(id=obs.get("name", f"obstacle_{i}"),
-                   width=x_max - x_min, depth=y_max - y_min, height=z_max - z_min)
+                   width=x_max - x_min, depth=y_max - y_min, height=z_max - z_min,
+                   is_obstacle=True)
         placed.append(PlacedBox(box=box, x=x_min - ox, y=y_min - oy, z=z_min - oz))
     return placed
 
