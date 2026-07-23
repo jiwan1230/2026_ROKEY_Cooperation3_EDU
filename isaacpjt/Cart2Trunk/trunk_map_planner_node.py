@@ -89,12 +89,18 @@ _m02 = import_module("02_trunk_space_state")
 _m03 = import_module("03_extreme_point_candidates")
 _m09 = import_module("09_rescan_replan")
 _m17 = import_module("17_margin_check")
+_m20 = import_module("20_task_export")
 
 load_trunk_from_world_map = _m02.load_trunk_from_world_map
 load_obstacles_from_world_map = _m02.load_obstacles_from_world_map
 Box = _m03.Box
 replan_after_rescan = _m09.replan_after_rescan
 DEFAULT_MARGIN = _m17.MARGIN
+build_task_json = _m20.build_task_json
+
+# 승인된 Task JSON을 로컬에 남겨두는 위치(⚠️ 실제 MSI2 전송 경로가 확정될 때까지의
+# 임시 목적지 - _send_task_to_msi2 참고).
+_PENDING_TASKS_DIR = pathlib.Path(__file__).resolve().parent / "algorism" / "local_test_data" / "pending_tasks"
 
 TRUNK_MAP_TOPIC = "/cart2trunk/trunk_map"
 
@@ -137,6 +143,31 @@ def plan_from_trunk_map_data(
     plans, unloadable = replan_after_rescan(cart_boxes, trunk, obstacles, mode=mode, margin=margin,
                                              allow_stacking=allow_stacking)
     return plans, unloadable, trunk, obstacles
+
+
+def _send_task_to_msi2(task_json: dict, out_dir=None) -> str:
+    """
+    승인된 Task JSON(20_task_export.build_task_json 결과)을 MSI2로 전달한다.
+
+    ⚠️ TODO(지완 확인 필요): 실제 전달 방식이 아직 미확정이다. "Cart2Trunk
+    담당자별 최종 실행 가이드라인" 문서는 지완이 execute_loading_task_action_
+    server를 구현한다고만 되어 있고, Lenovo가 거기로 Task를 어떻게 넘기는지
+    (액션 goal? 전용 토픽? 서비스?) 이름·타입이 전혀 안 정해져 있다.
+
+    그래서 지금은 실제로 아무 데도 전송하지 않고 로컬 파일로만 저장한다 -
+    "사용자가 승인하지 않은 계획은 MSI2로 전달하지 않는다"는 HMI 8절 원칙 #3을
+    approved=False를 거부하는 방식으로 이 함수 레벨에서도 강제한다(호출부
+    실수로도 안 새게). 실제 전송 방식이 정해지면 마지막 두 줄만 실제
+    퍼블리시/서비스 호출로 바꾸면 되고, 호출부(GUI)는 안 바뀐다.
+    """
+    if not task_json.get("approved", False):
+        raise ValueError("approved=False인 Task는 MSI2로 보낼 수 없음 (승인 전 전달 금지 원칙)")
+
+    target_dir = pathlib.Path(out_dir) if out_dir is not None else _PENDING_TASKS_DIR
+    target_dir.mkdir(parents=True, exist_ok=True)
+    out_path = target_dir / f"{task_json['plan_id']}.json"
+    out_path.write_text(json.dumps(task_json, ensure_ascii=False, indent=2))
+    return str(out_path)
 
 
 def _log_plan_result(log, data: dict, plans, unloadable, cart_box_count: int) -> None:

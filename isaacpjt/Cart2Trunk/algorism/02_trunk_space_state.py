@@ -45,6 +45,24 @@ load_obstacles_from_world_map()으로 PlacedBox로 변환 가능.
 
 [지완 답변 - 재스캔 트리거]
 박스 1개 배치할 때마다 무조건 재스캔 ("PER_PLACEMENT" 고정 주기).
+
+[⚠️ 확인 필요 - trunk_map.json 스키마 두 버전 존재]
+"Cart2Trunk 최종 프로젝트 시나리오 및 시스템 흐름" 문서 4.2절은 trunk_map.json을
+{"map_id":..., "frame_id":..., "quality_score":..., "bounds":{}, "floor":{},
+"walls":[], "ceiling_limit":..., "obstacles":[], "occupied_boxes":[],
+"free_volume":...} 형태로 정의하는데, 지완의 실제 13.export_trunk_map.py 출력
+(위에서 이미 실측 데이터로 검증 완료된 형식)은 {"schema_version":...,
+"run_id":..., "vertices":[...], "edges":[...], "obstacles":[...]} 형태로
+필드명이 다르다(map_id 없음, quality_score 없음, walls/floor 분리 안 됨 등).
+
+이 파일의 load_trunk_from_world_map()은 실제로 검증된 후자(vertices/edges)
+기준으로 이미 동작 중이라 그대로 둔다 - 문서가 정의한 "목표" 스키마로
+섣불리 바꾸면 지완 쪽과 이미 맞춰놓은 실제 연동이 깨질 수 있다. 두 스키마 중
+최종적으로 뭘 쓸지(혹은 필드명만 다른 같은 데이터인지)는 준형·지완과 확인
+필요 - box_snapshot_id/trunk_map_id 정합성 검증(HMI 8절 원칙 #2)을 제대로
+구현하려면 map_id에 대응하는 필드가 필요한데, 지금 스키마엔 run_id가 그
+역할을 대신할 수 있어 보이지만(20_task_export.py에서 trunk_map_id로 run_id를
+임시로 씀) 확정된 답은 아니다.
 """
 
 from dataclasses import dataclass, field

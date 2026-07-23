@@ -37,6 +37,12 @@ class Box:
     # (support_candidate_id 등)과의 정확한 매핑은 ①에서 별도로 확정 필요.
     rests_on_id: Optional[str] = None
 
+    # 카트에서 검출된 초기 회전각(라디안) - ①.Object3D.yaw를 그대로 옮겨온 값.
+    # ⑦ PlacementPlan.target_yaw가 "이 값 + (90도 회전했으면 90도)"로 MSI2에
+    # 넘길 최종 목표 Yaw를 계산하는 데 쓴다. 기본값 0.0(하위 호환 - 대부분의
+    # 기존 테스트/스크립트는 이 필드를 모르는 채로 Box를 만든다).
+    initial_yaw: float = 0.0
+
     # 이 박스가 몇 번째 정류장에서 내려지는지 (1=첫 배송지) - 카트/트렁크 시나리오와
     # 무관한 범용 필드라 여기 코어에 둔다. industry_scenarios/scenario1_delivery_
     # truck.py가 "나중 정류장(숫자 큰 것)부터 트렁크 깊숙이 싣는다"(LIFO)는 정책에

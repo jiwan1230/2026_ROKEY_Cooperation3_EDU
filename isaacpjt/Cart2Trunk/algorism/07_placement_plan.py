@@ -13,6 +13,7 @@
 """
 
 import logging
+import math
 import sys, pathlib
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
@@ -52,6 +53,10 @@ class PlacementPlan:
     score: float
     touches: int
     rotated: bool = False  # True면 ⑱ 90도 회전(가로/세로 교환)된 자세로 놓인 것
+    # MSI2(민결)에 넘길 최종 목표 회전각(라디안) - box.initial_yaw(①에서 넘어온
+    # 카트 위 초기 자세) + (rotated면 90도, 아니면 0). "HMI 화면 설계 가이드라인"
+    # 문서의 Task 출력 필수 필드 "Target Yaw"에 대응.
+    target_yaw: float = 0.0
 
 
 def place_one_box(
@@ -157,6 +162,8 @@ def _place_one_orientation(
     placed_box = PlacedBox(box=box, x=best_pos[0], y=best_pos[1], z=best_pos[2])
     state.register_placement(placed_box)
 
+    target_yaw = box.initial_yaw + (math.pi / 2 if rotated else 0.0)
+
     return PlacementPlan(
         box_id=box.id,
         order=order,
@@ -165,6 +172,7 @@ def _place_one_orientation(
         score=best_score,
         touches=best_touches,
         rotated=rotated,
+        target_yaw=target_yaw,
     )
 
 

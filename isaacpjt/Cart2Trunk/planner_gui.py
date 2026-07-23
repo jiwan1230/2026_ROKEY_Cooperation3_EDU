@@ -32,6 +32,7 @@ import pathlib
 import random
 import sys
 import tkinter as tk
+from datetime import datetime
 from importlib import import_module
 from tkinter import ttk, messagebox
 
@@ -51,6 +52,8 @@ plan_from_trunk_map_data = _planner.plan_from_trunk_map_data
 _color_for_box_id = _planner._color_for_box_id
 DEFAULT_MARGIN = _planner.DEFAULT_MARGIN
 _DEFAULT_CART_BOXES = _planner._DEFAULT_CART_BOXES
+build_task_json = _planner.build_task_json
+_send_task_to_msi2 = _planner._send_task_to_msi2
 SceneBox = _viz.SceneBox
 draw_scene = _viz.draw_scene
 
@@ -146,6 +149,7 @@ class SegmentedControl(tk.Canvas):
         # self._w/self._h는 tkinter 내부 예약 속성이라 다른 이름 사용 (RoundedButton 참고)
         self._ctrl_w, self._ctrl_h = width, height
         self._seg_w = width / len(options)
+        self._enabled = True
         self.bind("<Button-1>", self._on_click)
         self._var.trace_add("write", lambda *_: self._draw())
         self._draw()
@@ -164,11 +168,19 @@ class SegmentedControl(tk.Canvas):
                     smooth=True, fill=Palette.surface, outline="",
                 )
             fg = Palette.text_primary if value == current else Palette.text_secondary
+            if not self._enabled:
+                fg = Palette.border
             self.create_text((x1 + x2) / 2, self._ctrl_h / 2, text=label, fill=fg, font=Font.label)
 
     def _on_click(self, event):
+        if not self._enabled:
+            return
         idx = min(int(event.x // self._seg_w), len(self._segments) - 1)
         self._var.set(self._segments[idx][1])
+
+    def set_enabled(self, enabled: bool):
+        self._enabled = enabled
+        self._draw()
 
 
 class ToggleSwitch(tk.Canvas):
@@ -179,21 +191,33 @@ class ToggleSwitch(tk.Canvas):
                           bg=parent["bg"], **kwargs)
         self._var = variable
         self._sw_w, self._sw_h = width, height
-        self.bind("<Button-1>", lambda e: self._var.set(not self._var.get()))
+        self._enabled = True
+        self.bind("<Button-1>", self._on_click)
         self.bind("<Enter>", lambda e: self.configure(cursor="hand2"))
         self._var.trace_add("write", lambda *_: self._draw())
         self._draw()
+
+    def _on_click(self, event):
+        if not self._enabled:
+            return
+        self._var.set(not self._var.get())
 
     def _draw(self):
         self.delete("all")
         on = bool(self._var.get())
         track_fill = Palette.success if on else Palette.segment_bg
+        if not self._enabled:
+            track_fill = Palette.border
         self.create_polygon(_rounded_rect_points(0, 0, self._sw_w, self._sw_h, self._sw_h / 2),
                              smooth=True, fill=track_fill, outline="")
         r = self._sw_h / 2 - 2
         cx = self._sw_w - self._sw_h / 2 if on else self._sw_h / 2
         cy = self._sw_h / 2
         self.create_oval(cx - r, cy - r, cx + r, cy + r, fill="white", outline="")
+
+    def set_enabled(self, enabled: bool):
+        self._enabled = enabled
+        self._draw()
 
 
 class Card(tk.Frame):
@@ -250,6 +274,17 @@ class PlannerGUI(tk.Tk):
         self._tk_images = {}       # PhotoImage 참조 유지용
         self._pil_originals = {}   # 원본 PIL 이미지 캐시 (창 크기 바뀔 때 재계산 없이 리사이즈만)
         self._resize_job = None
+
+        # ---- 승인 워크플로우 상태 (HMI 8절 원칙: 승인 전엔 MSI2로 전달 안 함,
+        # 실행 중 파라미터 변경 금지) ----
+        # NOT_COMPUTED(계획 없음) -> COMPUTED(계산됨, 승인 대기) -> APPROVED(승인됨,
+        # 파라미터 잠금 + MSI2 전송 가능). "계획 거부"는 항상 NOT_COMPUTED로 되돌린다.
+        self._plan_state = "NOT_COMPUTED"
+        self._last_plans = None
+        self._last_trunk_map_id = None
+        self._last_box_snapshot_id = None
+        self._last_run_parameters = None
+        self._pending_task = None
 
         self._build_header()
         self._build_controls()
@@ -308,9 +343,10 @@ class PlannerGUI(tk.Tk):
                                           textvariable=self.box_count_var, font=Font.body,
                                           relief="solid", bd=1)
         self.box_count_spin.pack(side="left")
-        RoundedButton(gen_frame, "자동 생성", self._on_generate_boxes,
-                      bg=Palette.segment_bg, fg=Palette.text_primary,
-                      width=100, height=30, radius=15).pack(side="left", padx=(10, 0))
+        self.gen_button = RoundedButton(gen_frame, "자동 생성", self._on_generate_boxes,
+                                         bg=Palette.segment_bg, fg=Palette.text_primary,
+                                         width=100, height=30, radius=15)
+        self.gen_button.pack(side="left", padx=(10, 0))
 
         # ---- 2행: 적재 모드(세그먼트) / 마진 ----
         row2 = tk.Frame(inner, bg=Palette.surface)
@@ -318,22 +354,25 @@ class PlannerGUI(tk.Tk):
 
         self._field_label(row2, "적재 모드").grid(row=0, column=0, sticky="w")
         self.mode_var = tk.StringVar(value="large_first")
-        SegmentedControl(row2, [("큰 거 우선", "large_first"), ("개수 우선", "count_first")],
-                          self.mode_var, width=240, height=34).grid(row=1, column=0, sticky="w", pady=(4, 0))
+        self.mode_control = SegmentedControl(
+            row2, [("큰 거 우선", "large_first"), ("개수 우선", "count_first")],
+            self.mode_var, width=240, height=34)
+        self.mode_control.grid(row=1, column=0, sticky="w", pady=(4, 0))
 
         self._field_label(row2, f"마진 (m · 기본 {DEFAULT_MARGIN})").grid(row=0, column=1, sticky="w", padx=(28, 0))
         self.margin_var = tk.StringVar(value="")
-        margin_entry = tk.Entry(row2, textvariable=self.margin_var, width=10, font=Font.body,
-                                 relief="solid", bd=1)
-        margin_entry.grid(row=1, column=1, sticky="w", padx=(28, 0), pady=(4, 0), ipady=3)
+        self.margin_entry = tk.Entry(row2, textvariable=self.margin_var, width=10, font=Font.body,
+                                      relief="solid", bd=1)
+        self.margin_entry.grid(row=1, column=1, sticky="w", padx=(28, 0), pady=(4, 0), ipady=3)
 
         self._field_label(row2, "2층↑ 쌓기 허용").grid(row=0, column=2, sticky="w", padx=(28, 0))
         stacking_frame = tk.Frame(row2, bg=Palette.surface)
         stacking_frame.grid(row=1, column=2, sticky="w", padx=(28, 0), pady=(4, 0))
         self.stacking_var = tk.BooleanVar(value=False)
-        ToggleSwitch(stacking_frame, self.stacking_var).pack(side="left")
+        self.stacking_switch = ToggleSwitch(stacking_frame, self.stacking_var)
+        self.stacking_switch.pack(side="left")
 
-        self.run_button = RoundedButton(row2, "▶  실행", self._run, width=140, height=38)
+        self.run_button = RoundedButton(row2, "① 계획 계산", self._run, width=140, height=38)
         self.run_button.grid(row=1, column=3, sticky="w", padx=(28, 0), pady=(4, 0))
 
         self.status_var = tk.StringVar(value="준비됨")
@@ -350,6 +389,29 @@ class PlannerGUI(tk.Tk):
                                  wrap="none", padx=8, pady=6)
         self.box_text.pack(fill="x", pady=(4, 0))
         self._on_preset_selected()
+
+        # ---- 4행: 승인 워크플로우 - "HMI 화면 설계 가이드라인" 4절이 요구하는
+        # 계획계산(위 ①) -> 현재계획승인 -> 계획거부/승인및실행 흐름. 승인되면
+        # 파라미터가 잠기고(_set_params_enabled), 승인 전엔 MSI2로 아무것도
+        # 나가지 않는다(_send_task_to_msi2가 approved=False를 거부).
+        row4 = tk.Frame(inner, bg=Palette.surface)
+        row4.pack(fill="x", pady=(16, 0))
+
+        self.approve_button = RoundedButton(row4, "② 현재 계획 승인", self._on_approve,
+                                             bg=Palette.success, width=160, height=36)
+        self.approve_button.pack(side="left")
+        self.reject_button = RoundedButton(row4, "계획 거부", self._on_reject,
+                                            bg=Palette.danger, width=110, height=36)
+        self.reject_button.pack(side="left", padx=(10, 0))
+        self.send_button = RoundedButton(row4, "③ 승인 및 실행(MSI2로)", self._on_send,
+                                          bg=Palette.accent, width=190, height=36)
+        self.send_button.pack(side="left", padx=(10, 0))
+
+        self.plan_state_var = tk.StringVar(value="")
+        tk.Label(row4, textvariable=self.plan_state_var, font=Font.caption,
+                 fg=Palette.text_secondary, bg=Palette.surface).pack(side="left", padx=(16, 0))
+
+        self._set_plan_state("NOT_COMPUTED")
 
     def _field_label(self, parent, text):
         return tk.Label(parent, text=text, font=Font.section, fg=Palette.text_secondary, bg=Palette.surface)
@@ -485,6 +547,98 @@ class PlannerGUI(tk.Tk):
         self.log_text.insert("1.0", "\n".join(log_lines))
 
         self.status_var.set(f"완료 - {len(plans)}/{len(cart_boxes_raw)}개 배치")
+
+        # ---- 승인 워크플로우용 메타데이터 저장 (② 현재 계획 승인이 이걸로 Task
+        # JSON을 만든다) ----
+        self._last_plans = plans
+        self._last_trunk_map_id = data.get("run_id", run_name)  # trunk_map.json 실제 필드(run_id) 재사용
+        # ⚠️ box_snapshot_id는 아직 placeholder다 - 이 GUI의 박스 입력은 실제
+        # box_scan.json(①.load_box_snapshot_from_json)이 아니라 프리셋/수동 JSON을
+        # 쓰고 있어서 진짜 snapshot_id가 없다. 실제 비전 연동 시 box_scan.json을
+        # 선택하는 UI(트렁크 스캔 파일 선택과 같은 방식)로 교체하면서 여기도
+        # snapshot.snapshot_id로 바꿔야 한다.
+        self._last_box_snapshot_id = f"manual_input:{self.box_preset_var.get()}"
+        self._last_run_parameters = {
+            "mode": mode,
+            "margin": effective_margin,
+            "allow_stacking": allow_stacking,
+        }
+        self._pending_task = None
+        self._set_plan_state("COMPUTED")
+
+    # ------------------------------------------------------ 승인 워크플로우
+
+    def _set_plan_state(self, state: str):
+        """NOT_COMPUTED -> COMPUTED -> APPROVED. "계획 거부"는 항상 NOT_COMPUTED로
+        되돌린다(재계산부터 다시 하도록 강제 - 승인 없이 애매하게 남는 상태를 없앰)."""
+        self._plan_state = state
+        labels = {
+            "NOT_COMPUTED": "①을 먼저 눌러 계획을 계산하세요",
+            "COMPUTED": "계획 계산됨 - ②로 승인하거나 거부하세요",
+            "APPROVED": "승인됨 - 파라미터 잠김 - ③으로 MSI2에 보낼 수 있습니다",
+        }
+        self.plan_state_var.set(labels[state])
+        self.approve_button.set_enabled(state == "COMPUTED")
+        self.reject_button.set_enabled(state in ("COMPUTED", "APPROVED"))
+        self.send_button.set_enabled(state == "APPROVED")
+        # HMI 8절 원칙 #4: 실행 중(=승인 후) 파라미터 변경 금지 - 승인되면 잠그고,
+        # 거부/재계산 전까지는 안 풀린다.
+        self._set_params_enabled(state != "APPROVED")
+
+    def _set_params_enabled(self, enabled: bool):
+        combo_state = "readonly" if enabled else "disabled"
+        entry_state = "normal" if enabled else "disabled"
+        self.trunk_map_combo.configure(state=combo_state)
+        self.box_preset_combo.configure(state=combo_state)
+        self.box_count_spin.configure(state=entry_state)
+        self.margin_entry.configure(state=entry_state)
+        self.box_text.configure(state=entry_state)
+        self.gen_button.set_enabled(enabled)
+        self.mode_control.set_enabled(enabled)
+        self.stacking_switch.set_enabled(enabled)
+        self.run_button.set_enabled(enabled)
+
+    def _append_log(self, text: str):
+        self.log_text.insert("end", "\n" + text)
+        self.log_text.see("end")
+
+    def _on_approve(self):
+        if self._plan_state != "COMPUTED" or self._last_plans is None:
+            return
+        plan_id = f"load_plan_{datetime.now():%Y%m%d_%H%M%S}"
+        task = build_task_json(
+            plan_id=plan_id,
+            box_snapshot_id=self._last_box_snapshot_id,
+            trunk_map_id=self._last_trunk_map_id,
+            parameters=self._last_run_parameters,
+            plans=self._last_plans,
+            approved=True,
+        )
+        self._pending_task = task
+        self._append_log(
+            f"[승인] plan_id={plan_id} (box_snapshot_id={self._last_box_snapshot_id} - "
+            f"아직 placeholder, 실제 비전 스냅샷 연동 전)"
+        )
+        self._set_plan_state("APPROVED")
+
+    def _on_reject(self):
+        self._pending_task = None
+        self._append_log("[거부] 계획을 거부했습니다 - 파라미터를 조정하고 ①부터 다시 계산하세요.")
+        self._set_plan_state("NOT_COMPUTED")
+
+    def _on_send(self):
+        if self._plan_state != "APPROVED" or self._pending_task is None:
+            return
+        try:
+            out_path = _send_task_to_msi2(self._pending_task)
+        except Exception as e:
+            messagebox.showerror("오류", f"{type(e).__name__}: {e}")
+            return
+        self._append_log(
+            f"[승인 및 실행] MSI2 실제 전송 경로 미확정(TODO - 지완 확인 필요) - "
+            f"로컬에만 저장됨: {out_path}\n  실제 로봇 동작은 시작되지 않습니다."
+        )
+        self.status_var.set("승인된 계획을 로컬에 저장함 (MSI2 실전송 경로 확정 대기)")
 
     # ------------------------------------------------------- 이미지 크기 조절
 
