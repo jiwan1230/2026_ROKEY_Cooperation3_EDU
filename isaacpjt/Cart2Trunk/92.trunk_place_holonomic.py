@@ -1558,12 +1558,24 @@ if STAGE >= 2:
         detached = not m0609_robot.gripper.is_closed()
         return pose_broken or y_broken or detached
 
+    # 사용자 설계 문서(3차: VERIFY_TRANSITION_POCKET) - "박스 뒤쪽이 입구를 넘었는가"만으로는
+    # 부족하다. 박스 앞쪽이 (안쪽으로 갈수록 낮아지는) 내부천장 시작점을 넘어서기 전이어야
+    # 하고, 지금 자세의 실측 클리어런스(그리퍼/link_6/전완 포함 포락선 기준)도 최소 여유를
+    # 만족해야 한다 - 그래야 "다음 하강/자세복원 스윕이 안전한 상태"임을 확실히 하는
+    # VERIFY_TRANSITION_POCKET 조건이 된다.
+    FRONT_CLEAR_MARGIN = 0.01  # 박스 앞쪽이 내부천장 시작점보다 이만큼 못 미쳐야 한다.
+    MIN_CLEARANCE_MARGIN = HORIZONTAL_PASS_MARGIN  # 포락선 최소 여유(기존 마진 상수 재사용)
+
     def _box_cleared_entrance():
-        rear_x, _, box_center = _get_box_x_edges()
+        rear_x, front_x, box_center = _get_box_x_edges()
         x_cleared = rear_x >= TRUNK_ENTRANCE_X + ENTRANCE_CLEAR_MARGIN
+        front_clear = front_x <= INTERNAL_CEILING_START_X - FRONT_CLEAR_MARGIN
         y_centered = abs(float(box_center[1]) - ANCHOR_Y) < STAGE2_Y_TOLERANCE
         attached = m0609_robot.gripper.is_closed()
-        return x_cleared and y_centered and attached
+        if not (x_cleared and front_clear and y_centered and attached):
+            return False
+        clearance = evaluate_pose_clearance()["minimum_clearance"]
+        return clearance is not None and clearance >= MIN_CLEARANCE_MARGIN
 
     def _stage2_max_speed():
         # 사용자 지적 - 0.4m/s는 트렁크 입구를 통과하는 속도치고 너무 빠르다(충돌 시 충격
@@ -1593,7 +1605,9 @@ if STAGE >= 2:
               f"그리퍼팁=({tip_pos[0]:.3f},{tip_pos[1]:.3f},{tip_pos[2]:.3f}) "
               f"팁-섀시상대오차(기준대비)={rel_error:.4f}m | "
               f"박스 뒤={rear_x:.3f} 앞={front_x:.3f} 중심={np.round(box_center,3)} "
-              f"임계값까지남은거리={threshold_x - rear_x:+.3f} 붙어있음={m0609_robot.gripper.is_closed()}",
+              f"임계값까지남은거리={threshold_x - rear_x:+.3f} "
+              f"내부천장시작x={INTERNAL_CEILING_START_X:.3f}(앞쪽까지여유={INTERNAL_CEILING_START_X - front_x:+.3f}) "
+              f"붙어있음={m0609_robot.gripper.is_closed()}",
               flush=True)
 
     # 사용자 설계 문서(Stage 2 한계 극복) - Tilt-and-Insert: 박스+그리퍼 스택이 수평으로는
@@ -1765,13 +1779,6 @@ if STAGE >= 3:
     # 같이 내려갔으면 좋겠다"고 지적 - 리프트/ee가 같은 양만큼 함께 내려가도록 target_z도
     # STAGE3_PRE_LIFT_DROP만큼 낮춘다(팔이 보정용으로 더 뻗지 않고, 자세 자체는 유지한 채
     # 통째로 하강).
-    STAGE3_PRE_LIFT_DROP = 0.05
-    STAGE3_PRE_LIFT_H = max(LIFT_MIN, LIFT_MAX - STAGE3_PRE_LIFT_DROP)
-    # STAGE 3 전체(정밀 접근 + 마무리 정렬)에서 쓸 진입 높이 - 원래 ENTRY_HOLDING_Z가 아니라
-    # 여기서 낮춘 높이를 그대로 써야 한다. 안 그러면 바로 다음 drive_and_reach()의 ee_target_pos가
-    # 다시 원래 ENTRY_HOLDING_Z를 가리켜서, 방금 내린 팔이 접근 도중 도로 올라가버려
-    # 이 사전 하강이 무의미해진다.
-    STAGE3_ENTRY_Z = ENTRY_HOLDING_Z - STAGE3_PRE_LIFT_DROP
     # 사용자 지적(재조정) - TRUNK_ENTRANCE_X/STAGE3_PRE_LIFT_DROP만으로는 한계가 있었다 -
     # 순수 수직 하강이라 그리퍼가 입구 아래쪽 턱을 정면으로 긁는다. 하강하는 동안 그리퍼가
     # 대각선으로 살짝 더 안쪽(+X, 트렁크 쪽)까지 들어가게 만들어서 "아래로 내려가며 동시에
@@ -1783,6 +1790,19 @@ if STAGE >= 3:
         float(stage2_end_ee_pos[0]) + STAGE3_PRE_X_ADVANCE,
         float(stage2_end_ee_pos[1]),
     )
+    # 사용자 설계 문서(3차: LOWER_BELOW_INTERNAL_ROOF) 시도 - stage3_pre_target_xy의 로컬
+    # 천장(ceiling_z_at)만 보고 하강량을 정했더니 실측에서 회귀가 발생했다: 그 위치(x≈2.95)는
+    # 아직 열린 리드 밑면 구간(INTERNAL_CEILING_START_X=3.115 이전)이라 로컬 천장이 매우
+    # 높게(~1.43m) 나와서 "하강 불필요"로 계산됐는데, 실제로는 STAGE3_ENTRY_Z=ENTRY_HOLDING_Z
+    # 그대로 두고 진행하니 STAGE 3 정밀 접근이 19스텝만에 자세 붕괴(ee_err=0.55m)했다 -
+    # 즉 이 0.05m 하강의 실제 역할은 "천장 클리어런스"가 아니라 "입구 프레임을 통과하는
+    # 전진 동작 중 팔 자세를 더 컴팩트하게 만들어 하단 턱/프레임을 스치지 않게 하는 것"이었다
+    # (이 값을 처음 도입할 때의 사용자 지적 - "그리퍼가 입구 아래쪽 턱을 정면으로 긁는다").
+    # 순수 천장 기준 재계산은 이 역할을 놓친다 - 검증된 고정값으로 되돌리고, 제대로 된
+    # 일반화(리프트-EE 결합 범위)는 5/6차(리프트 결합 하강/내부천장 추종)에서 다시 다룬다.
+    STAGE3_PRE_LIFT_DROP = 0.05
+    STAGE3_ENTRY_Z = ENTRY_HOLDING_Z - STAGE3_PRE_LIFT_DROP
+    STAGE3_PRE_LIFT_H = max(LIFT_MIN, LIFT_MAX - STAGE3_PRE_LIFT_DROP)
     stage3_pre_ee, stage3_pre_err = descend_and_raise_lift(
         stage3_pre_target_xy,
         STAGE3_ENTRY_Z,
@@ -1798,12 +1818,19 @@ if STAGE >= 3:
     print(f"[PLACE 목표] xy={np.round(place_world_xy, 3)} release_z={place_release_z:.3f} "
           f"entry_holding_z={ENTRY_HOLDING_Z:.3f} 섀시목표_x={stage3_target_x:.3f}", flush=True)
 
+    # 사용자 설계 문서(3차) 검증 중 실측으로 발견된 선재 버그(round3 이전부터 있었음, 이번
+    # 라운드 변경과 무관함이 재현으로 확인됨) - y_broken이 box_center[1]을 고정된 ANCHOR_Y와
+    # 비교했는데, STAGE 3의 팔 목표(ee_target_pos)는 place_world_xy[1](이 배치는 -0.257,
+    # 중앙에서 한참 벗어남)이라 팔이 정상적으로 그 목표를 향해 뻗을수록 박스 Y가 ANCHOR_Y에서
+    # 점점 멀어지는 게 당연하다(실측 로그: step 5/10/15/19에서 box y가 -0.001->-0.015->
+    # -0.029->-0.04로 매끄럽게 증가 - 급격한 충돌 스파이크가 아니라 정상 추종 동작 자체였음).
+    # 그 결과 19스텝만에 "자세 붕괴"로 오판, STAGE 3이 항상 실패했다. 고침: 박스가 "그리퍼를
+    # 잘 따라가고 있는지"(그리퍼 tip의 Y와 비교 - 붙어있다면 항상 거의 일치해야 함)로 바꾼다 -
+    # 이게 진짜 "충돌/이탈"을 감지하는 방식이고, 목표 Y가 어디든 상관없이 성립한다.
     def _stage3_pose_broken():
-        # STAGE 2와 달리 팔이 능동적으로 목표를 추종 중이라 "기준 오프셋 대비 편차"는 못
-        # 쓴다(추종 중엔 원래도 오차가 있음) - 대신 박스가 중앙선에서 벗어났는지, 흡착이
-        # 풀렸는지로 충돌을 감지한다(STAGE 2에서 실제로 관측된 붕괴 신호와 동일한 종류).
+        tip_pos = _measure_tip_pos()
         _, _, box_center = _get_box_x_edges()
-        y_broken = abs(float(box_center[1]) - ANCHOR_Y) > STAGE3_Y_TOLERANCE
+        y_broken = abs(float(box_center[1]) - float(tip_pos[1])) > STAGE3_Y_TOLERANCE
         detached = not m0609_robot.gripper.is_closed()
         return y_broken or detached
 
