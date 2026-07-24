@@ -418,25 +418,71 @@ git commit -m "web backend: GET /api/trunk-maps, GET /api/box-presets"
 
 - [ ] **Step 1: `_reconstruct_score_breakdown()` + `compute_plan()`을 `algorism_bridge.py` 끝에 추가**
 
+**먼저 `algorism_bridge.py` 상단의 import 블록에 (Task 2가 만든 `WALL_BC_WEIGHT = _m05.WALL_BC_WEIGHT` 줄 바로 다음 줄에) 아래 두 줄을 추가한다** — `mode="count_first"`가 기본 실행 경로일 때 실제로 채점에 쓰이는 "개수 우선" 전용 공식(`05_candidate_scoring.score_count_first`)의 가중치 상수다. 이 두 상수가 없으면 아래 `_reconstruct_score_breakdown()`이 그 공식을 재현할 수 없다:
+
+```python
+COUNT_FIRST_HEIGHT_WEIGHT = _m05.COUNT_FIRST_HEIGHT_WEIGHT
+COUNT_FIRST_FOOTPRINT_GROWTH_WEIGHT = _m05.COUNT_FIRST_FOOTPRINT_GROWTH_WEIGHT
+```
+
 ```python
 def _reconstruct_score_breakdown(plans, obstacles, trunk, entrance_preference, contact_preference, height_preference):
     """plans는 order로 정렬돼 있다고 가정. place_one_box가 매 박스를 놓을 때
     실제로 봤던 상태(그 이전까지 놓인 박스+장애물)를 그대로 재현해서
     count_touching_faces 등을 다시 계산한다 - 원본 점수를 따로 캐시하지 않고
     재계산하는 이유는 05_candidate_scoring.py를 전혀 수정하지 않고 이미
-    공개된 building block만으로 점수를 "설명"하기 위함."""
+    공개된 building block만으로 점수를 "설명"하기 위함.
+
+    ⚠️ mode="count_first"는 두 가지 서로 다른 채점 공식 중 하나를 실제로
+    쓴다 (09_rescan_replan.replan_after_rescan의 best-of-two 로직):
+      - "작은 것부터" 전략이 채택되면 score_count_first(밀도/공간재사용
+        기반, height_term + footprint_growth_term)
+      - "큰 것부터" 전략이 채택되면(=large_first와 동일 공식) 기존
+        height/contact/wall_a/wall_bc 가중 공식
+    09가 어느 쪽이 채택됐는지 별도로 알려주지 않고(algorism/ 파일은
+    이번 프로젝트 전체에서 수정 금지라 반환값을 늘릴 수도 없다), 대신
+    두 공식을 전부 재계산해서 실제 p.score와 더 가깝게 일치하는 쪽을
+    채택한다 - 두 공식은 스케일이 확연히 달라(FOOTPRINT_GROWTH_WEIGHT=5.0)
+    거의 항상 명확하게 구분된다. 반환 dict에는 실제로 어느 공식이었는지
+    "formula" 키로 표시한다."""
     placed_so_far = list(obstacles)
     breakdown_by_box_id = {}
     for p in plans:
         box = Box(id=p.box_id, width=p.dimensions[0], depth=p.dimensions[1], height=p.dimensions[2])
         x, y, z = p.position
         touches = count_touching_faces(x, y, z, box, trunk, placed_so_far)
-        breakdown_by_box_id[p.box_id] = {
-            "height_term": HEIGHT_WEIGHT * height_preference * (z / trunk.height),
-            "contact_term": CONTACT_WEIGHT * contact_preference * (touches / 6),
-            "wall_a_term": WALL_A_WEIGHT * entrance_preference * entrance_distance_ratio(x, box, trunk),
-            "wall_bc_term": WALL_BC_WEIGHT * (1 - side_wall_distance_ratio(y, box, trunk)),
-        }
+
+        height_term = HEIGHT_WEIGHT * height_preference * (z / trunk.height)
+        contact_term = CONTACT_WEIGHT * contact_preference * (touches / 6)
+        wall_a_term = WALL_A_WEIGHT * entrance_preference * entrance_distance_ratio(x, box, trunk)
+        wall_bc_term = WALL_BC_WEIGHT * (1 - side_wall_distance_ratio(y, box, trunk))
+        weighted_score = height_term - contact_term - wall_a_term - wall_bc_term
+
+        if placed_so_far:
+            used_max_x = max(pb.x_range[1] for pb in placed_so_far)
+            used_max_y = max(pb.y_range[1] for pb in placed_so_far)
+        else:
+            used_max_x = used_max_y = 0.0
+        growth_x = max(0.0, (x + box.width) - used_max_x)
+        growth_y = max(0.0, (y + box.depth) - used_max_y)
+        footprint_growth_term = COUNT_FIRST_FOOTPRINT_GROWTH_WEIGHT * (growth_x + growth_y)
+        count_first_height_term = COUNT_FIRST_HEIGHT_WEIGHT * (z / trunk.height)
+        count_first_score = count_first_height_term + footprint_growth_term
+
+        if abs(count_first_score - p.score) < abs(weighted_score - p.score):
+            breakdown_by_box_id[p.box_id] = {
+                "formula": "count_first_density",
+                "height_term": count_first_height_term,
+                "footprint_growth_term": footprint_growth_term,
+            }
+        else:
+            breakdown_by_box_id[p.box_id] = {
+                "formula": "weighted",
+                "height_term": height_term,
+                "contact_term": contact_term,
+                "wall_a_term": wall_a_term,
+                "wall_bc_term": wall_bc_term,
+            }
         placed_so_far.append(PlacedBox(box=box, x=x, y=y, z=z))
     return breakdown_by_box_id
 
@@ -534,6 +580,8 @@ def compute_plan(
 import pathlib
 import sys
 
+import pytest
+
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 import algorism_bridge as bridge
 
@@ -555,9 +603,14 @@ def test_compute_plan_places_boxes_and_returns_full_payload():
 
     assert result["trunk"] == {"width": 1.0, "depth": 1.0, "height": 0.5}
     assert len(result["placed"]) == 1
-    assert result["placed"][0]["box_id"] == "A"
-    assert set(result["placed"][0]["score_breakdown"].keys()) == {
-        "height_term", "contact_term", "wall_a_term", "wall_bc_term"}
+    placed = result["placed"][0]
+    assert placed["box_id"] == "A"
+    # large_first + 기본 preference(전부 1.0)는 항상 "weighted" 공식을 쓴다 -
+    # 09_rescan_replan이 mode != "count_first"일 때 이 공식만 쓰기 때문에 결정적이다.
+    bd = placed["score_breakdown"]
+    assert bd["formula"] == "weighted"
+    reconstructed = bd["height_term"] - bd["contact_term"] - bd["wall_a_term"] - bd["wall_bc_term"]
+    assert reconstructed == pytest.approx(placed["score"], abs=1e-6)
     assert result["summary"]["total"] == 1
     assert result["summary"]["placed"] == 1
     assert result["box_snapshot_id"] == "manual_input:테스트"
@@ -573,6 +626,30 @@ def test_compute_plan_reports_unloadable_when_box_too_big():
     assert len(result["unloadable"]) == 1
     assert result["unloadable"][0]["box_id"] == "Huge"
     assert result["unloadable"][0]["reason"] == "SIZE_EXCEEDS_TRUNK"
+
+
+def test_compute_plan_score_breakdown_matches_actual_score_in_count_first_mode():
+    """count_first 모드는 내부적으로 서로 다른 두 채점 공식(가중치 공식 vs
+    밀도/개수우선 공식) 중 하나를 쓸 수 있다 - _reconstruct_score_breakdown이
+    실제로 쓰인 공식을 못 맞히면(Task 4 리뷰에서 실제로 발견된 회귀), 여기서
+    formula와 무관하게 "재구성한 합이 실제 score와 같아야 한다"는 불변조건이
+    깨진다."""
+    boxes = [
+        {"id": "A", "width": 0.30, "depth": 0.20, "height": 0.15},
+        {"id": "B", "width": 0.25, "depth": 0.20, "height": 0.15},
+        {"id": "C", "width": 0.20, "depth": 0.15, "height": 0.10},
+    ]
+
+    result = bridge.compute_plan(_TRUNK_MAP, boxes, mode="count_first")
+
+    assert len(result["placed"]) >= 1
+    for p in result["placed"]:
+        bd = p["score_breakdown"]
+        if bd["formula"] == "count_first_density":
+            reconstructed = bd["height_term"] + bd["footprint_growth_term"]
+        else:
+            reconstructed = bd["height_term"] - bd["contact_term"] - bd["wall_a_term"] - bd["wall_bc_term"]
+        assert reconstructed == pytest.approx(p["score"], abs=1e-6)
 
 
 def test_compute_plan_fixed_order_true_preserves_input_order():
@@ -592,7 +669,7 @@ def test_compute_plan_fixed_order_true_preserves_input_order():
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/test_algorism_bridge_compute_plan.py -v
 ```
 
-Expected: 3 passed.
+Expected: 4 passed.
 
 - [ ] **Step 4: Commit**
 
@@ -2389,14 +2466,26 @@ export default function BoxDetailPanel() {
             Yaw={selected.target_yaw.toFixed(2)}rad
           </p>
           <p>접촉면 {selected.touches}/6개, {selected.rotated ? "90도 회전됨" : "정자세"}, 점수 {selected.score.toFixed(3)}(낮을수록 좋은 자리)</p>
-          <table className={styles.table}>
-            <tbody>
-              <tr><td>높이 항(불리)</td><td>{selected.score_breakdown.height_term.toFixed(3)}</td></tr>
-              <tr><td>접촉면 항(유리)</td><td>-{selected.score_breakdown.contact_term.toFixed(3)}</td></tr>
-              <tr><td>안쪽 벽(A) 항(유리)</td><td>-{selected.score_breakdown.wall_a_term.toFixed(3)}</td></tr>
-              <tr><td>측면 벽(B/C) 항(유리)</td><td>-{selected.score_breakdown.wall_bc_term.toFixed(3)}</td></tr>
-            </tbody>
-          </table>
+          {/* score_breakdown.formula: "count_first" 모드는 내부적으로 서로 다른 두 채점
+              공식 중 하나를 실제로 쓸 수 있어서(백엔드 algorism_bridge.compute_plan()
+              참고), 두 형태를 분기해서 보여준다. */}
+          {selected.score_breakdown.formula === "count_first_density" ? (
+            <table className={styles.table}>
+              <tbody>
+                <tr><td>높이 항(불리)</td><td>{selected.score_breakdown.height_term.toFixed(3)}</td></tr>
+                <tr><td>새 영역 확장 항(불리)</td><td>{selected.score_breakdown.footprint_growth_term.toFixed(3)}</td></tr>
+              </tbody>
+            </table>
+          ) : (
+            <table className={styles.table}>
+              <tbody>
+                <tr><td>높이 항(불리)</td><td>{selected.score_breakdown.height_term.toFixed(3)}</td></tr>
+                <tr><td>접촉면 항(유리)</td><td>-{selected.score_breakdown.contact_term.toFixed(3)}</td></tr>
+                <tr><td>안쪽 벽(A) 항(유리)</td><td>-{selected.score_breakdown.wall_a_term.toFixed(3)}</td></tr>
+                <tr><td>측면 벽(B/C) 항(유리)</td><td>-{selected.score_breakdown.wall_bc_term.toFixed(3)}</td></tr>
+              </tbody>
+            </table>
+          )}
         </div>
       ) : (
         <p className={styles.placeholder}>계획 계산 후 박스를 선택하면 상세정보가 표시됩니다</p>
@@ -2427,31 +2516,52 @@ import userEvent from "@testing-library/user-event";
 import { PlannerProvider, usePlannerDispatch } from "../state/PlannerContext.jsx";
 import BoxDetailPanel from "./BoxDetailPanel.jsx";
 
-const RESULT = {
+const WEIGHTED_RESULT = {
   placed: [
     { box_id: "A", order: 1, position: [0.1, 0.2, 0.0], dimensions: [0.3, 0.2, 0.15],
       rotated: false, target_yaw: 0, score: 0.42, touches: 3,
-      score_breakdown: { height_term: 0, contact_term: 0.25, wall_a_term: 0.3, wall_bc_term: 0.1 } },
+      score_breakdown: { formula: "weighted", height_term: 0, contact_term: 0.25, wall_a_term: 0.3, wall_bc_term: 0.1 } },
   ],
   log_lines: [],
 };
 
-function Loader() {
+const COUNT_FIRST_RESULT = {
+  placed: [
+    { box_id: "B", order: 1, position: [0.1, 0.2, 0.0], dimensions: [0.3, 0.2, 0.15],
+      rotated: false, target_yaw: 0, score: 1.5, touches: 1,
+      score_breakdown: { formula: "count_first_density", height_term: 0.5, footprint_growth_term: 1.0 } },
+  ],
+  log_lines: [],
+};
+
+function Loader({ payload }) {
   const dispatch = usePlannerDispatch();
-  return <button onClick={() => dispatch({ type: "COMPUTE_SUCCESS", payload: RESULT })}>load</button>;
+  return <button onClick={() => dispatch({ type: "COMPUTE_SUCCESS", payload })}>load</button>;
 }
 
 describe("BoxDetailPanel", () => {
-  it("shows score breakdown for the selected box after a plan is computed", async () => {
+  it("shows weighted-formula score breakdown for the selected box", async () => {
     render(
       <PlannerProvider>
-        <Loader />
+        <Loader payload={WEIGHTED_RESULT} />
         <BoxDetailPanel />
       </PlannerProvider>,
     );
     await userEvent.click(screen.getByText("load"));
     expect(screen.getByText(/적재순서 1/)).toBeInTheDocument();
     expect(screen.getByText("-0.250")).toBeInTheDocument();
+  });
+
+  it("shows count-first-density formula score breakdown when that formula was used", async () => {
+    render(
+      <PlannerProvider>
+        <Loader payload={COUNT_FIRST_RESULT} />
+        <BoxDetailPanel />
+      </PlannerProvider>,
+    );
+    await userEvent.click(screen.getByText("load"));
+    expect(screen.getByText("새 영역 확장 항(불리)")).toBeInTheDocument();
+    expect(screen.getByText("1.000")).toBeInTheDocument();
   });
 });
 ```
@@ -2460,7 +2570,7 @@ describe("BoxDetailPanel", () => {
 npm test -- BoxDetailPanel
 ```
 
-Expected: 1 passed.
+Expected: 2 passed.
 
 - [ ] **Step 3: Commit**
 
