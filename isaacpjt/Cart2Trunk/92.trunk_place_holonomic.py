@@ -156,7 +156,6 @@ TRUNK_MAP_JSON = OUT_DIR / "trunk_map.json"
 # 그 상태를 흉내내기 위해 그리퍼에 미리 박스를 붙여서 시작한다.
 TEST_BOX_SIZE = (0.135, 0.177, 0.106)  # placement_result.json의 첫 박스 치수 참고
 
-
 def load_recommended_dims():
     import csv
     csv_path = OUT_DIR / "_evaluate_low_profile_base.csv"
@@ -560,10 +559,30 @@ if HOLDING_Z > SAFE_TRANSIT_Z:
 # 프로브 스크립트가 소실돼 결과 파일만 남음) - 일단 release 높이보다 이만큼 더 올려서
 # 스크린샷으로 직접 눈으로 확인하고, 부족하면 ENTRY_CLEARANCE_ABOVE_RELEASE를 조금씩 늘려가며
 # 튜닝한다. 천장 안전 한계(SAFE_TRANSIT_Z)는 절대 넘지 않도록 클램프한다.
+#
+# 사용자 실측 재현(Tilt-and-Insert 테스트 중 발견된 버그) - 원래 여기서는 place_release_z(즉
+# place_dims[2], "최종 배치될 박스"의 두께)로 진입 높이를 계산했다. 그런데 92.py는 91번 없이
+# 단독으로 테스트하려고 그리퍼에 TEST_BOX_SIZE 크기의 가짜 박스를 붙이는 하네스라, TEST_BOX_SIZE
+# 를 place_dims와 다르게(예: Tilt 경로를 트리거하려고 0.4m로) 키우면 "지금 실제로 들고 있는
+# 박스"와 이 진입 높이 계산이 가정한 박스가 달라진다 - 실측해보니 place_dims[2]=0.106 항이
+# 대수적으로 상쇄돼서 이 공식이 실제로 계산하는 건 "박스 하단이 문턱보다 얼마나 위에 있어야
+# 하는가"라는 박스 크기와 무관한 절대 높이(entry_box_bottom_clearance)였다 - 그런데 최종
+# ENTRY_HOLDING_Z(팁 높이)를 구할 때는 그 절대 높이에 place_dims[2](0.106, 진짜 배치 박스
+# 두께)를 더했지, 실제로 매달려 있는 TEST_BOX_SIZE[2](0.4)를 더하지 않았다 - 그래서 0.4m
+# 박스의 실제 바닥은 의도한 문턱 클리어런스보다 0.294m나 낮은 곳에 있었고, 그 상태에서 팔이
+# 살짝만 움직여도(피치 회전 등) 바로 충돌했다(실측: err 0.06m -> 회전 계속 시도하니 0.45m로
+# 더 악화되며 y/z가 천장한계 밖으로 튐 - IK 폭주=물리 충돌 의심이라는 이 프로젝트 기존 원칙과
+# 일치). 고침: place_dims[2]가 아니라 "지금 실제로 들고 있는 박스" 두께(TEST_BOX_SIZE[2])를
+# 더해서 ENTRY_HOLDING_Z를 계산한다 - place_dims와 TEST_BOX_SIZE가 같을 때(정상적인 경우)는
+# 기존과 완전히 같은 값이 나오므로 회귀는 없다.
 ENTRY_CLEARANCE_ABOVE_RELEASE = 0.25
-ENTRY_HOLDING_Z = min(place_release_z + ENTRY_CLEARANCE_ABOVE_RELEASE, SAFE_TRANSIT_Z - 0.03)
+entry_box_bottom_clearance = (
+    float(PLACE_WORLD_MIN[2]) + RELEASE_CLEARANCE_ABOVE_FLOOR + TIP_LOCAL_OFFSET[2] + ENTRY_CLEARANCE_ABOVE_RELEASE
+)
+ENTRY_HOLDING_Z = min(entry_box_bottom_clearance + TEST_BOX_SIZE[2], SAFE_TRANSIT_Z - 0.03)
 print(f"[STAGE 1.1 사전계산] ENTRY_HOLDING_Z={ENTRY_HOLDING_Z:.3f} "
-      f"(release_z+{ENTRY_CLEARANCE_ABOVE_RELEASE:.2f}, 천장한계 {SAFE_TRANSIT_Z:.3f} 이내로 클램프)", flush=True)
+      f"(문턱클리어런스{entry_box_bottom_clearance:.3f}+박스두께{TEST_BOX_SIZE[2]:.3f}, "
+      f"천장한계 {SAFE_TRANSIT_Z:.3f} 이내로 클램프)", flush=True)
 
 # 사용자 설계 문서(Stage 2 한계 극복) - 지금까지의 STAGE 2/3(수평 이동)는 "박스+그리퍼 스택이
 # 입구 수직 개구부에 다 들어가는" 박스에서만 통한다. 큰 박스는 수평으로는 절대 못 들어가므로
@@ -1397,10 +1416,19 @@ if STAGE >= 2:
     # FORCE_TILT_TEST=1로 강제 진입시켜 코드 경로 자체는 확인할 수 있지만, tilt_deg/
     # approach_standoff/restore_clear_margin 값은 실제 대형 박스가 생기면 그때 실측 기반으로
     # 다시 튜닝해야 한다(이 프로젝트의 다른 모든 단계도 그렇게 완성됨).
-    def tilt_and_insert_through_entrance(entrance_x, tilt_deg=12.0, approach_standoff=0.15,
+    def tilt_and_insert_through_entrance(entrance_x, box_height, tilt_deg=12.0, approach_standoff=None,
                                           restore_clear_margin=0.10, tilt_steps=150,
-                                          drive_max_speed=0.05):
+                                          drive_max_speed=0.05, tilt_standoff_safety_margin=0.05):
         tilt_quat = euler_angles_to_quat(np.array([0.0, np.pi - np.radians(tilt_deg), 0.0]))
+
+        if approach_standoff is None:
+            # 사용자 실측 재현 - 큰 박스(0.4m)로 실제 테스트하니 TILT-2(제자리 피치 회전)에서
+            # 바로 충돌해서 err=0.06m로 실패했다. 원인: move_link6은 그리퍼(대략 박스 상단,
+            # 회전 피벗)의 world 위치를 고정한 채 orientation만 바꾸므로, 박스 하단(피벗에서
+            # box_height만큼 떨어짐)은 tilt_deg만큼 회전할 때 대략 box_height*sin(tilt_deg)
+            # 만큼 수평으로 휩쓴다 - 고정 0.15m 여유는 얇은 박스 기준이라 박스가 커지면
+            # 부족해진다(실측으로 확인된 버그). 박스 높이/회전각에서 필요 여유를 직접 계산한다.
+            approach_standoff = box_height * np.sin(np.radians(tilt_deg)) + tilt_standoff_safety_margin
 
         def _tilt_broken():
             return not m0609_robot.gripper.is_closed()
@@ -1470,7 +1498,7 @@ if STAGE >= 2:
 
     if BOX_NEEDS_TILT:
         print("[STAGE2 경로] 박스가 커서 수평 통과 불가 - Tilt-and-Insert 경로 사용", flush=True)
-        tilt_and_insert_through_entrance(TRUNK_ENTRANCE_X)
+        tilt_and_insert_through_entrance(TRUNK_ENTRANCE_X, TEST_BOX_SIZE[2])
         condition_met, aborted = True, False
     else:
         final_pos, final_yaw, condition_met, aborted = drive_until(
