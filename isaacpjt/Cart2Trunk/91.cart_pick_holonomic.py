@@ -17,15 +17,28 @@ Cart2Trunk 최종 시나리오 3단계 - 카트 PICK (RMPflow 벽 회피).
 3차: joint_1 조준 + joint_3/5=90도 접기 + 리프트만 하강(순수 수직) -> 사용자 직접 검증:
      joint_1(방위각)/리프트(높이)만으로는 반경(radial) 오차를 못 고쳐서 폐기
      ("1,6번 조인트와 그리퍼 사이에 리프트처럼 길어지는 게 없는 이상 불가능").
-**최종(4차, 이 파일 구현)**: 리프트를 더 높이 올려(LIFT_TRAVEL_M 확대) 그리퍼를
-cart_max[2](손잡이 높이) 위에서 호버하게 하고, "위에서 아래로 손을 뻗어 잡는" 순수 RMPflow
-Cartesian IK로 되돌아간다. 대신 2차가 실패했던 "먼 standoff + 큰 수평 reach" 조합을
-없애기 위해, 접근을 2단계로 나눈다:
-  (a) 먼 STANDOFF_X에서 팔을 자기 몸 위(카트 쪽 아님)로 세워 안전한 "기본 자세"부터 만들고,
-  (b) 그 자세를 유지한 채(팔 명령 없이 섀시만 이동) PICK_STANDOFF_X까지 붙인 뒤,
-  (c) 그제서야 짧아진 수평 거리로 박스 위 호버 -> 수직 하강 -> 파지 -> 수직 후퇴를 반복한다.
-(a)(b) 구간은 팔 관절이 카트 쪽으로 전혀 안 움직이므로 벽과 만날 경로가 없고, (c)는 항상
-cart_max[2] 위 높이에서만 수평 이동하므로 벽/손잡이보다 항상 높다.
+4차(한동안 구현됐던 버전): 리프트를 더 높이 올려(LIFT_TRAVEL_M 확대) 그리퍼를 cart_max[2]
+(손잡이 높이) 위에서 호버하게 하고, "위에서 아래로 손을 뻗어 잡는" 순수 RMPflow Cartesian
+IK로 되돌아간다. 2차가 실패했던 "먼 standoff + 큰 수평 reach" 조합을 없애려고 Phase A(먼
+STANDOFF_X에서 팔을 자기 몸 위로 접어 안전 자세) -> Phase B(그 자세 유지한 채 섀시만
+PICK_STANDOFF_X까지 붙임) -> 호버/하강 3단계로 나눴다. 마지막 기록된 실행에서는 두 박스
+모두 성공(grasped/lifted_with_box/cleared_rim 전부 true, _cartpick_result.json 참고).
+
+**최종(5차, 이 파일 현재 구현, 사용자 설계)**: Phase A/B(팔 접은 채 섀시를 두 번 움직이는
+단계)를 아예 없애고, 스폰 시점부터 곧장 PICK 거리(STANDOFF_MARGIN=0.18, 구 4차의
+PICK_STANDOFF_MARGIN 실측값)에 선다. 그 대신:
+  (a) 리프트 상승(LIFT_MIN->LIFT_MAX)과 조인트 3/5=90/90 접기를 한 loop에서 alpha를 공유해
+      동시에 진행한다(raise_lift_and_fold) - 팔이 명령 없이 방치되는 구간을 아예 없앤다.
+  (b) 접은 자세를 유지한 채 joint_1(방위각)만 직접 조인트 제어로 돌려 그리퍼가 대략 카트
+      쪽을 향하게 만든다(각도는 FK 실측 기반 계산, 하드코딩 없음 - 아래 주석 참고). 3차와
+      다른 점: 3차는 joint_1+리프트만으로 반경 오차까지 고치려다 폐기됐지만, 여기선 joint_1로
+      "대략적인 방위"만 잡고 반경 방향은 다음 단계의 RMPflow가 팔꿈치/손목으로 흡수한다.
+  (c) 리프트 높이는 그대로 둔 채, RMPflow(move_link6_smooth)로 스캔에서 추출한 "박스 상단"
+      좌표(scan_box_top, 88.py 스캔을 world로 재투영한 값 - ground truth 아님, 실제 인식
+      파이프라인 검증용) 위 HOVER_ABOVE_BOX_TOP만큼 뜬 지점으로 호버한다. 이 호버 높이는
+      RIM_CLEARANCE로 카트 손잡이보다 항상 높게 하한을 둔다(2차 실패 원인 재발 방지).
+  (d) 리프트만 1mm씩 내리는 순수 수직 크립 하강(4차와 동일 원리) - 매 스텝 흡착을 시도해
+      "붙는 순간" 바로 멈춘다.
 
 박스 매칭
 ----
@@ -125,19 +138,20 @@ else:
 # 이 여유분과 호버 때 남는 XY 오차(수 mm~수 cm)를 함께 흡수한다.
 GRASP_RADIUS_MARGIN = 0.05
 GRASP_STANDOFF = 0.01
-# STANDOFF_MARGIN: 씬 시작/스캔 때 쓰는 "안전한 먼 거리"(84/87번과 동일 값 유지).
-STANDOFF_MARGIN = 0.15
-# PICK_STANDOFF_MARGIN: 사용자 지적("카트와 holonomic base를 좀 더 붙여야한다") - PICK 직전에만
-# 이만큼 더 붙는다. 붙는 동안은 팔을 자기 몸 위(카트 쪽으로 뻗지 않은 상태)로 접어 두고 섀시만
-# 평행이동하므로(88~90번과 동일한 "리프트 텔레포트로 팔이 섀시에 용접된 것처럼 붙어있다" 특성 활용),
-# 팔이 옆으로 휘두르며 벽에 부딪힐 경로 자체가 없다.
-# 실측(0.04로 실행) - 호버까지는 문제없었지만 하강 중 정체 스크린샷(_cartpick_stall_...)에서
-# 팔꿈치가 마운트 바로 옆 카트 벽/모서리 기둥에 그대로 꽂혀 있는 게 확인됐다 - 0.04는 팔꿈치가
-# 그 모서리를 피해 내려갈 여유 공간 자체가 없었다. 0.10으로 늘려 여유를 준다.
-PICK_STANDOFF_MARGIN = 0.18
-# HOVER_CLEARANCE_ABOVE_RIM: "그리퍼가 카트 외벽보다 높은 상태"를 만들 때 cart_max(카트 손잡이
-# 높이 포함 전체 bbox 상단) 위로 얼마나 더 띄울지.
-HOVER_CLEARANCE_ABOVE_RIM = 0.15
+# STANDOFF_MARGIN: 카트 옆에 서는 거리. 4차 설계(리프트 텔레포트 크립 하강)에서 검증된
+# 0.18은 5차 설계(joint_1 조준 + RMPflow 실물리 하강)에서는 오히려 너무 멀었다 - 실측
+# (2026-07-24 헤드리스 실행)으로 흡착 거리가 전혀 안 좁혀지고(0.8~0.9m대에서 발산) 하강/
+# 후퇴 모두 정체됐다. 4차는 텔레포트라 도달 불가 여부가 가려졌지만 5차는 실제 조인트
+# 토크/IK라 반경(reach)이 부족하면 그대로 실패로 드러난다 - 사용자 지적대로 더 붙인다.
+STANDOFF_MARGIN = 0.10
+# RIM_CLEARANCE: top-down 호버 목표 z의 안전 하한 - cart_max[2](카트 손잡이 높이, 실측 약
+# 1.03m) 위로 최소 이만큼은 항상 확보한다. 호버 목표를 "박스 상단 + HOVER_ABOVE_BOX_TOP"로만
+# 정하면 오프셋이 작을 때(사용자 지정 범위 중 0.20m 쪽) 손잡이 높이보다 낮아질 수 있고, 그러면
+# RMPflow가 호버까지 대각선으로 움직이는 도중 카트 벽을 스칠 위험이 생긴다(2차 설계가 실패한
+# 이유와 동일 - move_link6_smooth는 XY/Z를 한 벡터로 같이 움직이는 P제어라 대각선 이동이다).
+RIM_CLEARANCE = 0.10
+# HOVER_ABOVE_BOX_TOP: 사용자 지정 - 스캔으로 추출한 박스 상단 위 20~40cm 범위의 중간값.
+HOVER_ABOVE_BOX_TOP = 0.30
 DOWN_QUAT = euler_angles_to_quat(np.array([0.0, np.pi, 0.0]))
 
 CART_BASKET_FLOOR_Z = 0.68
@@ -557,7 +571,6 @@ print(f"[박스 배치] 카트 안에 {len(CART_BOX_SPECS)}개 낙하 예정", f
 BOX_KNOWN_SIZE = {f"/World/{name}": size for name, size, _ in CART_BOX_SPECS}
 
 STANDOFF_X = CHASSIS_HALF_WIDTH_EFFECTIVE + cart_half_x + STANDOFF_MARGIN
-PICK_STANDOFF_X = CHASSIS_HALF_WIDTH_EFFECTIVE + cart_half_x + PICK_STANDOFF_MARGIN
 BASE_START_XY = (cart_center_xy[0] + STANDOFF_X, cart_center_xy[1])
 chassis_path, hub_joint_paths, k_factor = build_holonomic_base(stage, BASE_START_XY, BASE_LENGTH, BASE_WIDTH, BASE_HEIGHT)
 
@@ -588,12 +601,10 @@ print(f"[초기화] M0609 dof_names={m0609_robot.dof_names} num_dof={m0609_robot
 
 hub_dof_indices = [base_robot.dof_names.index(Path(p).name) for p in hub_joint_paths]
 
-_init_joints = np.zeros(m0609_robot.num_dof)
-if "joint_3" in m0609_robot.dof_names:
-    _init_joints[m0609_robot.dof_names.index("joint_3")] = np.pi / 2
-if "joint_5" in m0609_robot.dof_names:
-    _init_joints[m0609_robot.dof_names.index("joint_5")] = np.pi / 2
-m0609_robot.set_joint_positions(_init_joints)
+# 5차 설계 - 예전엔 여기서 조인트 3/5를 순간텔레포트로 미리 접어뒀지만(이후 리프트 상승 동안
+# 방치돼 흐르는 문제가 있었다), 이번엔 아래 raise_lift_and_fold()가 리프트 상승과 함께 0부터
+# 부드럽게 접으므로 여기서는 그냥 0(펼친 자세)에서 시작한다.
+m0609_robot.set_joint_positions(np.zeros(m0609_robot.num_dof))
 
 lift_state = {"h": LIFT_MIN}
 
@@ -692,43 +703,80 @@ def drive_to(target_x=None, target_y=None, target_yaw_deg=None, tolerance_xy=0.0
 step_hold(60)
 print("\n[안정화 완료]\n", flush=True)
 
-# ================= 리프트를 최고 높이로 =================
-print(f"\n[리프트] 도킹({LIFT_MIN:.3f}) -> 최고({LIFT_MAX:.3f})", flush=True)
-move_lift_to(LIFT_MAX, steps=120)
-
-# ================= 조인트 3/5=90/90 접은 자세로 재확립 (특이점 회피 시드) =================
-# 사용자 지적 - Phase A/B 및 박스별 루프에서 RMPflow가 joint_1(베이스 회전)을 돌려가며 IK를
-# 풀기 전에, 팔꿈치/손목을 90도씩 접어둔 자세를 시드로 줘두면 완전히 펴진 자세 근처에서
-# 생기는 특이점을 피하기 쉬워진다.
-# 주의(실측 버그) - 처음엔 "현재 조인트값을 복사해 3/5번만 덮어쓰는" 방식으로 짰다가 자기충돌이
-# 났다: 리프트를 올리고 먼 standoff로 이동하는 동안(step_hold/move_lift_to/drive_to는 리프트
-# 텔레포트만 하고 팔 관절에는 아무 명령도 안 보낸다) joint_1/2/4/6이 0에서 미세하게 흘러가
-# 있었고, 그 값들을 그대로 들고 온 채 3/5만 90도로 만들면 29.carry_pose_calibration.py가
-# 스크린샷으로 직접 비교했던 두 후보(seed_pose_v1=[0,0,90,0,90,0] 자기충돌 없음 vs
-# v2_more_elbow=[0,0,150,0,90,0] 훨씬 위험) 중 어느 쪽도 아닌 "제3의 조합"이 돼버려서 팔이
-# 스스로에게 부딪혔다. 고정: 나머지 조인트를 "현재값 유지"가 아니라 검증된 seed_pose_v1과
-# 똑같이 명시적으로 전부 0으로 못박는다(joint_1도 포함 - 이 구간은 RMPflow 아니라 직접
-# 조인트 제어라 joint_1=0 고정도 카트 쪽으로 휘두를 경로를 만들지 않는다).
-_fold_current = np.array(m0609_robot.get_joint_positions(), dtype=float)
+# ================= (5차 설계) 리프트 상승 + 조인트 3/5=90/90 접기를 동시 보간 =================
+# 사용자 설계 - 예전(4차)엔 "일단 순간텔레포트로 접고 -> 리프트만 올리고 -> 다시 접힘 재확립"
+# 순서였다(그 사이 리프트 상승/주행 동안 팔이 명령 없이 방치돼 흐르는 문제가 있었다). 이번엔
+# 처음부터 리프트 높이와 조인트 3/5 각도를 같은 진행률(alpha)로 함께 보간해서, 팔이 한 번도
+# 명령 없이 방치되는 구간 자체를 없앤다. 나머지 조인트는 계속 0으로 고정(29.carry_pose_
+# calibration.py로 자기충돌 없음이 확인된 seed_pose_v1과 동일 모양).
 _fold_target = np.zeros(m0609_robot.num_dof)
 if "joint_3" in m0609_robot.dof_names:
     _fold_target[m0609_robot.dof_names.index("joint_3")] = np.pi / 2
 if "joint_5" in m0609_robot.dof_names:
     _fold_target[m0609_robot.dof_names.index("joint_5")] = np.pi / 2
-FOLD_STEPS = 150
-for i in range(FOLD_STEPS):
-    alpha = (i + 1) / FOLD_STEPS
-    j = _fold_current + (_fold_target - _fold_current) * alpha
+
+
+def raise_lift_and_fold(target_h, target_joints, steps=200):
+    start_h = lift_state["h"]
+    start_joints = np.array(m0609_robot.get_joint_positions(), dtype=float)
+    for i in range(steps):
+        alpha = (i + 1) / steps
+        h = start_h + (target_h - start_h) * alpha
+        j = start_joints + (target_joints - start_joints) * alpha
+        m0609_robot.apply_action(ArticulationAction(joint_positions=j))
+        set_lift_height(h)
+        world.step(render=True)
+    lift_state["h"] = target_h
+    step_hold(20)
+    print(f"[리프트+접기] 리프트 {start_h:.3f} -> {target_h:.3f}, 조인트 3/5=90/90(나머지 0) "
+          f"완료: {np.round(m0609_robot.get_joint_positions(), 3)}", flush=True)
+
+
+print(f"\n[기본 자세] 리프트 도킹({LIFT_MIN:.3f}) -> 최고({LIFT_MAX:.3f}) + 조인트 3/5 접기 동시 진행",
+      flush=True)
+raise_lift_and_fold(LIFT_MAX, _fold_target, steps=200)
+
+# ================= 조인트 1(방위각)만 돌려 그리퍼가 카트를 바라보게 전환 =================
+# 사용자 설계 - 접은 자세를 유지한 채 joint_1만 돌려 대략적인 방위를 카트 쪽으로 맞춘다. 어느
+# 부호/각도가 "카트 쪽"인지 하드코딩하지 않는다 - 지금 접은 자세에서 그리퍼가 실제로 어느
+# 방향을 보고 있는지(FK 실측)와 지금 섀시 기준 카트 중심이 어느 방향인지를 둘 다 계산해서
+# 그 차이만큼만 돌린다(마운트 오프셋/좌표계 부호를 몰라도 항상 카트 쪽으로 돈다).
+# 주의(91.py 3차 시도 이력, 파일 상단 docstring 참고) - joint_1+리프트만으로 반경(radial)
+# 오차까지 고치려던 시도는 이미 폐기된 적이 있다("1,6번 조인트와 그리퍼 사이에 리프트처럼
+# 길어지는 게 없는 이상 불가능"). 여기서는 joint_1로 "대략적인 방위"만 잡고, 반경 방향 미세
+# 접근은 아래 RMPflow 호버 단계가 팔꿈치/손목을 굽혀서 해결한다 - 그 점에서 3차와는 역할이 다르다.
+chassis_pos_now, chassis_quat_now = base_robot.get_world_pose()
+R_chassis_now = quat_wxyz_to_matrix(np.asarray(chassis_quat_now, dtype=float))
+ee_folded_pos0, _ = m0609_robot.end_effector.get_world_pose()
+delta_ee_local = R_chassis_now.T @ (
+    np.array(ee_folded_pos0, dtype=float) - np.array(chassis_pos_now, dtype=float))
+ref_angle = float(np.arctan2(delta_ee_local[1], delta_ee_local[0]))
+
+delta_cart_local = R_chassis_now.T @ np.array([
+    cart_center_xy[0] - float(chassis_pos_now[0]),
+    cart_center_xy[1] - float(chassis_pos_now[1]),
+    0.0,
+])
+cart_angle = float(np.arctan2(delta_cart_local[1], delta_cart_local[0]))
+joint1_delta = ((cart_angle - ref_angle + np.pi) % (2 * np.pi)) - np.pi
+print(f"[조인트1 조준] 접은 자세 팁 방향각={np.degrees(ref_angle):.1f}deg "
+      f"(수평거리={float(np.linalg.norm(delta_ee_local[:2])):.4f}m), "
+      f"카트 방향각={np.degrees(cart_angle):.1f}deg -> joint_1 회전량={np.degrees(joint1_delta):.1f}deg",
+      flush=True)
+
+_aim_current = np.array(m0609_robot.get_joint_positions(), dtype=float)
+_aim_target = _aim_current.copy()
+if "joint_1" in m0609_robot.dof_names:
+    _aim_target[m0609_robot.dof_names.index("joint_1")] += joint1_delta
+AIM_STEPS = 150
+for i in range(AIM_STEPS):
+    alpha = (i + 1) / AIM_STEPS
+    j = _aim_current + (_aim_target - _aim_current) * alpha
     m0609_robot.apply_action(ArticulationAction(joint_positions=j))
     set_lift_height(lift_state["h"])
     world.step(render=True)
 step_hold(20)
-print(f"[특이점 회피 시드] joint_3/5=90/90(나머지 전부 0) 재확립 완료: "
-      f"{np.round(m0609_robot.get_joint_positions(), 3)}", flush=True)
-
-# ================= 옴니휠 평행이동으로 카트 옆면 접근 (88번과 동일) =================
-target_xy = (cart_center_xy[0] + STANDOFF_X, cart_center_xy[1])
-drive_to(target_x=target_xy[0], target_y=target_xy[1], label="카트 옆면 접근")
+print(f"[조인트1 조준 완료] {np.round(m0609_robot.get_joint_positions(), 3)}", flush=True)
 
 # ================= RMPflow 컨트롤러 =================
 # 파일 상단 docstring 참고 - 4차 설계(리프트 확장 + 2단계 접근 + top-down 호버/하강)로 확정.
@@ -867,19 +915,23 @@ print(f"[비전 로드] {_vision_files[-1].name} - box_id={list(scan_by_box_id.k
 
 used_prim_paths = set()
 pick_order = []  # [(prim_path, placement_dict)]
+scan_box_top = {}  # prim_path -> (world_x, world_y, world_top_z) - 스캔에서 재투영한 박스 상단
 for placement in placements:
     box_id = str(placement["box_id"])
     scan_entry = scan_by_box_id.get(box_id)
     if scan_entry is None:
         print(f"[경고] box_id={box_id}가 비전 결과에 없음 - 건너뜀", flush=True)
         continue
-    scan_center, _, _ = world_aabb_from_base_corners(scan_entry["corners_m"], SCAN_BASE_POS, SCAN_R_BASE)
+    scan_center, scan_size, scan_min = world_aabb_from_base_corners(
+        scan_entry["corners_m"], SCAN_BASE_POS, SCAN_R_BASE)
     available = [p for p in CANDIDATE_BOX_PRIM_PATHS if p not in used_prim_paths]
     prim_path, match_dist = match_physical_prim(stage, scan_center[:2], available)
     if prim_path is None:
         continue
     used_prim_paths.add(prim_path)
     pick_order.append((prim_path, placement))
+    scan_box_top[prim_path] = (
+        float(scan_center[0]), float(scan_center[1]), float(scan_min[2] + scan_size[2]))
     print(f"[매칭] box_id={box_id} -> {prim_path} (거리={match_dist:.3f}m)", flush=True)
 
 # ================= 검증: 스캔 기반 좌표 vs 실제 물리 박스 위치 =================
@@ -925,43 +977,18 @@ print(f"[검증 저장] {verify_path}", flush=True)
 snapshot(eye=[chassis_pos0[0] - 1.0, chassis_pos0[1] - 1.3, 1.3],
          target=[cart_center_xy[0], cart_center_xy[1], 0.75], fname="_cartpick_00b_scan_vs_actual.png")
 
-# ================= Phase A: 먼 standoff에서 "기본 자세" 만들기 =================
-# 원래 여기서 move_link6()(RMPflow)로 "자기 몸 위, 안전 높이"를 목표 지점으로 IK를 풀게
-# 했었는데, 그 목표 자체가 문제였다 - "자기 마운트 축 바로 위 지점을, 그리퍼가 정확히
-# 아래를 보게" 만드는 건 팔 입장에서 자기 마운트 위로 손을 뻗어 자기 머리를 만지는 것과
-# 같은 퇴화(degenerate) 자세라, RMPflow가 매번 팔을 자기 자신 쪽으로 구부려 넣는 (지금
-# 보고된) 자기충돌 자세로 수렴해버렸다 - 시드를 아무리 깨끗하게 줘도 IK 목표 자체가
-# 그 모양을 요구하니 소용없었다. 수정: Phase A에서는 RMPflow를 아예 쓰지 않는다. 검증된
-# 접은 자세(joint_3/5=90/90, 나머지 0 - 29.carry_pose_calibration.py로 자기충돌 없음을
-# 스크린샷으로 확인한 그 모양) 그대로 두고, 그 자세의 그리퍼가 안전 높이에 못 미치면
-# 리프트만 더 올려서 높이를 맞춘다 - 팔 모양은 그대로이므로 자기충돌 경로 자체가 없다.
-safe_hover_z = float(cart_max[2]) + HOVER_CLEARANCE_ABOVE_RIM
-ee_folded_pos, _ = m0609_robot.end_effector.get_world_pose()
-extra_lift = float(safe_hover_z) - float(ee_folded_pos[2])
-print(f"\n[Phase A] 안전 높이={safe_hover_z:.3f}m (cart_max[2]={float(cart_max[2]):.3f}+"
-      f"{HOVER_CLEARANCE_ABOVE_RIM:.2f}), 접은 자세 그리퍼 z={float(ee_folded_pos[2]):.3f}m "
-      f"-> 리프트 추가 상승 필요={extra_lift:.3f}m", flush=True)
-if extra_lift > 0.0:
-    move_lift_to(lift_state["h"] + extra_lift, steps=150)
-ee_folded_pos, _ = m0609_robot.end_effector.get_world_pose()
-print(f"[Phase A 완료] 접은 자세 유지한 채 그리퍼 z={float(ee_folded_pos[2]):.3f}m "
-      f"(목표 {safe_hover_z:.3f}m)", flush=True)
-snapshot(eye=[chassis_pos0[0] - 1.0, chassis_pos0[1] - 1.3, safe_hover_z + 0.3],
-         target=[chassis_pos0[0], chassis_pos0[1], safe_hover_z], fname="_cartpick_01_safe_pose.png")
-
-# ================= Phase B: 팔은 그대로, 섀시만 카트 쪽으로 붙이기 =================
-# drive_to()는 휠 관절만 명령하고 팔에는 아무 명령도 보내지 않는다 - 팔은 직전 자세(위 안전
-# 높이)를 그대로 유지한 채(리프트 텔레포트로 섀시에 "용접"되어 있으므로) 섀시와 함께 통째로
-# 평행이동한다. 수평 reach가 없는 상태로만 움직이므로 이 구간도 벽과 만날 경로가 없다.
-pick_target_xy = (cart_center_xy[0] + PICK_STANDOFF_X, cart_center_xy[1])
-print(f"[Phase B] standoff {STANDOFF_MARGIN:.2f}m -> {PICK_STANDOFF_MARGIN:.2f}m로 붙이기 "
-      f"(팔은 안전 높이 유지, 명령 없음)", flush=True)
-drive_to(target_x=pick_target_xy[0], target_y=pick_target_xy[1], label="카트에 더 붙이기(PICK 접근)")
+# ================= (5차 설계 - Phase A/B 폐기) =================
+# 리프트 상승+접기+joint_1 조준을 이미 위에서 마쳤고, 섀시는 스폰 이후 한 번도 움직이지
+# 않았다(STANDOFF_MARGIN을 처음부터 안전 거리로 스폰) - 더 이상 밟을 단계가 없다. 아래는
+# 지금 자세를 확인하는 스크린샷 한 장만 남긴다.
 chassis_pos1, _ = base_robot.get_world_pose()
-snapshot(eye=[chassis_pos1[0] - 0.9, chassis_pos1[1] - 1.1, safe_hover_z + 0.3],
-         target=[cart_center_xy[0], cart_center_xy[1], safe_hover_z], fname="_cartpick_02_close_approach.png")
+snapshot(eye=[chassis_pos1[0] - 0.9, chassis_pos1[1] - 1.1, LIFT_MAX + 0.3],
+         target=[cart_center_xy[0], cart_center_xy[1], float(cart_max[2])], fname="_cartpick_01_aimed_pose.png")
 
-# ================= 박스마다 PICK (top-down: 안전 높이에서 호버 -> 수직 하강 -> 파지 -> 수직 후퇴) =================
+# ================= 박스마다 PICK (top-down: 스캔 박스 상단 위 호버 -> 수직 하강 -> 파지 -> 수직 후퇴) =================
+# 사용자 설계 - 호버 목표를 ground-truth 시뮬레이션 위치가 아니라 "스캔으로 추출한 박스 상단"
+# (scan_box_top, world로 이미 재투영됨)으로 잡는다 - 실제 로봇에서 쓸 인식 파이프라인을 그대로
+# 검증하는 셈이다. box_pos(ground truth)는 grasp 판정(물리 흡착 거리)과 결과 로그용으로만 남긴다.
 results = []
 for idx, (prim_path, placement) in enumerate(pick_order):
     box_prim = stage.GetPrimAtPath(prim_path)
@@ -972,70 +999,83 @@ for idx, (prim_path, placement) in enumerate(pick_order):
     # 갱신한 실제 자세를 못 따라간 것으로 보인다). 대신 스폰 시점에 확정된 진짜 크기
     # (BOX_KNOWN_SIZE)를 그대로 쓴다 - 박스가 기울어져도 이 값은 변하지 않는다.
     half_height = float(BOX_KNOWN_SIZE[prim_path][2]) / 2.0
-    box_top_z = float(box_pos[2]) + half_height
     grasp_radius = half_height + GRASP_RADIUS_MARGIN
     gripper.set_target(prim_path, grasp_radius)
 
-    print(f"\n===== [{idx + 1}/{len(pick_order)}] {prim_path} PICK 시작 (world pos={np.round(box_pos, 3)}) =====",
+    scan_top_x, scan_top_y, scan_top_z = scan_box_top[prim_path]
+    # RIM_CLEARANCE 하한 - HOVER_ABOVE_BOX_TOP이 작을 때(사용자 지정 범위 중 0.20m 쪽) 카트
+    # 손잡이 높이보다 낮아지는 걸 막는다(위 RIM_CLEARANCE 정의부 설명과 동일 위험).
+    hover_z = max(scan_top_z + HOVER_ABOVE_BOX_TOP, float(cart_max[2]) + RIM_CLEARANCE)
+    hover_target = np.array([scan_top_x, scan_top_y, hover_z])
+
+    print(f"\n===== [{idx + 1}/{len(pick_order)}] {prim_path} PICK 시작 "
+          f"(스캔 박스상단={np.round(scan_box_top[prim_path], 3)}, ground truth={np.round(box_pos, 3)}) =====",
           flush=True)
 
-    # (c) 박스 바로 위, 안전 높이(cart_max 위)에서 수평 호버 - 이 높이에서는 항상 벽/손잡이보다
-    # 높으므로 옆으로 이동해도 충돌 경로가 없다. Phase B로 붙였기 때문에 수평 거리가 짧다.
-    # move_link6_smooth는 이제 "흡착 팁" 자체를 폐루프로 제어하므로(매 스텝 실측), 여기서
-    # 넘기는 좌표도 link_6이 아니라 팁이 있어야 할 자리 그대로다 - link_6<->팁 오프셋을
-    # 호출부에서 따로 계산/보정할 필요가 없다.
-    hover_target = np.array([box_pos[0], box_pos[1], safe_hover_z])
+    # move_link6_smooth는 "흡착 팁" 자체를 폐루프로 제어하므로(매 스텝 실측), 여기서 넘기는
+    # 좌표도 link_6이 아니라 팁이 있어야 할 자리 그대로다 - link_6<->팁 오프셋을 호출부에서
+    # 따로 계산/보정할 필요가 없다.
     move_link6_smooth(hover_target, label=f"박스 위 호버(#{idx})")
-    hover_lift_h = lift_state["h"]
 
     if idx == 0:
-        snapshot(eye=[chassis_pos1[0] - 0.8, chassis_pos1[1] - 1.0, safe_hover_z + 0.3],
-                 target=[box_pos[0], box_pos[1], box_pos[2]], fname="_cartpick_03_hover_above_box.png")
+        snapshot(eye=[chassis_pos1[0] - 0.8, chassis_pos1[1] - 1.0, hover_z + 0.3],
+                 target=[scan_top_x, scan_top_y, scan_top_z], fname="_cartpick_03_hover_above_box.png")
 
-    # (d) 실측(standoff 0.04/0.10/0.18, 속도 여러 조합으로 반복 테스트) - RMPflow(move_link6_smooth)로
-    # 호버 높이(cart_max 위, 꽤 높음)에서 흡착 높이까지 큰 수직 낙차를 IK로 직접 풀게 하면 매번
-    # 팔이 도중에 스스로/카트벽/박스와 부딪혀 발산했다(정체 감지 스크린샷으로 확인 - standoff를
-    # 늘려도 개선 폭이 작았다 = 벽과의 거리 문제가 아니라 이 낙차 자체를 RMPflow가 자기충돌 없이
-    # 못 풀고 있었다는 뜻). Phase A/B에서 이미 검증된 원칙 그대로 여기도 적용한다 - 호버에서
-    # RMPflow로 이미 XY를 맞춰뒀으니, 그 뒤로는 팔 관절을 전혀 건드리지 않고 "리프트만" 내려서
-    # 순수 수직 하강한다(팔 형상이 안 바뀌므로 자기충돌 경로 자체가 없다 - Phase B가 섀시를
-    # 수평으로 안전하게 옮긴 것과 동일한 원리를 수직 축에 적용).
-    # 실측(이 원칙 첫 적용 - 리프트 하강은 성공, 하지만 목표를 한 번에 계산해서 move_lift_to로
-    # "확 내려갔더니" 흡착판 몸체(팁이 아니라)가 내려가는 도중 박스를 스치면서 박스가 넘어졌다
-    # (스크린샷 확인 - 박스가 넘어진 채 기울어져 있음). box_top_z는 루프 시작 시점에 한 번만
-    # 잰 값이라 박스가 조금이라도 밀리면 더 이상 안 맞는다. 목표 높이를 미리 계산해서 한 번에
-    # 점프하는 대신, 1mm씩 아주 천천히 내리면서 매 스텝 흡착을 직접 시도해 "붙는 그 순간"
-    # 바로 멈춘다 - 박스가 살짝 밀리거나 계산이 조금 어긋나도 그만큼 더/덜 내려가다가 성공하는
-    # 지점에서 바로 서므로 과도하게 파고들 일이 없다(오버트래블 상한만 안전장치로 둔다).
-    target_tip_z = box_top_z + GRASP_STANDOFF
-    print(f"[크립 하강 준비] box_top_z={box_top_z:.4f} half_height={half_height:.4f} "
+    # 사용자 지적(중요한 버그 정정) - 예전 버전은 여기서 리프트를 1mm씩 내리는 "크립 하강"으로
+    # 구현했었다. 그런데 set_lift_height()는 m0609_robot.set_world_pose()로 팔 전체를 강제
+    # 텔레포트하는 것이라 물리 시뮬레이션이 아니다 - 카트 벽과 실제로 부딪혀도 물리적으로
+    # 막히지 않고 그냥 뚫고 지나갈 수 있다(텔레포트는 충돌 저항이 없다). 실제로 Box_A가 카트
+    # rim에 걸쳐 기울어진 채로도 grasped=True가 나온 게 바로 이 버그였다 - "성공"이 팔이 벽을
+    # 뚫고 지나간 결과였을 뿐, 충돌 없는 경로였다는 보장이 없었다.
+    # 고침: 리프트는 이 루프 전체에서 절대 바꾸지 않는다(아래 set_lift_height 호출도 지금 값을
+    # 그대로 재적용만 할 뿐이다) - 하강은 전부 RMPflow(실제 조인트 토크/속도 제어)로만 한다.
+    # RMPflow는 물리 시뮬레이션을 통해 움직이므로 카트와 실제로 부딪히면 진짜로 막히거나
+    # 밀려난다 - "충돌 없이 도달했다"는 결과를 신뢰할 수 있다.
+    target_tip_z = scan_top_z + GRASP_STANDOFF
+    print(f"[하강 준비] scan_top_z={scan_top_z:.4f} half_height={half_height:.4f} "
           f"grasp_radius={grasp_radius:.4f} target_tip_z={target_tip_z:.4f} "
-          f"hover_lift_h={hover_lift_h:.4f}", flush=True)
-    CREEP_STEP_H = 0.001
-    CREEP_OVERTRAVEL_LIMIT = 0.06
-    h = hover_lift_h
-    n_creep_steps = 0
-    grasped = False
-    while True:
-        tip_now = measure_tip_world_pos()
-        if float(tip_now[2]) <= target_tip_z - CREEP_OVERTRAVEL_LIMIT:
-            print(f"[크립 하강] 오버트래블 한계 도달(tip_z={float(tip_now[2]):.4f}) - 흡착 실패로 중단",
-                  flush=True)
-            break
-        h -= CREEP_STEP_H
-        set_lift_height(h)
-        world.step(render=True)
-        lift_state["h"] = h
-        n_creep_steps += 1
-        m0609_robot.gripper.close()
-        if m0609_robot.gripper.is_closed():
-            grasped = True
-            break
-    print(f"[크립 하강 완료] {n_creep_steps}스텝, 리프트 {hover_lift_h:.3f} -> {lift_state['h']:.3f} "
-          f"grasped={grasped}", flush=True)
+          f"리프트 고정값={lift_state['h']:.4f}", flush=True)
 
-    # (e) 같은 원리로 순수 수직 후퇴 - 리프트만 다시 호버 때 높이로 되돌린다(팔은 그대로).
-    move_lift_to(hover_lift_h, steps=300, hold_gripper_closed=grasped)
+    def creep_descend_arm(target_z, step_z=0.001, overtravel_limit=0.06, max_steps=4000, label=""):
+        """리프트 고정, RMPflow로 흡착 팁 z만 매 스텝 조금씩 낮춘다. move_link6_smooth와 동일한
+        폐루프 방식(지금 실측 팁 위치 기준 오차를 link6에 그대로 더해 명령)이라 link6<->팁
+        오프셋을 따로 보정할 필요가 없다. 매 스텝 흡착을 시도해 붙는 순간 바로 멈춘다."""
+        tip0 = measure_tip_world_pos()
+        xy_fixed = np.array([float(tip0[0]), float(tip0[1])])
+        z_floor = target_z - overtravel_limit
+        z_goal = float(tip0[2])
+        grasped_ = False
+        step = 0
+        for step in range(1, max_steps + 1):
+            if z_goal <= z_floor:
+                print(f"  [하강{' ' + label if label else ''}] 오버트래블 한계 도달"
+                      f"(z_goal={z_goal:.4f}) - 흡착 실패로 중단", flush=True)
+                break
+            z_goal = max(z_goal - step_z, z_floor)
+            tip_now = measure_tip_world_pos()
+            err_vec = np.array([xy_fixed[0], xy_fixed[1], z_goal]) - np.array(tip_now, dtype=float)
+            ee_pos, _ = m0609_robot.end_effector.get_world_pose()
+            sync_rmp_base()
+            actions = controller.forward(
+                target_end_effector_position=np.array(ee_pos, dtype=float) + err_vec,
+                target_end_effector_orientation=DOWN_QUAT,
+            )
+            m0609_robot.apply_action(actions)
+            m0609_robot.gripper.close()
+            set_lift_height(lift_state["h"])
+            world.step(render=True)
+            if m0609_robot.gripper.is_closed():
+                grasped_ = True
+                break
+        tip_final = measure_tip_world_pos()
+        print(f"[하강 완료{' ' + label if label else ''}] {step}스텝, tip_z={float(tip_final[2]):.4f} "
+              f"grasped={grasped_} (리프트는 계속 {lift_state['h']:.3f} 고정)", flush=True)
+        return grasped_, step
+
+    grasped, _ = creep_descend_arm(target_tip_z, label=f"#{idx}")
+
+    # 후퇴도 RMPflow로 - 호버 때와 동일한 hover_target으로 되돌아간다(리프트는 여전히 고정).
+    move_link6_smooth(hover_target, hold_gripper_closed=grasped, label=f"파지 후 후퇴(#{idx})")
 
     box_pos_after = get_world_pos(box_prim)
     lifted_with_box = bool(box_pos_after[2] > box_pos[2] + 0.15)
