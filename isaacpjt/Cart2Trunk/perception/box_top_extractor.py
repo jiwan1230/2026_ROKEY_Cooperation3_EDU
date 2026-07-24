@@ -110,6 +110,37 @@ def _parse_image_roi() -> tuple[float, float, float, float]:
 IMAGE_ROI = _parse_image_roi()
 
 
+def _parse_roi_base_bounds(env_name: str, default: str) -> Optional[np.ndarray]:
+    """"x_min,y_min,z_min" 또는 "x_max,y_max,z_max" 형태의 3-tuple을 읽는다.
+    빈 문자열("")을 넣으면 그 축의 제한을 끈다(None 반환 = 크롭 비활성화)."""
+    raw = os.environ.get(env_name, default)
+    if raw.strip() == "":
+        return None
+    try:
+        values = [float(item) for item in raw.split(",")]
+    except ValueError:
+        values = [float(item) for item in default.split(",")]
+    if len(values) != 3:
+        values = [float(item) for item in default.split(",")]
+    return np.asarray(values, dtype=np.float64)
+
+
+# ============================================================
+# 3D ROI (base_link 좌표계, 카트 내부 볼륨으로 제한)
+# ============================================================
+# 88.cart_scan_holonomic.py 실측(2026-07-24) - 카트 옆면 스캔에서 진짜 박스 2개 외에
+# 카트 자체(와이어 메쉬, 손잡이, 바퀴)가 5개의 가짜 "박스"로 오검출됐다. 오검출된 것들은
+# 전부 "카트 테두리 높이 -> 실제 바닥까지 거리"가 거의 동일(~0.43m)한 값으로 나왔는데,
+# 이는 카트 구조물의 여러 지점이 윗면 후보로 잘못 잡히고 그 아래 진짜 바닥까지
+# ray-cast되어 생긴 특징이다(RANSAC/서포트 탐지 이후에는 걸러내기 어렵다). 그래서 PDF
+# 요구 파이프라인 순서("Depth -> Point Cloud 변환 -> ROI 적용 -> ...")대로, RANSAC 전에
+# base_link 좌표계에서 "카트 바스켓 내부"로 point cloud 자체를 먼저 크롭한다.
+# 기본값은 88.py 실측 데이터(진짜 박스 중심 x=-0.11~0.17, y=0.63~0.66, z=-0.06~-0.05)에
+# 여유를 두고 넉넉하게 잡은 값 - 실제 카트/스캔 자세에 맞게 환경변수로 조정한다.
+ROI_BASE_MIN = _parse_roi_base_bounds("CART2TRUNK_ROI_BASE_MIN", "-0.35,0.40,-0.15")
+ROI_BASE_MAX = _parse_roi_base_bounds("CART2TRUNK_ROI_BASE_MAX", "0.35,0.90,0.15")
+
+
 # ============================================================
 # Open3D 전처리
 # ============================================================
@@ -664,6 +695,9 @@ class DepthTopmostBoxExtractor(Node):
         scene_points = self.depth_to_points(
             depth
         )
+        scene_points = self.filter_points_by_base_roi(
+            scene_points
+        )
         self.latest_raw_scene_points = scene_points
         self.latest_header = msg.header
 
@@ -815,6 +849,25 @@ class DepthTopmostBoxExtractor(Node):
         return np.column_stack(
             (x, y, z)
         ).astype(np.float64)
+
+    def filter_points_by_base_roi(
+        self,
+        points_cam: np.ndarray,
+    ) -> np.ndarray:
+        """카메라 좌표계 점들을 base_link 좌표계로 옮겨서 ROI_BASE_MIN/MAX 밖의 점을
+        RANSAC 전에 잘라낸다(카트 와이어 메쉬/손잡이/바퀴 오검출 방지, PDF 요구 파이프라인의
+        "ROI 적용" 단계). ROI_BASE_MIN 또는 MAX가 None이면(환경변수로 끈 경우) 그대로 반환."""
+        if ROI_BASE_MIN is None or ROI_BASE_MAX is None:
+            return points_cam
+        if len(points_cam) == 0:
+            return points_cam
+
+        points_base = points_cam @ self._base_R.T + self._base_t
+        inside = np.all(
+            (points_base >= ROI_BASE_MIN) & (points_base <= ROI_BASE_MAX),
+            axis=1,
+        )
+        return points_cam[inside]
 
     @staticmethod
     def preprocess_cloud(
