@@ -34,6 +34,8 @@ HEADLESS = os.environ.get("HEADLESS", "0") == "1"
 # STAGE=1.1: 위 + 박스 하단이 트렁크 입구 턱을 넘도록 높이만 올림(천장 충돌은 없게 클램프).
 # STAGE=2: 위 + 홀로노믹 베이스가 의도한 근접 위치(j1_x=TRUNK_X_MIN)까지 이동(팔은 그대로).
 # STAGE=3: 위 + 홀로노믹/매니퓰레이터를 함께 조금씩 조정하며 배치 위치로 정밀 접근 + PLACE.
+# STAGE=4: 위 + PLACE 완료 후 지금까지의 전진 시퀀스를 역순으로 밟아 STAGE 1 상태(홀딩 자세,
+#          BASE_START_XY 근처)로 후퇴.
 STAGE = float(os.environ.get("STAGE", "1"))
 _sim_app_config = {"headless": HEADLESS}
 if not HEADLESS:
@@ -72,7 +74,7 @@ from m0609_rmpflow_controller import RMPFlowController  # noqa: E402
 # ---------------- 89.py와 완전히 동일 - 차량/트렁크 실측 상수 ----------------
 CAR_USD = str(_THIS_DIR / "assets/Lexus_IS300_Trunk_Open_No_More_Hell_Room.usdz")
 CAR_POS = (5.0, 0.0, 0.0)
-CAR_EXTRA_SCALE = 0.50
+CAR_EXTRA_SCALE = 0.53
 CAR_ROT_Z = 0.0
 TRUNK_X_MIN, TRUNK_X_MAX = 3.11, 3.68
 TRUNK_Y_MIN, TRUNK_Y_MAX = -0.56, 0.56
@@ -1295,6 +1297,16 @@ if STAGE >= 2:
     else:
         print("[성공] STAGE 2 - 박스가 자세 붕괴 없이 트렁크 입구를 넘었습니다.", flush=True)
 
+    # 사용자 지적(STAGE 4 역순 재검토) - STAGE 4가 나중에 "STAGE 2가 끝난 바로 그 지점"으로
+    # 정확히 되돌아가려면, 그 시점의 섀시/팔(둘 다 - 팔은 얼어붙은 채 섀시에 실려왔으므로
+    # 섀시가 움직인 만큼 팔의 world 위치도 같이 움직여 있음) 위치를 실측해서 저장해둬야 한다 -
+    # STAGE 1의 xy(_init_ee_pos)를 재사용하면 섀시가 실제로 멈춘 지점과 안 맞아 진짜 역순이
+    # 아니게 된다.
+    stage2_end_chassis_pos, _ = base_robot.get_world_pose()
+    stage2_end_ee_pos, _ = m0609_robot.end_effector.get_world_pose()
+    print(f"[STAGE2 체크포인트 저장] 섀시={np.round(stage2_end_chassis_pos, 3)} "
+          f"팔ee={np.round(stage2_end_ee_pos, 3)}", flush=True)
+
     chassis_pos0, _ = base_robot.get_world_pose()
     snapshot(eye=[chassis_pos0[0] - 1.5, chassis_pos0[1] - 2.2, chassis_pos0[2] + 1.4],
              target=[float(chassis_pos0[0]), ANCHOR_Y, 0.5],
@@ -1322,6 +1334,43 @@ if STAGE >= 3:
     # 또한 STAGE 2에서 만든 안전장치(자세 붕괴 감지/즉시 정지/근접 시 저속화)를 여기도 그대로
     # 적용한다 - STAGE 2는 팔이 얼어붙어 있어 "기준 오프셋 대비 편차"로 충돌을 감지했지만,
     # 여기는 팔이 능동적으로 추종 중이므로 대신 박스 Y 이탈/흡착 해제만으로 감지한다.
+
+    # 사용자 지적(STAGE 2->3 전환에서 충돌) - STAGE 2까지는 리프트가 LIFT_MAX(차체 밑을
+    # 지나는 안전마진)로 고정돼 있었다. 박스가 입구를 이미 넘은 지금은 더 이상 차체 밑이
+    # 아니라 트렁크 입구/안쪽이라 아래쪽에 여유가 있으므로, STAGE 3(홀로노믹+팔 동시 접근)에
+    # 들어가기 전에 리프트를 살짝 낮춰본다. 처음엔 0.15m를 내리면서 ee 목표 높이(ENTRY_HOLDING_Z)를
+    # 그대로 유지했더니 너무 많이 내려갔고, 그리고 사용자가 "그리퍼(ee)는 고정한 채 리프트만
+    # 내려서 팔이 그만큼 더 위로 뻗어 보정하는" 방식이 아니라 "매니퓰레이터(ee)도 리프트와
+    # 같이 내려갔으면 좋겠다"고 지적 - 리프트/ee가 같은 양만큼 함께 내려가도록 target_z도
+    # STAGE3_PRE_LIFT_DROP만큼 낮춘다(팔이 보정용으로 더 뻗지 않고, 자세 자체는 유지한 채
+    # 통째로 하강).
+    STAGE3_PRE_LIFT_DROP = 0.05
+    STAGE3_PRE_LIFT_H = max(LIFT_MIN, LIFT_MAX - STAGE3_PRE_LIFT_DROP)
+    # STAGE 3 전체(정밀 접근 + 마무리 정렬)에서 쓸 진입 높이 - 원래 ENTRY_HOLDING_Z가 아니라
+    # 여기서 낮춘 높이를 그대로 써야 한다. 안 그러면 바로 다음 drive_and_reach()의 ee_target_pos가
+    # 다시 원래 ENTRY_HOLDING_Z를 가리켜서, 방금 내린 팔이 접근 도중 도로 올라가버려
+    # 이 사전 하강이 무의미해진다.
+    STAGE3_ENTRY_Z = ENTRY_HOLDING_Z - STAGE3_PRE_LIFT_DROP
+    # 사용자 지적(재조정) - TRUNK_ENTRANCE_X/STAGE3_PRE_LIFT_DROP만으로는 한계가 있었다 -
+    # 순수 수직 하강이라 그리퍼가 입구 아래쪽 턱을 정면으로 긁는다. 하강하는 동안 그리퍼가
+    # 대각선으로 살짝 더 안쪽(+X, 트렁크 쪽)까지 들어가게 만들어서 "아래로 내려가며 동시에
+    # 조금 전진"하는 경로로 턱을 피해가게 한다 - target_xy를 stage2_end_ee_pos 그대로가 아니라
+    # STAGE3_PRE_X_ADVANCE만큼 앞으로 옮긴 지점으로 준다(z는 기존처럼 alpha로 보간, xy는
+    # RMPflow가 매 스텝 그 앞쪽 목표를 향해 수렴하므로 자연스럽게 대각선 경로가 나온다).
+    STAGE3_PRE_X_ADVANCE = 0.02
+    stage3_pre_target_xy = (
+        float(stage2_end_ee_pos[0]) + STAGE3_PRE_X_ADVANCE,
+        float(stage2_end_ee_pos[1]),
+    )
+    stage3_pre_ee, stage3_pre_err = descend_and_raise_lift(
+        stage3_pre_target_xy,
+        STAGE3_ENTRY_Z,
+        STAGE3_PRE_LIFT_H, steps=150, hold_gripper_closed=True,
+        label="STAGE3 사전: 입구 통과 후 리프트+팔 함께 대각선(하강+소폭 전진)",
+    )
+    if stage3_pre_err > 0.03:
+        raise SystemExit(f"[중단] STAGE3 사전 리프트 하강 실패: err={stage3_pre_err:.3f}m")
+
     STAGE3_ARM_REACH_MARGIN = 0.35
     STAGE3_Y_TOLERANCE = 0.04
     stage3_target_x = min(place_world_xy[0] - STAGE3_ARM_REACH_MARGIN, TRUNK_X_MAX)
@@ -1356,22 +1405,28 @@ if STAGE >= 3:
               f"박스 뒤={rear_x:.3f} 앞={front_x:.3f} 중심={np.round(box_center, 3)} "
               f"붙어있음={m0609_robot.gripper.is_closed()}", flush=True)
 
-    _, _, _, _, stage3_aborted = drive_and_reach(
+    _, stage3_ee_pos, stage3_ee_err, _, stage3_aborted = drive_and_reach(
         target_x=stage3_target_x, target_y=ANCHOR_Y,
-        ee_target_pos=(place_world_xy[0], place_world_xy[1], ENTRY_HOLDING_Z),
+        ee_target_pos=(place_world_xy[0], place_world_xy[1], STAGE3_ENTRY_Z),
         ee_orientation=DOWN_QUAT, hold_gripper_closed=True,
         max_speed=0.10, max_speed_fn=_stage3_max_speed,
         abort_fn=_stage3_pose_broken, hard_stop_on_condition=True,
         label="STAGE3: 정밀 접근(홀로노믹+팔 동시 조정, 저속)",
         debug_interval=5, debug_fn=_stage3_debug,
     )
-    if stage3_aborted:
-        print("[실패] STAGE 3 정밀 접근 중 자세 붕괴(충돌 의심)가 감지돼 즉시 중단했습니다 - "
-              "STAGE3_ARM_REACH_MARGIN을 늘리거나 접근 경로를 재검토하세요. PLACE를 계속 "
-              "진행하지 않는 것을 권장합니다.", flush=True)
+    # 사용자 지적(중대 버그) - 원래는 여기서 경고만 찍고 그대로 PLACE/후퇴까지 계속 진행했다.
+    # 그러면 "충돌로 틀어진 임의의 상태"에서 박스를 내려놓고 후퇴를 시작하게 되어, 그 뒤
+    # 모든 단계가 성공한 전진 경로가 아니라 잘못된 상태를 기준으로 동작하게 된다 - 실제로
+    # 이 때문에 STAGE 4 후퇴가 연쇄적으로 잘못됐다. 여기서 확실히 멈춘다.
+    if stage3_aborted or stage3_ee_err > 0.03:
+        raise SystemExit(
+            f"[중단] STAGE 3 정밀 접근 실패(자세붕괴={stage3_aborted}, ee_err={stage3_ee_err:.3f}m) - "
+            "PLACE/후퇴를 진행하지 않습니다. STAGE3_ARM_REACH_MARGIN을 늘리거나 접근 경로를 "
+            "재검토하세요."
+        )
 
     # 위 결합 이동이 정체/시간 부족으로 덜 수렴했을 경우를 대비한 마무리 정렬(여전히 진입 높이).
-    side_entry_pos = (place_world_xy[0], place_world_xy[1], ENTRY_HOLDING_Z)
+    side_entry_pos = (place_world_xy[0], place_world_xy[1], STAGE3_ENTRY_Z)
     move_link6(side_entry_pos, steps=200, label="PLACE 측면 진입 마무리 정렬(진입 높이 유지)")
 
     snapshot(eye=[chassis_pos0[0] - 1.2, chassis_pos0[1] - 2.0, chassis_pos0[2] + 1.3],
@@ -1412,6 +1467,104 @@ if STAGE >= 3:
     }
     (OUT_DIR / "_trunkplace_result.json").write_text(json.dumps(result, indent=2))
     print(f"[저장 완료] {OUT_DIR / '_trunkplace_result.json'}", flush=True)
+
+    if STAGE < 4:
+        print("\n[STAGE 3 완료] PLACE까지 완료 - STAGE=4로 다시 실행하면 STAGE 1 상태로 "
+              "후퇴하는 것까지 진행합니다.\n", flush=True)
+
+if STAGE >= 4:
+    # ================= STAGE 4: 후퇴 (STAGE 3 -> ... -> STAGE 1 상태로 역순 복귀) =================
+    # 사용자 설계(재검토) - 지금까지 밟은 전진 시퀀스를 그대로 거꾸로 밟는다:
+    #   4-1) descend_and_raise_lift의 역방향 - PLACE_LIFT_MAX/release_z에서
+    #        LIFT_MAX/ENTRY_HOLDING_Z로 복귀(리프트 하강 + 팔 목표 상승, 동시 진행). XY는
+    #        아직 place_world_xy 그대로 - 이 스텝은 순수 Z 변화만 담당(STAGE 3c와 대칭).
+    #   4-2) STAGE 3a(정밀 접근)의 역 - 사용자 지적: 팔이 place_world_xy까지 "쭉 뻗은 상태"
+    #        그대로인데 여기서 곧장 얼려서 끌고 가면 뻗은 채 계속 앞을 향하게 된다. STAGE 2
+    #        방식(얼림)이 아니라 STAGE 3과 동일한 능동 추종(drive_and_reach)으로 팔 XY도
+    #        원래(STAGE 1) 근처로 되돌리면서 섀시도 같이 후퇴시킨다.
+    #   4-3) STAGE 2(홀로노믹 근접 접근)의 역 - 팔이 4-2에서 이미 컴팩트해졌으니, 이제는
+    #        그 자세로 고정한 채(STAGE 2와 동일한 "얼려서 드라이브" + 안전장치) 섀시만
+    #        BASE_START_XY까지 마저 후퇴.
+    #   4-4) STAGE 1.1의 역 - ENTRY_HOLDING_Z에서 STAGE 1의 HOLDING_Z로 복귀.
+    # 박스는 STAGE 3에서 이미 내려놓고 그리퍼를 열었으므로, 이 구간 전체에서
+    # hold_gripper_closed=False로 둔다(더 이상 잡을 대상이 없음).
+    print("\n[STAGE 4] 후퇴 시작 - STAGE 3 -> STAGE 1 상태로 역순 복귀", flush=True)
+
+    # ---- 4-1) PLACE 하강+리프트상승의 역: 진입높이 복귀 + 리프트 하강 (XY는 place_world_xy 유지) ----
+    stage4_1_ee, stage4_1_err = descend_and_raise_lift(
+        (place_world_xy[0], place_world_xy[1]), ENTRY_HOLDING_Z, LIFT_MAX, steps=250,
+        hold_gripper_closed=False, label="STAGE4-1: 진입높이 복귀 + 리프트 하강(역방향)",
+    )
+    if stage4_1_err > 0.03:
+        raise SystemExit(f"[중단] STAGE4-1 복귀 실패: err={stage4_1_err:.3f}m")
+
+    # ---- 4-2A) 정밀 접근의 역: 섀시는 그대로 두고 팔만 먼저 STAGE 2 종료 지점으로 정확히
+    # 복귀시킨다(수렴 확인 전에 섀시를 같이 움직이면, 섀시가 우연히 이미 목표 근처라
+    # drive_and_reach의 종료 조건(섀시 tolerance만 체크)이 팔 수렴 전에 만족돼버려
+    # "얼린 자세"가 실제로는 수렴 안 된 자세일 수 있다 - 사용자가 실측 로그로 지적한 버그).
+    #
+    # 사용자 지적(재검토) - 처음엔 여기서 _init_ee_pos(STAGE 1 맨 처음, 섀시가 BASE_START_XY에
+    # 있을 때 캡처한 값)를 팔 목표로 쓰면서 섀시 목표는 TRUNK_ENTRANCE_X로 줬다 - 이 둘은
+    # 서로 다른 시점의 좌표라 앞뒤가 안 맞았다(진짜 역순이 아니었음). STAGE 2 종료 시점의
+    # 섀시/팔 위치를 실측해서 저장해둔 stage2_end_chassis_pos/stage2_end_ee_pos를 대신 쓴다 -
+    # 팔이 "얼어붙은 채 섀시에 실려" STAGE 2 내내 이동했으므로, 그 종료 시점의 실제 팔
+    # world 위치가 곧 "이 시점에 팔이 있어야 할 정확한 자리"다.
+    stage4_2_ee, stage4_2_err = move_link6(
+        stage2_end_ee_pos, steps=300, hold_gripper_closed=False, orientation=DOWN_QUAT,
+        label="STAGE4-2A: 팔을 STAGE2 종료 자세로 복귀(섀시 정지)",
+    )
+    if stage4_2_err > 0.02:
+        raise SystemExit(f"[중단] STAGE4-2A 팔 복귀 실패: {stage4_2_err:.3f}m")
+
+    # ---- 4-2B) 위에서 수렴이 확인된 관절값을 고정 ----
+    stage4_hold_q = np.asarray(m0609_robot.get_joint_positions(), dtype=float).copy()
+
+    # ---- 4-3) 근접 접근의 역: 팔은 4-2에서 이미 컴팩트해졌으니 그 자세로 고정한 채 섀시만
+    # STAGE2 종료 지점(stage2_end_chassis_pos)까지 후퇴 - STAGE 2와 동일한 "얼려서 드라이브" +
+    # 안전장치 재사용 ----
+    _stage4_chassis_start, _ = base_robot.get_world_pose()
+    _stage4_tip_start = _measure_tip_pos()
+    stage4_tip_rel_ref = _stage4_tip_start - np.asarray(_stage4_chassis_start, dtype=float)
+
+    def _hold_stage4_arm():
+        m0609_robot.apply_action(ArticulationAction(joint_positions=stage4_hold_q))
+
+    def _stage4_pose_broken():
+        chassis_pos, _ = base_robot.get_world_pose()
+        tip_pos = _measure_tip_pos()
+        tip_rel = tip_pos - np.asarray(chassis_pos, dtype=float)
+        relative_error = float(np.linalg.norm(tip_rel - stage4_tip_rel_ref))
+        return relative_error > STAGE2_POSE_DRIFT_TOLERANCE
+
+    def _stage4_max_speed():
+        chassis_pos, _ = base_robot.get_world_pose()
+        remaining = abs(float(chassis_pos[0]) - BASE_START_XY[0])
+        if remaining < 0.15:
+            return 0.05
+        return 0.10
+
+    final_pos, final_yaw, _, stage4b_aborted = drive_until(
+        lambda: False, target_x=BASE_START_XY[0], target_y=BASE_START_XY[1],
+        max_speed=0.10, max_speed_fn=_stage4_max_speed,
+        per_step_fn=_hold_stage4_arm, abort_fn=_stage4_pose_broken,
+        hard_stop_on_condition=True,
+        label="STAGE4-3: 트렁크 밖으로 후퇴(팔 자세 고정, 저속)",
+    )
+    stage4_aborted = stage4b_aborted
+    if stage4_aborted:
+        print("[실패] STAGE 4 후퇴 중 자세 붕괴(충돌 의심)가 감지돼 중단했습니다.", flush=True)
+
+    # ---- 4-4) STAGE 1.1의 역: 진입높이 -> STAGE 1 홀딩 높이로 복귀 ----
+    _final_ee_pos, _ = m0609_robot.end_effector.get_world_pose()
+    move_link6((float(_final_ee_pos[0]), float(_final_ee_pos[1]), HOLDING_Z), steps=200,
+               hold_gripper_closed=False, orientation=DOWN_QUAT,
+               label="STAGE4-4: STAGE 1 홀딩 높이로 복귀")
+
+    chassis_pos0, _ = base_robot.get_world_pose()
+    snapshot(eye=[chassis_pos0[0] - 2.2, chassis_pos0[1] - 3.2, chassis_pos0[2] + 1.6],
+             target=[(chassis_pos0[0] + CAR_POS[0]) / 2, 0.0, 1.0], fname="_trunkplace_04_retreated.png")
+    print(f"\n[STAGE 4 완료] 후퇴 완료(성공={not stage4_aborted}) - STAGE 1 상태(홀딩 자세, "
+          f"BASE_START_XY 근처)로 복귀됨.\n", flush=True)
 
 if HEADLESS:
     simulation_app.close()
