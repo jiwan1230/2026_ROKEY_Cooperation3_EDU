@@ -68,6 +68,15 @@ MIN_PLAUSIBLE_BOX_FOOTPRINT_SIDE_M = float(
     os.environ.get("CART2TRUNK_MIN_PLAUSIBLE_BOX_FOOTPRINT_SIDE_M", "0.08")
 )
 
+# 88.cart_scan_holonomic.py(카트 바스켓 스캔)에서 실측 확인: 카트 자체의 철망
+# 테두리(림)가 하나의 거대한 평면 후보(0.57x0.77m)로 검출되고, 마침 fill_ratio도
+# 높게(0.98+) 나와서 유령 박스로 남았다 - 이 데모의 실제 박스는 테이블/카트
+# 시나리오를 통틀어 가장 큰 것도 한 변 0.23m를 넘지 않는다. 실제 박스보다는
+# 넉넉히 크게, 카트 림처럼 명백히 큰 구조물보다는 확실히 작게 잡는다.
+MAX_PLAUSIBLE_BOX_FOOTPRINT_SIDE_M = float(
+    os.environ.get("CART2TRUNK_MAX_PLAUSIBLE_BOX_FOOTPRINT_SIDE_M", "0.35")
+)
+
 # 같은 이유(3-10절)로 실측 확인: fill_ratio가 매우 낮은(~0.50, 사각형의 절반
 # 정도만 실제로 채워진) 후보가 간헐적으로(5회 중 2회) 최소 등장 횟수 기준은
 # 통과해서 유령 4번째 박스로 남는 사례가 있었다 - 진짜 박스 윗면은 8회 이상
@@ -480,11 +489,19 @@ def detect_boxes_in_base_frame(
             continue
         best = max(items, key=lambda b: (b["top"].fill_ratio, len(b["top"].points)))
         narrower_side = min(float(best["top"].width), float(best["top"].height))
+        wider_side = max(float(best["top"].width), float(best["top"].height))
         if narrower_side < MIN_PLAUSIBLE_BOX_FOOTPRINT_SIDE_M:
             print(
                 f"[multiview_scan] 후보 center={np.round(best['top'].center, 3).tolist()}: "
                 f"짧은 변이 {narrower_side:.3f}m(<{MIN_PLAUSIBLE_BOX_FOOTPRINT_SIDE_M}m)로 너무 가늘어서 "
                 "실제 박스로 보기 어려움 -> 제외", flush=True,
+            )
+            continue
+        if wider_side > MAX_PLAUSIBLE_BOX_FOOTPRINT_SIDE_M:
+            print(
+                f"[multiview_scan] 후보 center={np.round(best['top'].center, 3).tolist()}: "
+                f"긴 변이 {wider_side:.3f}m(>{MAX_PLAUSIBLE_BOX_FOOTPRINT_SIDE_M}m)로 너무 커서 "
+                "실제 박스로 보기 어려움(카트/테이블 등 구조물로 추정) -> 제외", flush=True,
             )
             continue
         if float(best["top"].fill_ratio) < MIN_FINAL_FILL_RATIO:
