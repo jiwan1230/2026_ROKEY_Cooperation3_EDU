@@ -565,6 +565,25 @@ ENTRY_HOLDING_Z = min(place_release_z + ENTRY_CLEARANCE_ABOVE_RELEASE, SAFE_TRAN
 print(f"[STAGE 1.1 사전계산] ENTRY_HOLDING_Z={ENTRY_HOLDING_Z:.3f} "
       f"(release_z+{ENTRY_CLEARANCE_ABOVE_RELEASE:.2f}, 천장한계 {SAFE_TRANSIT_Z:.3f} 이내로 클램프)", flush=True)
 
+# 사용자 설계 문서(Stage 2 한계 극복) - 지금까지의 STAGE 2/3(수평 이동)는 "박스+그리퍼 스택이
+# 입구 수직 개구부에 다 들어가는" 박스에서만 통한다. 큰 박스는 수평으로는 절대 못 들어가므로
+# 별도의 Tilt-and-Insert(문턱 앞에서 피치업 -> 기울인 채 통과 -> 내부에서 다시 수평 복원)가
+# 필요하다 - 아래는 "이 박스가 어느 쪽인지"를 하드코딩된 박스별 임계값 없이 치수만으로
+# 판정하는 함수. PROBE_ARM_ENVELOPE로 실측한 GRIPPER_ARM_OVERHEAD(그리퍼가 박스 위로 튀어
+# 나오는 길이, 하드웨어 상수라 박스 크기와 무관)를 박스 높이에 더해 실제로 필요한 수직
+# 공간을 구하고, 이미 계산된 CEILING_WORLD_Z/TRUNK_FLOOR_Z와 비교한다.
+GRIPPER_ARM_OVERHEAD = 0.1127  # PROBE_ARM_ENVELOPE 실측(박스 바닥~그리퍼 최상단 - 박스 두께)
+HORIZONTAL_PASS_MARGIN = 0.03  # 수평 통과 시 위아래 각각 남겨야 하는 최소 여유
+
+
+def box_needs_tilt(box_height_z, ceiling_z=CEILING_WORLD_Z, floor_ref_z=TRUNK_FLOOR_Z):
+    """box_height_z(박스를 수평으로 들었을 때의 두께)만으로 Tilt-and-Insert가 필요한지
+    판정한다 - 박스별 하드코딩 임계값이 아니라 실측 상수(GRIPPER_ARM_OVERHEAD)와 이미 계산된
+    천장/바닥 기준값으로 매번 새로 계산되므로 다른 크기 박스에도 그대로 재사용된다."""
+    required = float(box_height_z) + GRIPPER_ARM_OVERHEAD + 2.0 * HORIZONTAL_PASS_MARGIN
+    available = float(ceiling_z) - float(floor_ref_z)
+    return required > available, required, available
+
 # 사용자 설계(5차) - LIFT_TRAVEL_M=0.35(LIFT_MAX≈0.388)는 "차체 밑을 지나는" 시나리오의
 # 안전마진인데, 스크립트 시작부터 계속 LIFT_MAX에 고정해두고 그 이후 ENTRY_HOLDING_Z(0.83)
 # ->place_release_z 낙차를 팔 혼자서만 커버해왔다 - 팔이 그 큰 낙차+수평 reach를 동시에
@@ -1113,6 +1132,17 @@ gripper.close()
 step_hold(10)
 print(f"[시험용 박스 부착] grasped={gripper.is_closed()}", flush=True)
 
+# 사용자 설계 문서(Stage 2 한계 극복) - 지금 박스가 수평 통과 가능한지, Tilt-and-Insert가
+# 필요한지 미리 판정해둔다(실제 STAGE 2 진입은 아래에서 이 값을 보고 분기).
+BOX_NEEDS_TILT, _tilt_required, _tilt_available = box_needs_tilt(TEST_BOX_SIZE[2])
+if os.environ.get("FORCE_TILT_TEST") == "1":
+    print("[FORCE_TILT_TEST] 실제 판정과 무관하게 Tilt-and-Insert 경로를 강제로 사용합니다"
+          "(대형 박스 시나리오 없이 새 경로를 스모크 테스트하기 위한 진단 플래그).", flush=True)
+    BOX_NEEDS_TILT = True
+print(f"[문턱 통과 방식 판정] 박스높이={TEST_BOX_SIZE[2]:.3f}m 필요공간={_tilt_required:.3f}m "
+      f"가용공간={_tilt_available:.3f}m -> {'TILT_AND_INSERT 필요' if BOX_NEEDS_TILT else '수평 통과 가능(기존 STAGE 2/3)'}",
+      flush=True)
+
 # 사용자 지적 - 93번 진단은 "박스 자체의 수직 두께"만 필요공간으로 계산했는데, 실제로 입구를
 # 통과해야 하는 건 박스 혼자가 아니라 "박스를 아래에 매달고 있는 그리퍼 + 그 그리퍼가 붙은
 # link_6(팔 최종 세그먼트)"까지 포함한 강체 전체다(그림 참고 - link_6가 박스 바로 위에서
@@ -1349,14 +1379,108 @@ if STAGE >= 2:
               f"임계값까지남은거리={threshold_x - rear_x:+.3f} 붙어있음={m0609_robot.gripper.is_closed()}",
               flush=True)
 
-    final_pos, final_yaw, condition_met, aborted = drive_until(
-        _box_cleared_entrance, target_x=TRUNK_X_MAX, target_y=ANCHOR_Y,
-        kp_xy=0.8, max_speed=0.08, max_speed_fn=_stage2_max_speed,
-        per_step_fn=_hold_stage2_arm, abort_fn=_stage2_pose_broken,
-        hard_stop_on_condition=True,
-        label="STAGE2: 박스가 트렁크 입구를 완전히 넘을 때까지 전진(팔 자세 고정, 저속)",
-        debug_interval=5, debug_fn=_stage2_debug,
-    )
+    # 사용자 설계 문서(Stage 2 한계 극복) - Tilt-and-Insert: 박스+그리퍼 스택이 수평으로는
+    # 입구 개구부에 안 들어가는 큰 박스용 대안 진입. 4단계(그림 참고):
+    #   1) 문턱 전방 접근 - 박스 수평 유지한 채 입구 앞 approach_standoff까지 이동(기존
+    #      STAGE2 "얼려서 드라이브" 패턴 재사용, 목표 지점만 다름).
+    #   2) 진입 전 피치 회전 - 섀시 정지, 그리퍼(및 박스)를 tilt_deg만큼 피치업해서 선단
+    #      하부 모서리가 문턱보다 높아지게 한다(천장으로 더 올리는 대신 "기울여서" 유효
+    #      높이를 줄이는 방식 - 천장 한계는 그대로 유지해야 하므로 절대 위로 더 올리지 않음).
+    #   3) 기울임 자세로 문턱 통과 - 그 자세를 유지한 채 섀시를 전진(팔은 능동 추종,
+    #      drive_and_reach와 동일 패턴이나 orientation을 기울인 채 고정).
+    #   4) 내부 자세 복원 - 문턱을 지난 뒤 섀시 정지, 그리퍼를 다시 수평(DOWN_QUAT)으로.
+    # 각 단계 실패(자세 붕괴/그리퍼 이탈/수렴 실패) 시 SystemExit으로 즉시 중단 - STAGE 3/4가
+    # 잘못된 상태 위에서 이어지지 않게 한다(STAGE 3에서 이미 확립한 원칙과 동일).
+    #
+    # 주의 - 이 함수는 지금 실제로 "수평 통과 불가능한 큰 박스" 시나리오가 없어서(현재
+    # placement_result.json의 박스는 수평 통과 가능 판정) 물리적 충돌 검증을 아직 못 했다.
+    # FORCE_TILT_TEST=1로 강제 진입시켜 코드 경로 자체는 확인할 수 있지만, tilt_deg/
+    # approach_standoff/restore_clear_margin 값은 실제 대형 박스가 생기면 그때 실측 기반으로
+    # 다시 튜닝해야 한다(이 프로젝트의 다른 모든 단계도 그렇게 완성됨).
+    def tilt_and_insert_through_entrance(entrance_x, tilt_deg=12.0, approach_standoff=0.15,
+                                          restore_clear_margin=0.10, tilt_steps=150,
+                                          drive_max_speed=0.05):
+        tilt_quat = euler_angles_to_quat(np.array([0.0, np.pi - np.radians(tilt_deg), 0.0]))
+
+        def _tilt_broken():
+            return not m0609_robot.gripper.is_closed()
+
+        # ---- Phase 1: 문턱 전방 접근(수평 유지, 팔 얼려서 드라이브) ----
+        # 첫 스모크 테스트(FORCE_TILT_TEST)에서 실제로 발견된 버그 - approach_standoff를
+        # "섀시 x" 기준으로 재면, 팔이 뻗은 채 얼어있어 박스가 섀시보다 훨씬 앞으로 튀어나와
+        # 있는 만큼(offset~0.37m) 착각이 생긴다 - 섀시는 아직 여유 있어 보여도 박스 앞쪽은
+        # 이미 입구 안쪽 깊숙이 들어가 있었다. 그 상태에서 TILT-2가 방향을 틀려다 err=1.33m로
+        # 터졌다(IK 결과가 터무니없으면 먼저 물리 충돌을 의심하라는 이 프로젝트의 기존 교훈과
+        # 일치 - 실제로 박스가 이미 차체에 박혀있었다). "박스 앞쪽 가장자리" 기준으로 다시 잰다.
+        _, box_front_start, _ = _get_box_x_edges()
+        chassis_start, _ = base_robot.get_world_pose()
+        box_chassis_offset = float(box_front_start) - float(chassis_start[0])
+        approach_target_x = (entrance_x - approach_standoff) - box_chassis_offset
+        _, _, _, p1_aborted = drive_until(
+            lambda: False, target_x=approach_target_x, target_y=ANCHOR_Y,
+            max_speed=0.10, per_step_fn=_hold_stage2_arm, abort_fn=_tilt_broken,
+            hard_stop_on_condition=True, label="TILT-1: 문턱 전방 접근(수평 유지)",
+        )
+        if p1_aborted:
+            raise SystemExit("[중단] TILT-1(문턱 전방 접근) 중 그리퍼 이탈 감지")
+
+        # ---- Phase 2: 진입 전 피치 회전(섀시 정지) ----
+        tilt_pos, _ = m0609_robot.end_effector.get_world_pose()
+        tilt_ee, tilt_err = move_link6(tilt_pos, steps=tilt_steps, hold_gripper_closed=True,
+                                        orientation=tilt_quat, label="TILT-2: 진입 전 피치 회전")
+        if tilt_err > 0.03 or not m0609_robot.gripper.is_closed():
+            raise SystemExit(f"[중단] TILT-2(피치 회전) 실패: err={tilt_err:.3f}m")
+
+        # ---- Phase 3: 기울임 자세로 문턱 통과 ----
+        # 처음엔 drive_and_reach(고정 ee 목표로 능동 추종)를 썼는데, 그러면 박스가 실제로는
+        # 전진하지 않고 tilt_ee 근처에 계속 머물러버린다(STAGE 3에서는 "고정된 최종 배치
+        # 지점으로 뻗어가는" 용도라 맞았지만, 여긴 그냥 "이 기울인 자세 그대로 통과해서
+        # 전진"이 필요하므로 안 맞는 패턴이었음). Phase 1/STAGE 2와 같은 "얼려서 드라이브"로
+        # 바꾼다 - 다만 얼리는 자세가 수평이 아니라 Phase 2에서 만든 기울인 자세다.
+        tilt_hold_q = np.asarray(m0609_robot.get_joint_positions(), dtype=float).copy()
+
+        def _hold_tilt_arm():
+            m0609_robot.apply_action(ArticulationAction(joint_positions=tilt_hold_q))
+            m0609_robot.gripper.close()
+
+        def _tilt_cleared_entrance():
+            rear_x, _, box_center = _get_box_x_edges()
+            x_cleared = rear_x >= entrance_x + restore_clear_margin
+            y_centered = abs(float(box_center[1]) - ANCHOR_Y) < 0.04
+            return x_cleared and y_centered and m0609_robot.gripper.is_closed()
+
+        _, _, p3_condition_met, p3_aborted = drive_until(
+            _tilt_cleared_entrance, target_x=TRUNK_X_MAX, target_y=ANCHOR_Y,
+            kp_xy=0.8, max_speed=drive_max_speed, per_step_fn=_hold_tilt_arm,
+            abort_fn=_tilt_broken, hard_stop_on_condition=True,
+            label="TILT-3: 기울임 자세 문턱 통과(팔 자세 고정, 저속)",
+        )
+        if p3_aborted or not p3_condition_met:
+            raise SystemExit(
+                f"[중단] TILT-3(문턱 통과) 실패(자세붕괴={p3_aborted}, 조건충족={p3_condition_met})"
+            )
+
+        # ---- Phase 4: 내부 자세 복원(섀시 정지, 다시 수평) ----
+        restore_pos, _ = m0609_robot.end_effector.get_world_pose()
+        restore_ee, restore_err = move_link6(restore_pos, steps=tilt_steps, hold_gripper_closed=True,
+                                              orientation=DOWN_QUAT, label="TILT-4: 내부 자세 복원(수평)")
+        if restore_err > 0.03 or not m0609_robot.gripper.is_closed():
+            raise SystemExit(f"[중단] TILT-4(자세 복원) 실패: err={restore_err:.3f}m")
+        return restore_ee, restore_err
+
+    if BOX_NEEDS_TILT:
+        print("[STAGE2 경로] 박스가 커서 수평 통과 불가 - Tilt-and-Insert 경로 사용", flush=True)
+        tilt_and_insert_through_entrance(TRUNK_ENTRANCE_X)
+        condition_met, aborted = True, False
+    else:
+        final_pos, final_yaw, condition_met, aborted = drive_until(
+            _box_cleared_entrance, target_x=TRUNK_X_MAX, target_y=ANCHOR_Y,
+            kp_xy=0.8, max_speed=0.08, max_speed_fn=_stage2_max_speed,
+            per_step_fn=_hold_stage2_arm, abort_fn=_stage2_pose_broken,
+            hard_stop_on_condition=True,
+            label="STAGE2: 박스가 트렁크 입구를 완전히 넘을 때까지 전진(팔 자세 고정, 저속)",
+            debug_interval=5, debug_fn=_stage2_debug,
+        )
     if aborted:
         print("[실패] STAGE 2 도중 자세 붕괴(충돌 의심)가 감지돼 즉시 중단했습니다 - "
               "ENTRY_HOLDING_Z를 더 올리거나 진입 경로를 재검토하세요. STAGE 3으로 넘어가지 마세요.",

@@ -31,13 +31,13 @@ _THIS_DIR = Path(__file__).resolve().parent
 # ---------------- 92.py와 완전히 동일 - 차량 실측 상수 ----------------
 CAR_USD = str(_THIS_DIR / "assets/Lexus_IS300_Trunk_Open_No_More_Hell_Room.usdz")
 CAR_POS = (5.0, 0.0, 0.0)
-CAR_EXTRA_SCALE = 0.50
+CAR_EXTRA_SCALE = 0.53
 CAR_ROT_Z = 0.0
-TRUNK_X_MIN, TRUNK_X_MAX = 3.11, 3.68
-TRUNK_Y_MIN, TRUNK_Y_MAX = -0.56, 0.56
-TRUNK_FLOOR_Z = 0.44
-TRUNK_WALL_TOP = 1.28
-TRUNK_ENTRANCE_X = TRUNK_X_MIN - 0.15
+TRUNK_X_MIN, TRUNK_X_MAX = 2.945, 3.702
+TRUNK_Y_MIN, TRUNK_Y_MAX = -0.663, 0.664
+TRUNK_FLOOR_Z = 0.459
+TRUNK_WALL_TOP = 1.010
+TRUNK_ENTRANCE_X = TRUNK_X_MIN - 0.09
 SDF_RESOLUTION = 256
 
 # 박스/그리퍼 실측 상수(92.py와 동일) - 여기와 비교할 "실제로 필요한 수직 공간".
@@ -113,7 +113,9 @@ def carb_vec(x, y, z):
 
 
 # 입구 근방(TRUNK_ENTRANCE_X 조금 앞 ~ TRUNK_X_MIN 조금 뒤)과 박스 폭을 덮는 Y 범위를 그리드로 스캔.
-xs = np.arange(TRUNK_ENTRANCE_X - 0.05, TRUNK_X_MIN + 0.30 + 1e-9, 0.02)
+# 사용자 지적(설계 문서) - 천장이 바닥과 평행하지 않고, 안쪽으로 들어갈수록 낮아진다는
+# 주장을 확인해야 한다 - 입구 근방만 보던 기존 범위를 트렁크 최안쪽(TRUNK_X_MAX)까지 넓힌다.
+xs = np.arange(TRUNK_ENTRANCE_X - 0.05, TRUNK_X_MAX + 1e-9, 0.02)
 half_box_y = max(TEST_BOX_SIZE[0], TEST_BOX_SIZE[1]) / 2.0
 ys = np.arange(-half_box_y - 0.05, half_box_y + 0.05 + 1e-9, 0.02)
 
@@ -125,6 +127,11 @@ worst_xy = None
 worst_floor = None
 worst_ceiling = None
 per_x_min_opening = []
+# y=0(중심선) 기준 천장/바닥 z 자체도 따로 기록 - "천장이 안쪽으로 갈수록 낮아진다"는 설계
+# 문서의 주장을 슬로프 형태로 직접 확인하기 위함(최소개구부 표는 y까지 훑어서 장애물(휠하우스
+# 등)에 영향받을 수 있어 순수 천장 슬로프를 보려면 중심선 값이 더 깨끗함).
+centerline_ceiling = []
+centerline_floor = []
 
 for x in xs:
     row_min = None
@@ -142,6 +149,8 @@ for x in xs:
             worst_floor = floor_z
             worst_ceiling = ceiling_z
     per_x_min_opening.append((float(x), row_min))
+    centerline_ceiling.append((float(x), raycast_down(x, 0.0)))
+    centerline_floor.append((float(x), raycast_up(x, 0.0)))
 
 print("\n[x별 최소 수직 개구부(그 x에서 y를 훑었을 때 가장 좁은 지점)]", flush=True)
 for x, opening in per_x_min_opening:
@@ -150,6 +159,13 @@ for x, opening in per_x_min_opening:
         print(f"  x={x:.3f}: (raycast 실패 - 열린 공간이거나 메시 누락){tag}", flush=True)
     else:
         print(f"  x={x:.3f}: opening={opening:.3f}m{tag}", flush=True)
+
+print("\n[중심선(y=0) 천장/바닥 z - 천장 슬로프 확인용]", flush=True)
+for (x, cz), (_, fz) in zip(centerline_ceiling, centerline_floor):
+    tag = " <-- entrance" if abs(x - TRUNK_ENTRANCE_X) < 0.011 else (" <-- X_MIN" if abs(x - TRUNK_X_MIN) < 0.011 else "")
+    cz_s = f"{cz:.3f}" if cz is not None else "None"
+    fz_s = f"{fz:.3f}" if fz is not None else "None"
+    print(f"  x={x:.3f}: ceiling_z={cz_s} floor_z={fz_s}{tag}", flush=True)
 
 print(f"\n[최악 지점] xy={worst_xy} floor_z={worst_floor:.3f} ceiling_z={worst_ceiling:.3f} "
       f"opening={worst_opening:.3f}m", flush=True)
