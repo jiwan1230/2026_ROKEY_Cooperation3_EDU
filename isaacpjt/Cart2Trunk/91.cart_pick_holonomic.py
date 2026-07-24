@@ -133,11 +133,25 @@ if GRIPPER_RANGE_JSON.exists():
 else:
     TIP_LOCAL_OFFSET = (0.0, 0.0, 0.0188)
 
-# 실측(run10) - 크립 하강 중 도달한 최소 dist=0.0882m가 grasp_radius=0.085m를 3.2mm 차이로
-# 놓쳤다(그 근처에서 박스가 살짝 흔들리며 dist가 다시 벌어짐). 0.03 -> 0.05로 살짝 넓혀
-# 이 여유분과 호버 때 남는 XY 오차(수 mm~수 cm)를 함께 흡수한다.
-GRASP_RADIUS_MARGIN = 0.05
+# 사용자 설계(6차) - 구(sphere) 거리 판정(GRASP_RADIUS_MARGIN, 폐기)은 수평/수직 오차를 하나로
+# 합쳐서 봐서, 스캔 좌표를 하강 목표로 쓸 때 생기는 수평 오차(실측 5.8~6.8cm, box_top_extractor.py
+# 매칭 오차)가 수직 여유를 통째로 잡아먹었다 - 마진을 넓히면(0.05) 표면에서 한참 뜬 채로 붙고,
+# 좁히면(0.025/0.01) 아예 안 붙어서 오버트래블까지 파고들다 충돌했다. 흡착판은 실제로 평평하니
+# 원통형(cylinder) 판정으로 교체한다 - 수평은 박스 발자국 절반 폭+여유로 널널하게(스캔 오차를
+# 자연스럽게 흡수), 수직은 "표면에 진짜 닿았는지"만 타이트하게 본다(DynamicSuctionGripper.close()
+# 참고). 수평 허용치는 박스마다 다르므로 여기서는 "박스 절반 폭에 더할 여유분"만 상수로 둔다.
+GRASP_HORIZONTAL_MARGIN = 0.03
+GRASP_VERTICAL_TOLERANCE = 0.02
 GRASP_STANDOFF = 0.01
+# DESCENT_MAX_SPEED: 박스 위 호버 -> 흡착까지 내려가는 크립 하강의 속도 상한(move_link6_smooth의
+# max_speed 그대로 재사용, 사용자 지적 - "접근이 너무 빠르다"). 호버(0.01)보다 느리게 잡아서
+# 박스에 닿기 직전 오차가 급격히 좁혀지며 튀는 걸 한 번 더 억제한다.
+DESCENT_MAX_SPEED = 0.005
+# DESCENT_OVERTRAVEL: 크립 하강의 최종 목표 z를 scan 기반 추정치(target_tip_z)보다 이만큼
+# 더 내려간 지점으로 잡아준다 - 스캔 오차로 실제 박스 표면이 추정보다 낮아도 grasp_radius
+# 조건이 그 사이에 먼저 만족되면 조기에 멈춘다(move_link6_smooth의 try_grasp=True가 매 스텝
+# 흡착을 시도하므로).
+DESCENT_OVERTRAVEL = 0.06
 # STANDOFF_MARGIN: 카트 옆에 서는 거리. 4차 설계(리프트 텔레포트 크립 하강)에서 검증된
 # 0.18은 5차 설계(joint_1 조준 + RMPflow 실물리 하강)에서는 오히려 너무 멀었다 - 실측
 # (2026-07-24 헤드리스 실행)으로 흡착 거리가 전혀 안 좁혀지고(0.8~0.9m대에서 발산) 하강/
@@ -472,7 +486,14 @@ def match_physical_prim(stage, scan_center_world_xy, available_paths):
 
 
 class DynamicSuctionGripper(SurfaceGripper):
-    """84/87/88번과 동일한 흡착 로직 - set_target()으로 박스마다 대상을 바꿀 수 있다."""
+    """84/87/88번의 구형(sphere) 거리 판정을 원통형(cylinder) 판정으로 교체(사용자 설계) -
+    수평/수직 오차를 하나의 3D 직선거리로 합쳐서 보면(구 형태), 스캔 좌표를 하강 목표로 쓸 때
+    생기는 수평 오차(실측 5.8~6.8cm, box_top_extractor.py 매칭 오차)가 수직 방향 여유(grasp_
+    radius_margin, 겨우 1~3cm)를 통째로 잡아먹어서 "닿아도 안 붙거나(관통 충돌)" "안 닿았는데
+    붙는(뜬 채로 파지)" 둘 다 나왔다. 흡착판은 실제로 평평하니 수평/수직을 분리하는 게 물리적
+    으로도 더 맞다 - 수평은 박스 발자국 절반 폭 + 여유(스캔 오차 흡수용)로 널널하게, 수직은
+    "표면에 진짜 닿았는지"만 타이트하게 본다. set_target()으로 박스마다(half_height/허용치)
+    바꿀 수 있다."""
 
     def __init__(self, end_effector_prim_path, gripper_body_path, tip_local_offset=(0.0, 0.0, 0.0)):
         SurfaceGripper.__init__(self, end_effector_prim_path=end_effector_prim_path, surface_gripper_path="")
@@ -481,11 +502,15 @@ class DynamicSuctionGripper(SurfaceGripper):
         self._joint_path = f"{gripper_body_path}/suction_attach_joint"
         self._attached = False
         self._target_prim_path = None
-        self._grasp_radius = 0.0
+        self._half_height = 0.0
+        self._horizontal_tolerance = 0.0
+        self._vertical_tolerance = 0.0
 
-    def set_target(self, target_prim_path, grasp_radius):
+    def set_target(self, target_prim_path, half_height, horizontal_tolerance, vertical_tolerance):
         self._target_prim_path = target_prim_path
-        self._grasp_radius = grasp_radius
+        self._half_height = half_height
+        self._horizontal_tolerance = horizontal_tolerance
+        self._vertical_tolerance = vertical_tolerance
 
     def close(self) -> None:
         if self._attached or self._target_prim_path is None:
@@ -498,9 +523,11 @@ class DynamicSuctionGripper(SurfaceGripper):
         target_mat = UsdGeom.Xformable(target_prim).ComputeLocalToWorldTransform(Usd.TimeCode.Default())
         target_pos = target_mat.ExtractTranslation()
         tip_world = gripper_mat.Transform(self._tip_local_offset)
-        dist = (tip_world - target_pos).GetLength()
-        if dist > self._grasp_radius:
-            print(f"  [흡착 실패] dist={dist:.4f}m > grasp_radius={self._grasp_radius}m", flush=True)
+        horiz_dist = float(np.hypot(tip_world[0] - target_pos[0], tip_world[1] - target_pos[1]))
+        vert_gap = float(tip_world[2] - (target_pos[2] + self._half_height))
+        if horiz_dist > self._horizontal_tolerance or abs(vert_gap) > self._vertical_tolerance:
+            print(f"  [흡착 실패] horiz={horiz_dist:.4f}m(허용 {self._horizontal_tolerance:.4f}) "
+                  f"vert_gap={vert_gap:+.4f}m(허용 ±{self._vertical_tolerance:.4f})", flush=True)
             return
         rel_local = target_mat.GetInverse().Transform(tip_world)
         gripper_rot = gripper_mat.ExtractRotationQuat()
@@ -514,7 +541,7 @@ class DynamicSuctionGripper(SurfaceGripper):
         joint.CreateLocalPos1Attr().Set(Gf.Vec3f(rel_local))
         joint.CreateLocalRot1Attr().Set(Gf.Quatf(local_rot1))
         self._attached = True
-        print(f"  [흡착] dist={dist:.4f}m <= {self._grasp_radius}m -> {self._joint_path} 생성", flush=True)
+        print(f"  [흡착] horiz={horiz_dist:.4f}m vert_gap={vert_gap:+.4f}m -> {self._joint_path} 생성", flush=True)
 
     def open(self) -> None:
         if self._attached:
@@ -806,7 +833,7 @@ def measure_tip_world_pos():
 
 
 def move_link6_smooth(target_tip_pos, tolerance=0.004, max_speed=0.01, kp=3.0, max_steps=2500,
-                       hold_gripper_closed=False, label="", orientation=DOWN_QUAT):
+                       hold_gripper_closed=False, try_grasp=False, label="", orientation=DOWN_QUAT):
     # 사용자 지적(1차) - 고정 목표를 N스텝 그대로 넣는 방식은 "임계값을 갓 벗어난 잔여 오차에도
     # 고정 스텝 크기를 그대로 명령"해서 마지막 접근에서 오버슈트가 났다. 고쳐야 할 건 "잔여
     # 오차에 비례해서 속도가 줄어드는" P제어다 - drive_to()가 섀시에 쓰는 것과 같은 방식
@@ -825,6 +852,18 @@ def move_link6_smooth(target_tip_pos, tolerance=0.004, max_speed=0.01, kp=3.0, m
     # link_6이 아니라 팁이 제어 대상). 한 스텝 동안은 방향이 거의 안 바뀌므로 "링크6을 오차
     # 방향으로 조금 옮기면 팁도 같은 방향으로 그만큼 움직인다"는 근사가 성립하고, 이게 매
     # 스텝 실측으로 갱신되니 방향이 서서히 틀어져도 결코 고정 오차로 쌓이지 않는다.
+    #
+    # 사용자 지적(3차) - 크립 하강을 이 함수와 별개로 "z_goal을 매 스텝 무조건 1mm씩 줄이는"
+    # 독립 카운터로 새로 짰더니(creep_descend_arm, 이제 삭제) 오히려 접근이 너무 빨라지며
+    # 충돌이 났다. 원인: z_goal이 실제 팁 위치와 무관하게 계속 앞서 나가므로, RMPflow 추종이
+    # 조금이라도 늦으면(관성/타임스텝) 그 지연이 매 스텝 누적되다가 어느 순간 커진 오차를
+    # 한 번에 따라잡으려 속도가 튀었다 - 정확히 이 함수가 kp*오차를 max_speed로 클리핑해서
+    # 막고 있던 그 문제를 새 함수에서는 안 막고 있었던 것. 고침: 크립 하강도 이 함수를 그대로
+    # 재사용한다(try_grasp=True) - 목표는 고정된 하나의 최종 지점(오버트래블 여유를 미리
+    # 반영한 깊은 z)으로 주고, 매 스텝 kp*오차를 max_speed로 클리핑해서 이동하면서 동시에
+    # 흡착을 시도해 붙는 순간 바로 멈춘다. 이러면 지연이 아무리 쌓여도 한 스텝에 실제로
+    # 움직이는 거리는 max_speed를 절대 못 넘으므로 "누적 오차의 급격한 해소"로 인한 속도
+    # 튐이 구조적으로 불가능하다.
     STALL_WINDOW, STALL_MIN_IMPROVEMENT = 200, 0.003
     target_tip_pos = np.array(target_tip_pos, dtype=float)
     step = 0
@@ -832,6 +871,8 @@ def move_link6_smooth(target_tip_pos, tolerance=0.004, max_speed=0.01, kp=3.0, m
     stalled = False
     last_check_err = None
     for step in range(1, max_steps + 1):
+        if try_grasp and m0609_robot.gripper.is_closed():
+            break
         tip_pos = measure_tip_world_pos()
         err_vec = target_tip_pos - tip_pos
         err = float(np.linalg.norm(err_vec))
@@ -862,7 +903,7 @@ def move_link6_smooth(target_tip_pos, tolerance=0.004, max_speed=0.01, kp=3.0, m
             target_end_effector_orientation=orientation,
         )
         m0609_robot.apply_action(actions)
-        if hold_gripper_closed:
+        if try_grasp or hold_gripper_closed:
             m0609_robot.gripper.close()
         set_lift_height(lift_state["h"])
         world.step(render=True)
@@ -871,7 +912,7 @@ def move_link6_smooth(target_tip_pos, tolerance=0.004, max_speed=0.01, kp=3.0, m
     ee_pos, _ = m0609_robot.end_effector.get_world_pose()
     print(f"[완만한 접근{' ' + label if label else ''}] target_tip={np.round(target_tip_pos, 3)} "
           f"tip={np.round(tip_pos, 3)} link6={np.round(ee_pos, 3)} err={err:.4f}m steps={step} "
-          f"stalled={stalled}", flush=True)
+          f"stalled={stalled} grasped={m0609_robot.gripper.is_closed() if try_grasp else None}", flush=True)
     return tip_pos, err
 
 
@@ -998,9 +1039,12 @@ for idx, (prim_path, placement) in enumerate(pick_order):
     # 치수 0.11m짜리 박스의 world Z 폭이 1.2cm일 수는 없다. USD 쿼리가 물리 시뮬레이션이
     # 갱신한 실제 자세를 못 따라간 것으로 보인다). 대신 스폰 시점에 확정된 진짜 크기
     # (BOX_KNOWN_SIZE)를 그대로 쓴다 - 박스가 기울어져도 이 값은 변하지 않는다.
-    half_height = float(BOX_KNOWN_SIZE[prim_path][2]) / 2.0
-    grasp_radius = half_height + GRASP_RADIUS_MARGIN
-    gripper.set_target(prim_path, grasp_radius)
+    box_dim_x, box_dim_y, box_dim_z = BOX_KNOWN_SIZE[prim_path]
+    half_height = float(box_dim_z) / 2.0
+    # 수평 허용치 = 박스 발자국의 더 넓은 변 절반 + 여유(스캔 매칭 오차 흡수용). 원통형 판정
+    # 정의부(GRASP_HORIZONTAL_MARGIN) 주석 참고.
+    horizontal_tolerance = float(max(box_dim_x, box_dim_y)) / 2.0 + GRASP_HORIZONTAL_MARGIN
+    gripper.set_target(prim_path, half_height, horizontal_tolerance, GRASP_VERTICAL_TOLERANCE)
 
     scan_top_x, scan_top_y, scan_top_z = scan_box_top[prim_path]
     # RIM_CLEARANCE 하한 - HOVER_ABOVE_BOX_TOP이 작을 때(사용자 지정 범위 중 0.20m 쪽) 카트
@@ -1033,46 +1077,20 @@ for idx, (prim_path, placement) in enumerate(pick_order):
     # 밀려난다 - "충돌 없이 도달했다"는 결과를 신뢰할 수 있다.
     target_tip_z = scan_top_z + GRASP_STANDOFF
     print(f"[하강 준비] scan_top_z={scan_top_z:.4f} half_height={half_height:.4f} "
-          f"grasp_radius={grasp_radius:.4f} target_tip_z={target_tip_z:.4f} "
-          f"리프트 고정값={lift_state['h']:.4f}", flush=True)
+          f"horizontal_tolerance={horizontal_tolerance:.4f} vertical_tolerance={GRASP_VERTICAL_TOLERANCE:.4f} "
+          f"target_tip_z={target_tip_z:.4f} 리프트 고정값={lift_state['h']:.4f}", flush=True)
 
-    def creep_descend_arm(target_z, step_z=0.001, overtravel_limit=0.06, max_steps=4000, label=""):
-        """리프트 고정, RMPflow로 흡착 팁 z만 매 스텝 조금씩 낮춘다. move_link6_smooth와 동일한
-        폐루프 방식(지금 실측 팁 위치 기준 오차를 link6에 그대로 더해 명령)이라 link6<->팁
-        오프셋을 따로 보정할 필요가 없다. 매 스텝 흡착을 시도해 붙는 순간 바로 멈춘다."""
-        tip0 = measure_tip_world_pos()
-        xy_fixed = np.array([float(tip0[0]), float(tip0[1])])
-        z_floor = target_z - overtravel_limit
-        z_goal = float(tip0[2])
-        grasped_ = False
-        step = 0
-        for step in range(1, max_steps + 1):
-            if z_goal <= z_floor:
-                print(f"  [하강{' ' + label if label else ''}] 오버트래블 한계 도달"
-                      f"(z_goal={z_goal:.4f}) - 흡착 실패로 중단", flush=True)
-                break
-            z_goal = max(z_goal - step_z, z_floor)
-            tip_now = measure_tip_world_pos()
-            err_vec = np.array([xy_fixed[0], xy_fixed[1], z_goal]) - np.array(tip_now, dtype=float)
-            ee_pos, _ = m0609_robot.end_effector.get_world_pose()
-            sync_rmp_base()
-            actions = controller.forward(
-                target_end_effector_position=np.array(ee_pos, dtype=float) + err_vec,
-                target_end_effector_orientation=DOWN_QUAT,
-            )
-            m0609_robot.apply_action(actions)
-            m0609_robot.gripper.close()
-            set_lift_height(lift_state["h"])
-            world.step(render=True)
-            if m0609_robot.gripper.is_closed():
-                grasped_ = True
-                break
-        tip_final = measure_tip_world_pos()
-        print(f"[하강 완료{' ' + label if label else ''}] {step}스텝, tip_z={float(tip_final[2]):.4f} "
-              f"grasped={grasped_} (리프트는 계속 {lift_state['h']:.3f} 고정)", flush=True)
-        return grasped_, step
-
-    grasped, _ = creep_descend_arm(target_tip_z, label=f"#{idx}")
+    # 사용자 지적(3차) - 별도의 "z_goal을 매 스텝 무조건 1mm씩 줄이는" 독립 카운터 방식
+    # (creep_descend_arm, 삭제됨)은 실제 팁 위치와 무관하게 목표가 계속 앞서 나가서, RMPflow
+    # 추종이 조금이라도 늦으면 그 지연이 누적되다 한 번에 몰아서 따라잡으며 속도가 튀었다
+    # (접근이 너무 빠르다 -> 충돌). move_link6_smooth()는 이미 이 문제를 kp*오차를
+    # max_speed로 클리핑해서 막고 있으므로, 크립 하강도 그 함수를 그대로 재사용한다
+    # (try_grasp=True) - 목표는 DESCENT_OVERTRAVEL만큼 더 낮춘 한 지점으로 고정해서 주고,
+    # 매 스텝 흡착을 시도해 붙는 순간 바로 멈춘다(스캔 오차로 실제 표면이 추정보다 낮아도
+    # 원통형 흡착 조건이 도중에 만족되면 목표까지 다 안 가고 선다).
+    descent_target = np.array([hover_target[0], hover_target[1], target_tip_z - DESCENT_OVERTRAVEL])
+    move_link6_smooth(descent_target, max_speed=DESCENT_MAX_SPEED, try_grasp=True, label=f"하강(#{idx})")
+    grasped = bool(m0609_robot.gripper.is_closed())
 
     # 후퇴도 RMPflow로 - 호버 때와 동일한 hover_target으로 되돌아간다(리프트는 여전히 고정).
     move_link6_smooth(hover_target, hold_gripper_closed=grasped, label=f"파지 후 후퇴(#{idx})")
