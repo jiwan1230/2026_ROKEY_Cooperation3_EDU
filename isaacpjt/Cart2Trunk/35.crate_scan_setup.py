@@ -111,13 +111,31 @@ TABLE_SIZE = (0.8, 0.6, TABLE_TOP_Z - 0.05)
 # 원래 크기/위치의 0.65배 - 박스 자체가 작아지고(스윙 시 스치는 부피 감소) 서로
 # 더 가까워진다(팔이 먼 박스를 집으러 스윙해야 하는 거리 감소). 절대 크기는
 # TABLE_BOX_SIZE_TOLERANCE_M(아래) 기준으로 서로 구분 가능한 정도로 유지.
+# [적층 검증 2 - 동일 크기 적층] "위 박스는 항상 아래 박스보다 작다"는 전제가
+# 깨지는 경우: Small을 Large와 완전히 같은 크기/모양으로 바꿔서 그 위에 스택시킨다
+# (perception/SAME_SIZE_STACK_DETECTION_LOG.md 참고 - box_geometry.py에
+# find_hidden_stacked_box()를 새로 추가해서 대응했다). 완전히 같은 (dx,dy)에
+# 두면(오프셋 0) 아래 박스가 시각적으로 원천적으로 안 보이는, 알고리즘으로도 풀 수
+# 없는 케이스가 되므로 오프셋을 준다 - 물리적 안정성이 유지되는 범위(Large 반폭
+# 0.115/0.08 대비 절반 이하)에서, 처음엔 오프셋을 (0.03,-0.02)(3.6cm)로 아주 작게
+# 잡아 "거의 안 보이는 테두리" 극한 케이스를 테스트했다. 개수/높이는 정확히
+# 검출됐지만, 오프셋 자체가 알고리즘의 노이즈 대비 신호비 한계에 가까워 XY 위치
+# 추정 오차가 상대적으로 크게(참값 대비 40~70%) 나왔다(로그 3-9/3-13절) - 같은
+# 절대오차라도 참값이 작을수록 상대오차가 커 보이므로, 오프셋을 (0.06,0.04)
+# (7.2cm)로 넓혀 신호 대비 노이즈 비를 개선하고 결과를 더 명확히 검증한다.
 TABLE_BOXES = [
-    ("Small", (0.13, 0.10, 0.08), (0.85, 0.25, 0.20), (-0.14, -0.08)),
+    ("Small", (0.23, 0.16, 0.14), (0.85, 0.25, 0.20), (0.06, 0.14)),
     ("Medium", (0.18, 0.13, 0.12), (0.25, 0.65, 0.30), (0.14, -0.08)),
     ("Large", (0.23, 0.16, 0.14), (0.20, 0.35, 0.85), (0.0, 0.10)),
 ]
 BOX_MASS_KG = {"Small": 1.0, "Medium": 2.0, "Large": 3.5}
 TABLE_DROP_Z = TABLE_TOP_Z + 0.5
+STACK_BASE_NAME = "Large"
+STACK_TOP_NAME = "Small"
+# Small을 Large와 같은 고정 높이(TABLE_DROP_Z)에서 낙하시키면 Large 윗면까지 상당한
+# 자유낙하 속도가 붙은 채 부딪혀 튕겨나간다(perception/STACKED_BOX_PHYSICS_HANDOFF_43.md
+# 버그 A와 동일) - Small만 Large 예상 윗면 바로 위 짧은 거리에서 낙하시킨다.
+_STACK_TOP_SPAWN_MARGIN_M = 0.05
 
 # ================= 로봇 (32.py와 동일 결합 방식/위치 - 베이스는 이번에도 안 움직인다) =================
 ROBOT_START_XY = (0.0, -0.55)
@@ -132,6 +150,15 @@ DEPTH_CAMERA_NAME_HINT = "Depth"
 CAMERA_AXES = "usd"
 WORLD_UP = (0.0, 0.0, 1.0)
 BASIC_STEPS = 350
+# converge_to_pose()가 매번 BASIC_STEPS(350)를 꽉 채우는 대신, 그리퍼가 더 이상
+# 움직이지 않는(수렴했거나 도달 한계에 걸려 제자리인) 시점을 감지해서 일찍 끝낸다 -
+# 실측 확인: 테이블 스캔 5시점 중 az=0/-20/20deg는 350스텝 다 쓰지 않아도 이미
+# 수렴해 있었고, az=-40/40deg처럼 도달 한계로 오차가 남는 경우는 더 스텝을 줘도
+# 어차피 그 자리에서 안 움직이므로(도달 불가능한 지점) 조기 종료해도 최종 자세/
+# 오차가 그대로다 - "정확도 유지하면서 느린 부분만 줄이기".
+CONVERGENCE_CHECK_INTERVAL_STEPS = 25
+CONVERGENCE_MIN_STEPS = 75
+CONVERGENCE_PLATEAU_TOLERANCE_M = 0.001
 
 # ================= 크레이트 (트렁크 대체 - 오픈 탑, 뚜껑 없음) =================
 # 1차: 로봇 뒤쪽(-Y, CRATE_CENTER_XY=(0,-1.0))에 뒀다가 섀시-크레이트 벽 충돌(스폰 시
@@ -586,11 +613,26 @@ table = FixedCuboid(
     color=np.array([0.55, 0.40, 0.25]),
 )
 
+_table_box_sizes = {name: size for name, size, _color, _offset in TABLE_BOXES}
 for name, size, color, (dx, dy) in TABLE_BOXES:
+    if name == STACK_TOP_NAME:
+        # world.reset()이 아직 호출되기 전이라(로봇 초기화 시점에 호출) 이 시점의
+        # world.step()은 물리 타임라인을 진행시키지 않는다 - 그래서 TABLE_DROP_Z는
+        # STACK_BASE_NAME의 "실제 정착 높이"가 아니라 spawn 높이 그대로다. 그래도
+        # 안전한 이유: Small의 spawn_z를 (STACK_BASE_NAME spawn_z + 그 height + margin)
+        # 으로 잡으면, world.reset() 이후 둘 다 같은 중력으로 동시에 떨어지기
+        # 시작해도 이 높이차가 낙하 내내 유지되다가 STACK_BASE_NAME이 먼저 테이블에
+        # 닿아 멈추면 Small은 남은 差만큼만 더 떨어져 그 위에 안착한다(43.py에서
+        # 검증된 것과 동일한 원리).
+        base_height = _table_box_sizes[STACK_BASE_NAME][2]
+        spawn_z = TABLE_DROP_Z + base_height / 2.0 + size[2] / 2.0 + _STACK_TOP_SPAWN_MARGIN_M
+        print(f"[{STACK_TOP_NAME} 스택] {STACK_BASE_NAME} 위에 배치 (spawn_z={spawn_z:.3f})", flush=True)
+    else:
+        spawn_z = TABLE_DROP_Z
     add_dynamic_box(
         stage,
         f"/World/Box_{name}",
-        (CART_POS[0] + dx, CART_POS[1] + dy, TABLE_DROP_Z),
+        (CART_POS[0] + dx, CART_POS[1] + dy, spawn_z),
         size,
         color,
         BOX_MASS_KG[name],
@@ -726,10 +768,29 @@ def reposition_chassis(controller, xy, label):
 def converge_to_pose(controller, eye, look_at, label, cur_base_pos, cur_base_quat, cur_R_base):
     target_pos, target_quat = lookat_to_link6_target(eye, look_at)
     print(f"[{label} 목표] link6_pos={np.round(target_pos, 3)} eye={np.round(eye, 3)} look_at={np.round(look_at, 3)}", flush=True)
-    for _ in range(BASIC_STEPS):
+
+    last_check_pos = None
+    steps_run = 0
+    for step in range(BASIC_STEPS):
         actions = controller.forward(target_end_effector_position=target_pos, target_end_effector_orientation=target_quat)
         robot.apply_action(actions)
         world.step(render=True)
+        steps_run += 1
+
+        if step + 1 < CONVERGENCE_MIN_STEPS:
+            continue
+        if (step + 1) % CONVERGENCE_CHECK_INTERVAL_STEPS != 0:
+            continue
+
+        current_pos, _ = robot.end_effector.get_world_pose()
+        current_pos = np.array(current_pos)
+        if last_check_pos is not None:
+            movement = float(np.linalg.norm(current_pos - last_check_pos))
+            if movement < CONVERGENCE_PLATEAU_TOLERANCE_M:
+                break
+        last_check_pos = current_pos
+
+    print(f"[{label}] {steps_run}/{BASIC_STEPS} 스텝에서 정지(수렴 또는 도달 한계 정체 감지)", flush=True)
 
     converged_joint_positions = robot.get_joint_positions()
     robot.set_joint_positions(converged_joint_positions)
@@ -791,8 +852,39 @@ controller.rmp_flow.set_robot_base_pose(robot_position=base_pos, robot_orientati
 # ================= ROS2 카메라 브리지 (포즈와 무관, 한 번만 연결) =================
 setup_ros2_camera_bridge(camera_prim_path)
 
-# ================= 스캔 자세 1: 테이블 =================
-converge_to_pose(controller, SCAN_EYE, SCAN_LOOK_AT, "테이블 스캔", base_pos, base_quat, R_base)
+# ================= 스캔 자세 1: 테이블 (다중 시점) =================
+# 섀시는 고정한 채 팔만 여러 azimuth 각도로 스윙하며 촬영한다 - 0도가 기존
+# SCAN_EYE(21도 기울임, 검증된 자세)와 정확히 같은 지점이고, 나머지는 look_at을
+# 중심으로 같은 반경/높이에서 좌우로 돌아본 시점이다. 각 시점에서
+# camera.get_pointcloud(world_frame=True)(크레이트 스캔에서 이미 검증된 Isaac
+# 네이티브 API)로 world 좌표 point cloud를 얻어 테이블 주변으로 크롭한 뒤,
+# base_link로 변환해서 하나로 누적한다 - box_top_extractor.py가 쓰던 ROS2 depth
+# 토픽/시점당 마커 핸드셰이크가 필요 없다(다 모은 뒤 딱 한 번만 perception
+# venv로 넘겨서 검출한다).
+# [적층 검증 후 보강] az(방위각)만 스윙하면 카메라 X 위치만 바뀌고 남북(Y)/기울기는
+# 5시점 내내 똑같다 - 실측 확인: Small을 Large 위 중앙에 스택시켰을 때, Small의
+# Y(깊이) 방향 먼 쪽 모서리가 5시점 전부 "같은 각도로 스치듯" 관측돼 실제보다
+# 짧게(0.10m -> 0.05~0.06m) 잡히는 현상이 반복 검출로도 안 없어졌다(RANSAC 노이즈가
+# 아니라 입력 데이터 자체가 그 방향 정보가 부족한 것). az=0(가장 안전한 자세)에서
+# 기울기(tilt, 수직에서 벗어난 각도)가 다른 시점을 추가해서, 같은 방향 편향에 계속
+# 갇히지 않고 다른 광선 기하로 그 모서리를 다시 볼 기회를 준다 - 완전한 해결(진짜
+# 반대쪽에서 보는 것)은 아니지만 저비용으로 추가 가능한 첫 단계.
+# [사용자 피드백 반영] 섀시를 반대편으로 옮기는 건 안 하기로 함 - 대신 지금 팔의
+# 도달 범위 안에서 azimuth 자체를 훨씬 넓게(테이블 왼쪽면 시점 - 앞쪽 시점 - 오른쪽면
+# 시점 순으로) 스윙해서 시야 다양성을 최대한 확보한다.
+# 실측: ±60도는 IK 오차 0.17m로 도달 한계를 확실히 넘었다(그래도 정렬은 0.995~
+# 0.996으로 유지돼 raw 후보에 스퓨리어스 조각이 섞였지만 기존 이중 필터가 다
+# 걸러냄, Small 정확도는 오히려 더 좋아짐: 0.099x0.130 vs 실제 0.10x0.13).
+# ±50도로 안전 마진을 둔다 - ±40도(오차 0.094m)보다는 넓혀서 시야 다양성을
+# 확보하되, ±60도(오차 0.17m)만큼 도달 한계에 바짝 붙지는 않게.
+SCAN_AZIMUTH_DEG = [-50.0, -40.0, -20.0, 0.0, 20.0, 40.0, 50.0]
+SCAN_TILT_DEG = [SCAN_TILT_FROM_VERTICAL_DEG] * len(SCAN_AZIMUTH_DEG)
+EXTRA_TILT_VIEWPOINTS_DEG = [8.0, 28.0]  # az=0 고정, tilt만 다르게(더 수직 / 더 비스듬)
+SCAN_AZIMUTH_DEG = SCAN_AZIMUTH_DEG + [0.0] * len(EXTRA_TILT_VIEWPOINTS_DEG)
+SCAN_TILT_DEG = SCAN_TILT_DEG + EXTRA_TILT_VIEWPOINTS_DEG
+
+TABLE_SCAN_ROI_MARGIN_M = 0.15
+TABLE_SCAN_ROI_MAX_HEIGHT_M = 0.6  # TABLE_TOP_Z 위로 이만큼까지만 유지(그리퍼/배경 배제)
 
 SAVE_DIRECTORY = Path.home() / "box_pointcloud"
 existing_jsons_before_table = set(SAVE_DIRECTORY.glob("all_boxes_corners_*.json")) if SAVE_DIRECTORY.exists() else set()
@@ -802,17 +894,52 @@ set_camera_view(
     eye=[ROBOT_START_XY[0] - 1.0, ROBOT_START_XY[1] - 1.3, TABLE_TOP_Z + 1.0],
     target=[CART_POS[0], CART_POS[1], TABLE_TOP_Z],
 )
-for _ in range(20):
-    world.step(render=True)
-vp_util.capture_viewport_to_file(viewport, str(_THIS_DIR / "_verify_crate_scan_table_view.png"))
-print(f"[SCREENSHOT] _verify_crate_scan_table_view.png", flush=True)
 
-print("\n[대기] 지금 별도 터미널에서 다음을 실행하세요 (venv/ROS2 환경 설정 포함):\n"
+accumulated_base_points = []
+for i, (az_deg, tilt_deg) in enumerate(zip(SCAN_AZIMUTH_DEG, SCAN_TILT_DEG)):
+    az = np.radians(az_deg)
+    horizontal_offset_i = EYE_HEIGHT_ABOVE_TABLE * np.tan(np.radians(tilt_deg))
+    offset_xy = np.array([
+        horizontal_offset_i * np.sin(az),
+        -horizontal_offset_i * np.cos(az),
+    ])
+    eye_i = np.array([
+        CART_POS[0] + offset_xy[0],
+        CART_POS[1] + offset_xy[1],
+        TABLE_TOP_Z + EYE_HEIGHT_ABOVE_TABLE,
+    ])
+    converge_to_pose(controller, eye_i, SCAN_LOOK_AT, f"테이블 스캔 {i}(az={az_deg:.0f}deg,tilt={tilt_deg:.0f}deg)",
+                      base_pos, base_quat, R_base)
+
+    for _ in range(20):
+        world.step(render=True)
+    vp_util.capture_viewport_to_file(viewport, str(_THIS_DIR / f"_verify_crate_scan_table_view_{i}.png"))
+
+    pts_world_i = np.asarray(camera.get_pointcloud(world_frame=True))
+    keep = (
+        (pts_world_i[:, 0] >= CART_POS[0] - TABLE_SIZE[0] / 2.0 - TABLE_SCAN_ROI_MARGIN_M)
+        & (pts_world_i[:, 0] <= CART_POS[0] + TABLE_SIZE[0] / 2.0 + TABLE_SCAN_ROI_MARGIN_M)
+        & (pts_world_i[:, 1] >= CART_POS[1] - TABLE_SIZE[1] / 2.0 - TABLE_SCAN_ROI_MARGIN_M)
+        & (pts_world_i[:, 1] <= CART_POS[1] + TABLE_SIZE[1] / 2.0 + TABLE_SCAN_ROI_MARGIN_M)
+        & (pts_world_i[:, 2] >= TABLE_TOP_Z - 0.05)
+        & (pts_world_i[:, 2] <= TABLE_TOP_Z + TABLE_SCAN_ROI_MAX_HEIGHT_M)
+    )
+    pts_base_i = (R_base.T @ (pts_world_i[keep] - base_pos).T).T
+    accumulated_base_points.append(pts_base_i)
+    print(f"[테이블 스캔 {i}] az={az_deg:.0f}deg world_points={len(pts_world_i)} "
+          f"crop후={len(pts_base_i)}", flush=True)
+
+merged_base_points = np.vstack(accumulated_base_points).astype(np.float32)
+scan_cache_path = PERCEPTION_DIR / "scan_cache" / "merged_table_scan.npy"
+scan_cache_path.parent.mkdir(parents=True, exist_ok=True)
+np.save(scan_cache_path, merged_base_points)
+print(f"[테이블 스캔] {len(SCAN_AZIMUTH_DEG)}개 시점 누적, 총 {len(merged_base_points)}포인트 "
+      f"-> {scan_cache_path}", flush=True)
+
+print("\n[대기] 지금 별도 터미널에서 다음을 실행하세요 (venv 환경 설정만 필요, ROS2 불필요):\n"
       f"  source {PERCEPTION_DIR / '.venv/bin/activate'}\n"
-      f"  source /opt/ros/humble/setup.bash\n"
-      f"  export RMW_IMPLEMENTATION=rmw_fastrtps_cpp\n"
       f"  cd {PERCEPTION_DIR}\n"
-      f"  DISPLAY=:1 python3 run_scan_once.py --marker {TABLE_SCAN_MARKER}\n", flush=True)
+      f"  python3 run_scan_batch.py --input {scan_cache_path} --marker {TABLE_SCAN_MARKER}\n", flush=True)
 hold_until_marker(world, TABLE_SCAN_MARKER, "테이블 스캔")
 
 table_jsons_after = set(SAVE_DIRECTORY.glob("all_boxes_corners_*.json"))
@@ -862,10 +989,11 @@ def _matches_known_table_box(box):
     )
 
 
-def _table_box_center_xy(box):
+def _table_box_center_xyz(box):
     xs = [c[0] for c in box["corners_m"]]
     ys = [c[1] for c in box["corners_m"]]
-    return (min(xs) + max(xs)) / 2.0, (min(ys) + max(ys)) / 2.0
+    zs = [c[2] for c in box["corners_m"]]
+    return (min(xs) + max(xs)) / 2.0, (min(ys) + max(ys)) / 2.0, (min(zs) + max(zs)) / 2.0
 
 
 table_boxes_data = json.loads(table_boxes_json_path.read_text())
@@ -875,15 +1003,23 @@ _size_ok_table_boxes = [b for b in table_boxes_data["boxes"] if _matches_known_t
 # 크기 필터를 통과해도 같은 물리적 박스가 후보 2개(support_type이 다르거나 경계가
 # 살짝 다른)로 겹쳐 잡히는 경우가 있을 수 있다(크레이트 더미에서 실제로 겪은 것과
 # 같은 종류) - 중심이 가까우면 하나만(먼저 만난 것) 채택한다.
+# XY 거리만 보면 "같은 XY, 다른 높이"인 적층(Small on Large)까지 같은 물체로
+# 오판해서 병합해버린다(perception/STACKED_BOX_DETECTION_DEBUG_GUIDE.md 버그#1과
+# 동일 문제, 40.py에서 이미 검증된 수정을 여기도 반영) - Z 거리 조건을 AND로 추가.
 TABLE_BOX_DEDUP_RADIUS_M = 0.10
+TABLE_BOX_DEDUP_Z_TOLERANCE_M = 0.05
 table_real_boxes = []
 _kept_centers = []
 for b in _size_ok_table_boxes:
-    cx, cy = _table_box_center_xy(b)
-    if any(((cx - kx) ** 2 + (cy - ky) ** 2) ** 0.5 < TABLE_BOX_DEDUP_RADIUS_M for kx, ky in _kept_centers):
+    cx, cy, cz = _table_box_center_xyz(b)
+    if any(
+        ((cx - kx) ** 2 + (cy - ky) ** 2) ** 0.5 < TABLE_BOX_DEDUP_RADIUS_M
+        and abs(cz - kz) < TABLE_BOX_DEDUP_Z_TOLERANCE_M
+        for kx, ky, kz in _kept_centers
+    ):
         continue
     table_real_boxes.append(b)
-    _kept_centers.append((cx, cy))
+    _kept_centers.append((cx, cy, cz))
 
 table_boxes_data["boxes"] = table_real_boxes
 table_boxes_data["box_count"] = len(table_real_boxes)
@@ -1105,7 +1241,10 @@ print("\n[완료] 35.crate_scan_setup.py 끝.\n", flush=True)
 if HEADLESS:
     simulation_app.close()
 else:
-    print("[안내] 창을 직접 둘러보세요 - 닫으면 스크립트가 종료됩니다.\n", flush=True)
-    while simulation_app.is_running():
-        world.step(render=True)
-    simulation_app.close()
+    print("[안내] 창을 닫으면 스크립트가 종료됩니다.\n", flush=True)
+
+    try:
+        while simulation_app.is_running():
+            simulation_app.update()
+    finally:
+        simulation_app.close()
