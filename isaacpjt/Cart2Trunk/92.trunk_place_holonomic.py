@@ -81,6 +81,18 @@ TRUNK_WALL_TOP = 1.28
 SDF_RESOLUTION = 256
 ANCHOR_Y = 0.0
 
+# 사용자 지적 - TRUNK_X_MIN 하나를 "적재 공간 시작점"/"실제 차량 개구부 평면"/"박스 통과
+# 판정 평면" 세 용도로 동시에 쓰면 안 된다(차량 형상상 몇 cm씩 차이 날 수 있음). 실측 확인됨:
+# TRUNK_X_MIN(=3.11)은 8.rescale_and_rebuild.py가 인용한 (지금은 소실된) rescale_probe.py의
+# 레이캐스트 결과였는데, 같은 프로브가 낸 floor_z=1.03도 이미 다른 스크립트(12.trunk_scan_
+# hidden_gripper.py)에서 "사실 입구 쪽 얕은 턱이었다, 진짜 바닥은 물리 낙하 테스트로 0.43~
+# 0.44에서 찾음"이라고 정정된 전례가 있다 - x=3.11도 레이캐스트/포인트클라우드가 처음 표면을
+# 감지한 지점(안쪽 턱/선반)이었을 뿐, 진짜 개구부 평면이 아니었다(이 프로젝트 전체에서 floor_z
+# 만 정정되고 x_min은 92번 STAGE 2 이전까지 한 번도 재검증 없이 10~92번 스크립트에 복사돼
+# 왔음). STAGE 2 마커 평면(EntrancePlane=초록, SuccessPlane=노랑) 스크린샷으로 대조한 결과
+# -0.15m 보정 시 성공 확인됨.
+TRUNK_ENTRANCE_X = TRUNK_X_MIN - 0.15
+
 # ---------------- 82~91번과 동일 홀로노믹 베이스 구성 ----------------
 DRIVE_STIFFNESS, DRIVE_DAMPING, DRIVE_MAX_FORCE = 0.0, 50.0, 20.0
 BASE_PATH = "/World/HoloBase"
@@ -695,15 +707,34 @@ def drive_to(target_x=None, target_y=None, target_yaw_deg=None, tolerance_xy=0.0
 def drive_until(condition_fn, target_x=None, target_y=None, target_yaw_deg=None,
                  tolerance_xy=0.03, tolerance_yaw_deg=2.0, max_speed=0.4, max_wz=0.2,
                  kp_xy=1.8, kp_yaw=0.25, max_steps=3000, label="",
-                 debug_interval=0, debug_fn=None):
+                 debug_interval=0, debug_fn=None,
+                 per_step_fn=None, abort_fn=None, hard_stop_on_condition=False,
+                 max_speed_fn=None):
     """drive_to()와 동일한 폐루프 주행이되, (target_x,target_y) 도달 전이라도 매 스텝
     condition_fn()이 True가 되는 순간 즉시 멈춘다(사용자 설계 - "박스가 트렁크 입구를 완전히
     넘는 순간"처럼 실측 조건으로 정지해야 하는 경우, 섀시-박스 간 정확한 오프셋을 미리 계산
     하기보다 실측값을 직접 보고 멈추는 게 더 안전하다 - 33.py의 raise_lift_and_link6_until()과
     동일 원칙). target_x/y는 condition_fn이 끝내 만족되지 않을 때의 안전 상한(fallback)이다.
-    사용자 요청 - debug_interval>0이면 debug_fn(step)을 그 스텝 간격마다(+조건 충족/정체
-    시점에 한 번 더) 호출해서, 종료 조건이 실제로 왜/언제 걸리는지(또는 안 걸리는지) 매 구간
-    실측값으로 직접 눈으로 확인할 수 있게 한다."""
+
+    사용자 지적(STAGE 2 충돌 분석) - 이전 버전은 매 스텝 step_hold(1)만 불러서 팔에 아무
+    명령도 안 보냈다. set_lift_height()가 매 프레임 M0609 전체를 섀시 기준으로 텔레포트
+    하므로 "명령을 안 보내면 관절값이 그대로 유지되며 따라오겠지"라고 기대했지만, 실측
+    (STAGE=2 디버그 로그)으로 95~108스텝 구간에서 팁-섀시 X 오프셋이 0.360m -> 0.322m로
+    줄고 Y가 갑자기 18cm 튀는 게 확인됐다 - 물리 충돌로 팔 자세가 눌린 것. 그런데 조인트
+    명령을 안 보내는 것 자체가 "자세를 안 지킨다"는 뜻은 아니다(articulation이 자체
+    강성/드라이브로 버티고 있었음) - 그보다 중요한 문제는 **그 충돌을 감지해서 즉시 멈추는
+    장치가 없었다**는 것과 **충돌 후에도 30스텝 감속 관성으로 계속 밀고 들어갔다**는 것이다.
+    고침:
+    1. per_step_fn - 매 스텝(월드 스텝 직전) 호출해서 팔 관절을 명시적으로 다시 명령한다
+       (관절 자체가 흔들리는 걸 최대한 억제 - 충돌해도 팔이 순순히 밀리지 않고 버티게 함).
+    2. abort_fn - condition_fn과 별개로 "자세가 무너졌다"를 감지하는 별도 조건. 참이 되면
+       실패로 즉시 중단한다(성공 조건과 구분 - 충돌로 튄 걸 성공으로 오판하지 않음).
+    3. hard_stop_on_condition - 조건 충족/abort/정체 시 기존 30스텝 부드러운 감속(관성으로
+       계속 전진) 대신 그 자리에서 즉시 속도를 0으로 만든다 - 이미 충돌했다면 더 밀어넣지
+       않는다.
+    4. max_speed_fn() - 인자 없이 매 스텝 호출되는 콜백. 주어지면 이 반환값을 속도 상한으로
+       쓴다(입구 근접 시 저속 접근) - 호출부가 클로저로 "박스가 입구까지 얼마나 남았는지"
+       같은 필요한 상태를 직접 캡처해서 판단한다."""
     start_pos, start_quat = base_robot.get_world_pose()
     start_yaw = float(np.degrees(quat_to_euler_angles(start_quat)[2]))
     tx = target_x if target_x is not None else float(start_pos[0])
@@ -716,13 +747,24 @@ def drive_until(condition_fn, target_x=None, target_y=None, target_yaw_deg=None,
     last_check_pos = np.array([float(start_pos[0]), float(start_pos[1])])
     stalled = False
     condition_met = False
+    aborted = False
     step = 0
     for step in range(1, max_steps + 1):
         if debug_interval and debug_fn is not None and step % debug_interval == 0:
             debug_fn(step)
+        # 사용자 지적 - 같은 프레임에서 성공/붕괴 조건이 동시에 True가 될 수 있는데, 성공
+        # 조건을 먼저 봐야 한다(성공 조건 자체에 이미 Y중앙/흡착유지 검사가 들어있으므로,
+        # 그걸 만족했다면 그게 우선이다 - abort를 먼저 보면 정상 성공 프레임도 실패로
+        # 오판할 수 있다).
         if condition_fn():
             condition_met = True
             print(f"  [조건 충족] {step}스텝에서 condition_fn() True - 주행 중단", flush=True)
+            if debug_fn is not None:
+                debug_fn(step)
+            break
+        if abort_fn is not None and abort_fn():
+            aborted = True
+            print(f"  [자세 붕괴 감지] {step}스텝에서 abort_fn() True - 주행 즉시 중단(실패)", flush=True)
             if debug_fn is not None:
                 debug_fn(step)
             break
@@ -732,16 +774,22 @@ def drive_until(condition_fn, target_x=None, target_y=None, target_yaw_deg=None,
         eyaw = ((tyaw - yaw_deg + 180) % 360) - 180
         if abs(ex_w) < tolerance_xy and abs(ey_w) < tolerance_xy and abs(eyaw) < tolerance_yaw_deg:
             break
+        # max_speed_fn은 인자 없이 호출한다 - 호출부가 클로저로 필요한 상태(예: 박스가
+        # 입구까지 얼마나 남았는지)를 직접 캡처해서 판단하게 한다(chassis 자체의 목표
+        # 거리(ex_w)는 "박스가 얼마나 남았는지"와 무관한 값이라 여기서 넘기지 않는다).
+        step_max_speed = max_speed_fn() if max_speed_fn is not None else max_speed
         yaw_rad = np.radians(yaw_deg)
         ex_l = ex_w * np.cos(yaw_rad) + ey_w * np.sin(yaw_rad)
         ey_l = -ex_w * np.sin(yaw_rad) + ey_w * np.cos(yaw_rad)
-        vx_t = float(np.clip(kp_xy * ex_l, -max_speed, max_speed))
-        vy_t = float(np.clip(kp_xy * ey_l, -max_speed, max_speed))
+        vx_t = float(np.clip(kp_xy * ex_l, -step_max_speed, step_max_speed))
+        vy_t = float(np.clip(kp_xy * ey_l, -step_max_speed, step_max_speed))
         wz_t = float(np.clip(np.radians(kp_yaw * eyaw), -max_wz, max_wz))
         _smooth_state["vx"] += SMOOTH_ALPHA * (vx_t - _smooth_state["vx"])
         _smooth_state["vy"] += SMOOTH_ALPHA * (vy_t - _smooth_state["vy"])
         _smooth_state["wz"] += SMOOTH_ALPHA * (wz_t - _smooth_state["wz"])
         base_robot.apply_action(holo_forward(_smooth_state["vx"], _smooth_state["vy"], _smooth_state["wz"]))
+        if per_step_fn is not None:
+            per_step_fn()
         step_hold(1)
         if step % STALL_WINDOW == 0:
             cur = np.array([float(pos[0]), float(pos[1])])
@@ -753,17 +801,33 @@ def drive_until(condition_fn, target_x=None, target_y=None, target_yaw_deg=None,
                     debug_fn(step)
                 break
             last_check_pos = cur
-    for _ in range(30):
-        _smooth_state["vx"] *= 1 - SMOOTH_ALPHA
-        _smooth_state["vy"] *= 1 - SMOOTH_ALPHA
-        _smooth_state["wz"] *= 1 - SMOOTH_ALPHA
-        base_robot.apply_action(holo_forward(_smooth_state["vx"], _smooth_state["vy"], _smooth_state["wz"]))
-        step_hold(1)
+
+    if hard_stop_on_condition and (condition_met or aborted):
+        # 이미 조건 충족(성공) 또는 자세 붕괴(실패)가 감지된 상황 - 관성으로 더 밀고 들어가지
+        # 않도록 부드러운 감속 대신 그 자리에서 즉시 속도를 0으로 만든다.
+        _smooth_state["vx"] = 0.0
+        _smooth_state["vy"] = 0.0
+        _smooth_state["wz"] = 0.0
+        zero_action = holo_forward(0.0, 0.0, 0.0)
+        for _ in range(8):
+            base_robot.apply_action(zero_action)
+            if per_step_fn is not None:
+                per_step_fn()
+            step_hold(1)
+    else:
+        for _ in range(30):
+            _smooth_state["vx"] *= 1 - SMOOTH_ALPHA
+            _smooth_state["vy"] *= 1 - SMOOTH_ALPHA
+            _smooth_state["wz"] *= 1 - SMOOTH_ALPHA
+            base_robot.apply_action(holo_forward(_smooth_state["vx"], _smooth_state["vy"], _smooth_state["wz"]))
+            if per_step_fn is not None:
+                per_step_fn()
+            step_hold(1)
     final_pos, final_quat = base_robot.get_world_pose()
     final_yaw = float(np.degrees(quat_to_euler_angles(final_quat)[2]))
     print(f"[주행 완료]{' ' + label if label else ''} {step}스텝, 최종=({final_pos[0]:.3f},{final_pos[1]:.3f},"
-          f"{final_yaw:.1f}deg) 조건충족={condition_met} 정체={stalled}", flush=True)
-    return final_pos, final_yaw, condition_met
+          f"{final_yaw:.1f}deg) 조건충족={condition_met} 자세붕괴={aborted} 정체={stalled}", flush=True)
+    return final_pos, final_yaw, condition_met, aborted
 
 
 step_hold(60)
@@ -983,46 +1047,162 @@ if STAGE >= 2:
     # 사용자 지시(재검토) - 목표를 "섀시 중심이 j1_x=TRUNK_X_MIN에 오는 것"으로 미리 계산해서
     # 잡는 대신, "파지한 박스가 트렁크 입구를 완전히 넘어서는 순간"을 실측으로 직접 보고
     # 멈춘다 - 섀시-박스 간 정확한 오프셋(팔 모양에 따라 달라짐)을 계산에 넣을 필요가 없어
-    # 더 안전하다(drive_until(), 33.py의 raise_lift_and_link6_until()과 동일 원칙). 팔은
-    # STAGE 1.1의 자세(자기 몸 근처 xy, ENTRY_HOLDING_Z) 그대로 유지한 채(원격 목표를 쫓지
-    # 않음) 섀시만 이동시킨다. y는 반드시 중앙선(ANCHOR_Y=0)을 유지한다 - 차량 하부 클리어런스
-    # 실측(_probe_underbody.json)상 중앙선은 최소 0.206m 확보되지만, y=±0.7 부근(휠하우스
-    # 근처) x=3.5~3.9 구간은 0.02~0.1m로 급격히 낮아져 충돌 위험이 크다. target_x는
-    # condition_fn이 끝내 만족 안 될 때의 안전 상한(트렁크 안쪽 끝, TRUNK_X_MAX)일 뿐이다.
-    ENTRANCE_CLEAR_MARGIN = 0.05  # 입구를 넘은 뒤 "바로 안쪽"이 되도록 이만큼만 더 여유를 둔다.
+    # 더 안전하다(drive_until(), 33.py의 raise_lift_and_link6_until()과 동일 원칙).
+    #
+    # 사용자 지적(2차, 충돌 분석 기반 전면 재작성) - 디버그 로그(STAGE=2 1차 실행)로 95~108
+    # 스텝 구간에서 실제 물리 충돌이 확인됐다: 팁-섀시 X 오프셋이 0.360m -> 0.322m로 줄고
+    # 박스 Y가 3스텝 만에 18cm 튀었는데, 기존 종료 조건은 "박스 X가 입구를 넘었는가"만 봐서
+    # 이 충돌로 튄 위치도 "성공"으로 오판했다. 아래를 전부 새로 만든다:
+    #   1) stage2_hold_q - STAGE 1.1에서 확립한 조인트값을 저장해두고, per_step_fn으로 매
+    #      스텝 다시 명령해서 팔이 충돌에 순순히 밀리지 않도록 버틴다.
+    #   2) stage2_tip_rel_ref - 시작 시점의 "팁-섀시 상대 위치"를 기준값으로 저장, 매 스텝
+    #      이 기준에서 얼마나 벗어났는지를 자세 붕괴(=충돌) 감지에 쓴다 - 실측(디버그 로그)
+    #      으로 100스텝 시점 오프셋 오차가 이미 0.038m였다(108스텝의 큰 충격 전에 감지 가능).
+    #   3) _box_cleared_entrance - 박스 CENTER+회전+실제 치수로 world X축 투영 반길이를 직접
+    #      계산해서 뒤쪽/앞쪽 가장자리를 구한다(아래 4번 참고 - BBoxCache가 치수를 잘못
+    #      돌려주는 문제를 우회). Y가 중앙선에서 크게 벗어나지 않았는지 + 그리퍼가 여전히
+    #      붙어있는지도 함께 확인한다 - 충돌로 틀어진 상태를 성공으로 오판하지 않기 위함.
+    #   4) hard_stop_on_condition=True - 조건 충족/자세붕괴 시 기존 30스텝 관성 감속 대신
+    #      즉시 정지 - 이미 부딪혔다면 더 밀어넣지 않는다.
+    #   5) max_speed_fn - 입구에 가까워질수록(박스 뒤쪽 가장자리 기준 남은 거리) 속도를
+    #      줄인다 - 기존 0.4m/s는 입구 통과 속도로는 너무 빨라 충돌 시 충격이 컸다.
+    #
+    # 사용자 지적(3차, 재검토) - 실제 재현 로그를 다시 맞춰보니 두 가지가 더 있었다:
+    #   a) ENTRANCE_CLEAR_MARGIN=0.05는 "입구를 넘은 뒤 바로 안쪽"이 아니라 "박스 전체가
+    #      입구를 넘은 뒤 추가로 5cm 더 들어가야 성공"이라는 뜻이었다 - 박스 반길이(6.75cm)
+    #      까지 합치면 박스 중심이 입구보다 11.75cm나 더 들어가야 했다. 화면상 이미 들어간
+    #      것처럼 보여도 이 과도한 여유 때문에 조건이 계속 False였고, 그 사이 팔이 먼저
+    #      차량에 부딪혔다. 0.005로 대폭 줄인다(추가 삽입 거리는 STAGE 3의 몫으로 미룬다).
+    #   b) get_world_aabb()(BBoxCache 기반)가 반환한 박스 크기가 실제 TEST_BOX_SIZE의 제곱에
+    #      가까운 값(예: 0.135^2≈0.018 - 실측 AABB 폭과 거의 일치)이었다 - scale이 이중
+    #      적용되는 것으로 보이는 버그. BBoxCache를 아예 안 쓰고, 이미 알고 있는 실제 치수
+    #      (TEST_BOX_SIZE)와 박스의 실시간 world pose(중심+회전)로 X축 투영 반길이를 직접
+    #      계산한다 - 이 버그 자체를 우회한다.
+    #   c) TRUNK_X_MIN을 "적재 공간 시작점"과 "실제 차량 개구부 평면" 두 용도로 같이 쓰면
+    #      안 된다(차량 형상상 몇 cm 차이 날 수 있음) - TRUNK_ENTRANCE_X로 분리했다(현재는
+    #      같은 값, 아래 마커로 실제 위치 확인 후 필요하면 이 값만 조정).
+    ENTRANCE_CLEAR_MARGIN = 0.005  # 입구를 "박스 뒤쪽 끝"이 넘은 뒤 아주 약간만 더 여유를 둔다.
+    STAGE2_Y_TOLERANCE = 0.04  # 박스 중심이 중앙선(ANCHOR_Y)에서 이 이상 벗어나면 이상으로 본다.
+    STAGE2_POSE_DRIFT_TOLERANCE = 0.025  # 팁-섀시 상대 위치가 시작 시점 대비 이 이상 벗어나면 충돌로 본다.
 
-    def _box_cleared_entrance():
-        box_pos = get_world_pos(stage.GetPrimAtPath("/World/TestCarryBox"))
-        box_near_edge_x = float(box_pos[0]) - TEST_BOX_SIZE[0] / 2.0
-        return box_near_edge_x > TRUNK_X_MIN + ENTRANCE_CLEAR_MARGIN
+    # 디버그/확인용 마커 평면 - 초록=TRUNK_ENTRANCE_X(입구 평면), 노랑=성공 판정 평면
+    # (TRUNK_ENTRANCE_X+ENTRANCE_CLEAR_MARGIN). 스크린샷에서 이 두 평면이 실제 범퍼/개구부
+    # 위치와 얼마나 차이 나는지 눈으로 바로 확인할 수 있다. 충돌 콜리전은 없는 순수 시각 마커.
+    def _add_x_marker(name, x, color):
+        marker = UsdGeom.Cube.Define(stage, f"/World/{name}")
+        marker.CreateSizeAttr(1.0)
+        marker.CreateDisplayColorAttr([Gf.Vec3f(*color)])
+        xform = UsdGeom.Xformable(marker)
+        xform.ClearXformOpOrder()
+        xform.AddTranslateOp().Set(Gf.Vec3d(x, 0.0, 0.75))
+        xform.AddScaleOp().Set(Gf.Vec3f(0.003, 0.55, 0.30))
 
-    # 사용자 요청 - 종료 조건이 실제로 언제/왜 걸리는지(또는 안 걸리는지) 매 구간 실측값으로
-    # 직접 확인할 수 있게, 트렁크 입구 x, 섀시 중심, 그리퍼 팁, 박스 위치를 주기적으로 찍는다.
-    def _stage2_debug(step):
-        chassis_pos, _ = base_robot.get_world_pose()
-        box_pos = get_world_pos(stage.GetPrimAtPath("/World/TestCarryBox"))
+    _add_x_marker("EntrancePlane", TRUNK_ENTRANCE_X, (0.0, 1.0, 0.0))
+    _add_x_marker("SuccessPlane", TRUNK_ENTRANCE_X + ENTRANCE_CLEAR_MARGIN, (1.0, 1.0, 0.0))
+
+    def _measure_tip_pos():
         gripper_mat = UsdGeom.Xformable(stage.GetPrimAtPath(gripper_body_path)).ComputeLocalToWorldTransform(
             Usd.TimeCode.Default())
-        tip_pos = np.array(gripper_mat.Transform(Gf.Vec3d(*TIP_LOCAL_OFFSET)))
-        box_near_edge_x = float(box_pos[0]) - TEST_BOX_SIZE[0] / 2.0
-        threshold_x = TRUNK_X_MIN + ENTRANCE_CLEAR_MARGIN
-        print(f"  [DEBUG step={step}] 트렁크입구 x={TRUNK_X_MIN:.3f} 임계값(입구+margin)={threshold_x:.3f} | "
-              f"섀시중심=({float(chassis_pos[0]):.3f},{float(chassis_pos[1]):.3f},{float(chassis_pos[2]):.3f}) "
-              f"섀시-입구거리={TRUNK_X_MIN - float(chassis_pos[0]):+.3f} | "
+        return np.array(gripper_mat.Transform(Gf.Vec3d(*TIP_LOCAL_OFFSET)), dtype=float)
+
+    def _get_box_x_edges():
+        """BBoxCache 대신 박스의 실시간 world pose(중심+회전)와 이미 알고 있는 실제 치수
+        (TEST_BOX_SIZE)로 world X축 투영 반길이를 직접 계산한다 - get_world_aabb()가 치수를
+        잘못 돌려주던 문제(제곱값처럼 나옴, 원인 미상 - scale 이중 적용 추정)를 우회한다."""
+        box_pos, box_quat = test_box.get_world_pose()
+        center = np.asarray(box_pos, dtype=float)
+        rotation = quat_wxyz_to_matrix(np.asarray(box_quat, dtype=float))
+        half_dims = np.asarray(TEST_BOX_SIZE, dtype=float) / 2.0
+        projected_half_x = (
+            abs(rotation[0, 0]) * half_dims[0]
+            + abs(rotation[0, 1]) * half_dims[1]
+            + abs(rotation[0, 2]) * half_dims[2]
+        )
+        rear_x = float(center[0] - projected_half_x)
+        front_x = float(center[0] + projected_half_x)
+        return rear_x, front_x, center
+
+    # ---- 기준값(자세 붕괴 감지용) - STAGE 2 시작 시점, 아직 충돌 전의 "정상" 상대 위치 ----
+    stage2_hold_q = np.asarray(m0609_robot.get_joint_positions(), dtype=float).copy()
+    _stage2_chassis_start, _ = base_robot.get_world_pose()
+    _stage2_tip_start = _measure_tip_pos()
+    stage2_tip_rel_ref = _stage2_tip_start - np.asarray(_stage2_chassis_start, dtype=float)
+    print(f"[STAGE2 기준값] 조인트={np.round(stage2_hold_q, 3)} "
+          f"팁-섀시 상대위치(기준)={np.round(stage2_tip_rel_ref, 3)}", flush=True)
+
+    def _hold_stage2_arm():
+        # 매 스텝 STAGE 1.1의 조인트값을 다시 명령한다 - 충돌 등으로 자세가 흔들려도 최대한
+        # 원래 모양으로 버티게 한다(사용자 지적 - 예전엔 명령을 전혀 안 보내서 충돌에 그대로
+        # 밀렸었다).
+        m0609_robot.apply_action(ArticulationAction(joint_positions=stage2_hold_q))
+        m0609_robot.gripper.close()
+
+    def _stage2_pose_broken():
+        chassis_pos, _ = base_robot.get_world_pose()
+        tip_pos = _measure_tip_pos()
+        tip_rel = tip_pos - np.asarray(chassis_pos, dtype=float)
+        relative_error = float(np.linalg.norm(tip_rel - stage2_tip_rel_ref))
+        _, _, box_center = _get_box_x_edges()
+        y_broken = abs(float(box_center[1]) - ANCHOR_Y) > STAGE2_Y_TOLERANCE
+        pose_broken = relative_error > STAGE2_POSE_DRIFT_TOLERANCE
+        detached = not m0609_robot.gripper.is_closed()
+        return pose_broken or y_broken or detached
+
+    def _box_cleared_entrance():
+        rear_x, _, box_center = _get_box_x_edges()
+        x_cleared = rear_x >= TRUNK_ENTRANCE_X + ENTRANCE_CLEAR_MARGIN
+        y_centered = abs(float(box_center[1]) - ANCHOR_Y) < STAGE2_Y_TOLERANCE
+        attached = m0609_robot.gripper.is_closed()
+        return x_cleared and y_centered and attached
+
+    def _stage2_max_speed():
+        # 사용자 지적 - 0.4m/s는 트렁크 입구를 통과하는 속도치고 너무 빠르다(충돌 시 충격
+        # 큼). 박스 뒤쪽 가장자리 기준 입구까지 남은 거리에 따라 속도를 단계적으로 낮춘다.
+        rear_x, _, _ = _get_box_x_edges()
+        remaining = (TRUNK_ENTRANCE_X + ENTRANCE_CLEAR_MARGIN) - rear_x
+        if remaining < 0.03:
+            return 0.015
+        if remaining < 0.08:
+            return 0.025
+        if remaining < 0.15:
+            return 0.05
+        return 0.10
+
+    # 사용자 요청 - 종료 조건이 실제로 언제/왜 걸리는지(또는 안 걸리는지) 매 구간 실측값으로
+    # 직접 확인할 수 있게, 트렁크 입구 x, 섀시 중심, 그리퍼 팁, 박스 뒤/앞 가장자리를
+    # 주기적으로 찍는다. 팁-섀시 오프셋을 기준값과 비교해서 편차도 같이 보여준다.
+    def _stage2_debug(step):
+        chassis_pos, _ = base_robot.get_world_pose()
+        rear_x, front_x, box_center = _get_box_x_edges()
+        tip_pos = _measure_tip_pos()
+        tip_rel = tip_pos - np.asarray(chassis_pos, dtype=float)
+        rel_error = float(np.linalg.norm(tip_rel - stage2_tip_rel_ref))
+        threshold_x = TRUNK_ENTRANCE_X + ENTRANCE_CLEAR_MARGIN
+        print(f"  [DEBUG step={step}] 트렁크입구 x={TRUNK_ENTRANCE_X:.3f} 임계값={threshold_x:.3f} | "
+              f"섀시중심=({float(chassis_pos[0]):.3f},{float(chassis_pos[1]):.3f},{float(chassis_pos[2]):.3f}) | "
               f"그리퍼팁=({tip_pos[0]:.3f},{tip_pos[1]:.3f},{tip_pos[2]:.3f}) "
-              f"팁-섀시x오프셋={float(tip_pos[0]) - float(chassis_pos[0]):+.3f} | "
-              f"박스중심=({box_pos[0]:.3f},{box_pos[1]:.3f},{box_pos[2]:.3f}) "
-              f"박스근접edge_x={box_near_edge_x:.3f} 임계값까지남은거리={threshold_x - box_near_edge_x:+.3f}",
+              f"팁-섀시상대오차(기준대비)={rel_error:.4f}m | "
+              f"박스 뒤={rear_x:.3f} 앞={front_x:.3f} 중심={np.round(box_center,3)} "
+              f"임계값까지남은거리={threshold_x - rear_x:+.3f} 붙어있음={m0609_robot.gripper.is_closed()}",
               flush=True)
 
-    _, _, condition_met = drive_until(
+    final_pos, final_yaw, condition_met, aborted = drive_until(
         _box_cleared_entrance, target_x=TRUNK_X_MAX, target_y=ANCHOR_Y,
-        label="STAGE2: 박스가 트렁크 입구를 완전히 넘을 때까지 전진(팔 자세 고정)",
+        kp_xy=0.8, max_speed=0.08, max_speed_fn=_stage2_max_speed,
+        per_step_fn=_hold_stage2_arm, abort_fn=_stage2_pose_broken,
+        hard_stop_on_condition=True,
+        label="STAGE2: 박스가 트렁크 입구를 완전히 넘을 때까지 전진(팔 자세 고정, 저속)",
         debug_interval=5, debug_fn=_stage2_debug,
     )
-    if not condition_met:
+    if aborted:
+        print("[실패] STAGE 2 도중 자세 붕괴(충돌 의심)가 감지돼 즉시 중단했습니다 - "
+              "ENTRY_HOLDING_Z를 더 올리거나 진입 경로를 재검토하세요. STAGE 3으로 넘어가지 마세요.",
+              flush=True)
+    elif not condition_met:
         print("[경고] 안전 상한(TRUNK_X_MAX)까지 갔는데도 박스가 입구를 못 넘었습니다 - "
               "팔-섀시 오프셋/ENTRY_HOLDING_Z 재검토 필요.", flush=True)
+    else:
+        print("[성공] STAGE 2 - 박스가 자세 붕괴 없이 트렁크 입구를 넘었습니다.", flush=True)
 
     chassis_pos0, _ = base_robot.get_world_pose()
     snapshot(eye=[chassis_pos0[0] - 1.5, chassis_pos0[1] - 2.2, chassis_pos0[2] + 1.4],
@@ -1030,7 +1210,7 @@ if STAGE >= 2:
              fname="_trunkplace_00b_close_approach.png")
 
     if STAGE < 3:
-        print("\n[STAGE 2 완료] 박스가 트렁크 입구를 넘은 상태 확인용 스크린샷 저장 완료 - "
+        print(f"\n[STAGE 2 완료] 확인용 스크린샷 저장 완료(성공={condition_met and not aborted}) - "
               "STAGE=3으로 다시 실행하면 정밀 접근/PLACE까지 진행합니다.\n", flush=True)
 
 if STAGE >= 3:
