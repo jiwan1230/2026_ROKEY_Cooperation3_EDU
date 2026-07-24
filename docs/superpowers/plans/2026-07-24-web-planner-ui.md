@@ -1720,6 +1720,14 @@ export function useDebouncedPlan() {
   const state = usePlannerState();
   const dispatch = usePlannerDispatch();
   const timerRef = useRef(null);
+  // 디바운스 만료 후에도 postPlan()이 진행 중인 상태에서 사용자가 파라미터를
+  // 또 바꾸면, 새 요청이 하나 더 발화한다 - 두 요청 중 나중에 시작한(더 최신
+  // 파라미터 기준) 쪽이 먼저 끝난다는 보장이 없어서, 응답이 도착한 순서대로
+  // dispatch하면 오래된 결과가 최신 결과를 덮어쓸 수 있다("실시간 자동
+  // 재계산"의 핵심을 깨는 경쟁 조건 - 리뷰에서 발견됨). 매 발화마다 세대
+  // 번호를 하나씩 늘리고, 응답이 도착했을 때 그게 여전히 "가장 최근에 보낸
+  // 요청"인지 확인해서 아니면 조용히 버린다.
+  const requestIdRef = useRef(0);
 
   const { trunkMap, boxesText, params, boxSourceLabel } = state;
 
@@ -1736,6 +1744,7 @@ export function useDebouncedPlan() {
 
     if (timerRef.current) clearTimeout(timerRef.current);
     timerRef.current = setTimeout(() => {
+      const requestId = ++requestIdRef.current;
       dispatch({ type: "COMPUTE_START" });
       postPlan({
         trunk_map: trunkMap,
@@ -1754,13 +1763,19 @@ export function useDebouncedPlan() {
         allow_rotation: params.allowRotation,
         fixed_order: params.fixedOrder,
       })
-        .then((result) => dispatch({ type: "COMPUTE_SUCCESS", payload: result }))
-        .catch((err) =>
-          dispatch({
-            type: "COMPUTE_ERROR",
-            payload: { error_code: err.error_code || "UNKNOWN", cause: err.cause || err.message, action: err.action || "" },
-          }),
-        );
+        .then((result) => {
+          if (requestId === requestIdRef.current) {
+            dispatch({ type: "COMPUTE_SUCCESS", payload: result });
+          } // else: 더 최신 요청이 이미 발화됐으므로 이 응답은 조용히 버림
+        })
+        .catch((err) => {
+          if (requestId === requestIdRef.current) {
+            dispatch({
+              type: "COMPUTE_ERROR",
+              payload: { error_code: err.error_code || "UNKNOWN", cause: err.cause || err.message, action: err.action || "" },
+            });
+          }
+        });
     }, DEBOUNCE_MS);
 
     return () => clearTimeout(timerRef.current);
@@ -1812,6 +1827,46 @@ describe("useDebouncedPlan", () => {
     expect(client.postPlan).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId("plan-state").textContent).toBe("COMPUTED");
   });
+
+  it("ignores a stale response that resolves after a newer request has already fired", async () => {
+    // 오래된 요청(느리게 응답)과 최신 요청(빠르게 응답)이 겹치는 상황을
+    // 재현한다 - 오래된 응답이 나중에 도착해도 결과를 덮어쓰면 안 된다.
+    let resolveOld;
+    const oldPromise = new Promise((resolve) => { resolveOld = resolve; });
+    vi.spyOn(client, "postPlan")
+      .mockReturnValueOnce(oldPromise)
+      .mockResolvedValueOnce({ placed: [{ box_id: "NEW" }], log_lines: ["new"] });
+
+    function TwoStepHarness() {
+      useDebouncedPlan();
+      const state = usePlannerState();
+      const dispatch = usePlannerDispatch();
+      return (
+        <div>
+          <div data-testid="result-log">{state.result ? state.result.log_lines[0] : "none"}</div>
+          <button onClick={() => dispatch({
+            type: "RESOURCES_LOADED",
+            payload: { trunkMaps: ["run_a"], boxPresets: { "기본값": [{ id: "A", width: 0.3, depth: 0.2, height: 0.15 }] } },
+          })}>load</button>
+          <button onClick={() => dispatch({ type: "SET_PARAM", payload: { key: "mode", value: "count_first" } })}>
+            change
+          </button>
+        </div>
+      );
+    }
+
+    render(<PlannerProvider><TwoStepHarness /></PlannerProvider>);
+
+    await act(async () => { screen.getByText("load").click(); });
+    await act(async () => { vi.advanceTimersByTime(400); }); // 첫 번째(오래된) 요청 발화 - 아직 안 끝남
+
+    await act(async () => { screen.getByText("change").click(); });
+    await act(async () => { vi.advanceTimersByTime(400); }); // 두 번째(최신) 요청 발화 + 즉시 resolve
+    await act(async () => { resolveOld({ placed: [{ box_id: "OLD" }], log_lines: ["old"] }); }); // 오래된 요청이 뒤늦게 도착
+
+    expect(client.postPlan).toHaveBeenCalledTimes(2);
+    expect(screen.getByTestId("result-log").textContent).toBe("new"); // 오래된 응답에 덮어써지지 않음
+  });
 });
 ```
 
@@ -1821,7 +1876,7 @@ describe("useDebouncedPlan", () => {
 npm test -- useDebouncedPlan
 ```
 
-Expected: 1 passed.
+Expected: 2 passed.
 
 - [ ] **Step 4: Commit**
 
