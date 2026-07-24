@@ -429,6 +429,7 @@ class PlannerGUI(tk.Tk):
         # 당시와 달라지면 그 계획은 더 이상 신뢰할 수 없다고 본다.
         self._last_computed_snapshot = None
         self._auto_recompute_job = None  # 슬라이더/토글 변경 후 디바운싱된 자동 재계산 예약용
+        self._params_enabled = True  # _set_plan_state가 실제로 잠금 여부가 바뀔 때만 위젯을 재구성하게 추적
 
         self._build_header()
         # 이 환경의 Tk/Tcl이 위젯을 아주 빠르게 대량 생성하면(특히 Canvas 기반
@@ -564,6 +565,19 @@ class PlannerGUI(tk.Tk):
             setattr(self, var_name, var)
             entry = tk.Entry(row2b, textvariable=var, width=10, font=Font.body, relief="solid", bd=1)
             entry.grid(row=1, column=col, sticky="w", padx=(0 if col == 0 else 28, 0), pady=(4, 0), ipady=3)
+            # ⚠️ 실제로 발견된 버그: 이 Entry들의 StringVar를 다른 파라미터처럼
+            # trace_add("write", ...)로 감시하면, 키 입력 한 글자마다 무효화
+            # 캐스케이드(_set_plan_state -> _set_params_enabled)가 동기적으로
+            # 실행되면서 위젯 10여 개(지금 타이핑 중인 이 Entry 자신 포함)의
+            # state를 다시 configure한다 - 이게 Tk 이벤트 처리 도중 자기 자신을
+            # 재구성하는 셈이라, 실제 키보드 입력 시 글자가 하나도 안 들어가는
+            # 것처럼 보이는 현상으로 이어졌다(box_text의 <<Modified>> 처리를
+            # 자동 재계산 대상에서 뺀 것과 같은 이유). 그래서 이 5개 입력칸은
+            # Var trace 대신 KeyRelease(가벼운 무효화만)/Return·FocusOut(입력
+            # 완료 시점에만 자동 재계산 예약)로 따로 처리한다.
+            entry.bind("<KeyRelease>", lambda e: self._invalidate_plan_if_stale())
+            entry.bind("<Return>", self._on_margin_entry_committed)
+            entry.bind("<FocusOut>", self._on_margin_entry_committed)
             self.margin_entries.append(entry)
 
         # ---- 2-c행: 적재 우선순위 슬라이더 2축 + 회전 허용 토글 ----
@@ -620,10 +634,12 @@ class PlannerGUI(tk.Tk):
         self._on_preset_selected()
 
         # ---- 파라미터 변경 감지 배선 - 값이 하나라도 바뀌면 계산 당시 스냅샷과
-        # 달라지므로 _on_param_changed가 기존 계획을 무효화한다. ----
-        for var in (self.trunk_map_var, self.box_preset_var, self.mode_var, self.margin_var,
-                    self.wall_margin_var, self.ceiling_margin_var, self.obstacle_margin_var,
-                    self.entrance_margin_var, self.entrance_pref_var, self.contact_pref_var,
+        # 달라지므로 _on_param_changed가 기존 계획을 무효화 + 자동 재계산까지
+        # 예약한다. 마진 5개 입력칸(margin_var 등)은 여기 안 넣는다 - 위에서
+        # Entry별로 KeyRelease/Return/FocusOut으로 따로 배선함(이유는 그쪽 주석
+        # 참고 - 매 키 입력마다 이 무거운 경로를 타면 타이핑 자체가 깨졌었음).
+        for var in (self.trunk_map_var, self.box_preset_var, self.mode_var,
+                    self.entrance_pref_var, self.contact_pref_var,
                     self.height_pref_var, self.stacking_var, self.allow_rotation_var,
                     self.fixed_order_var):
             var.trace_add("write", self._on_param_changed)
@@ -956,7 +972,14 @@ class PlannerGUI(tk.Tk):
         self.send_button.set_enabled(state == "APPROVED")
         # HMI 8절 원칙 #4: 실행 중(=승인 후) 파라미터 변경 금지 - 승인되면 잠그고,
         # 거부/재계산 전까지는 안 풀린다.
-        self._set_params_enabled(state != "APPROVED")
+        new_enabled = state != "APPROVED"
+        # ⚠️ 실제로 발견된 버그: 잠금 여부가 실제로는 안 바뀌는데도(예: COMPUTED
+        # -> NOT_COMPUTED는 둘 다 "잠금 안 됨") 매번 위젯 10여 개를 다시
+        # configure하면, 마진 입력칸처럼 지금 막 타이핑 중인 위젯까지 재구성돼서
+        # 키 입력이 끊기는 것처럼 보였다. 실제로 값이 바뀔 때만 재구성한다.
+        if new_enabled != self._params_enabled:
+            self._set_params_enabled(new_enabled)
+            self._params_enabled = new_enabled
 
     def _set_params_enabled(self, enabled: bool):
         entry_state = "normal" if enabled else "disabled"
@@ -1081,6 +1104,23 @@ class PlannerGUI(tk.Tk):
             if self._invalidate_plan_if_stale():
                 self.status_var.set("⚠️ 박스 목록이 변경됨 - '다시 계산'을 눌러주세요")
             self.box_text.edit_modified(False)  # Text 위젯의 modified 플래그는 수동으로 꺼줘야 계속 감지됨
+
+    def _on_margin_entry_committed(self, event=None):
+        """마진 입력칸(박스간격/벽면간격/천장여유/장애물간격/입구여유거리)에서
+        Enter를 누르거나 다른 곳을 클릭(포커스 아웃)하면 - "입력이 끝났다"고
+        보고 그때서야 자동 재계산을 예약한다. 매 키 입력마다가 아니라 "다
+        쳤을 때"만 하므로 타이핑 자체를 방해하지 않는다.
+
+        ⚠️ _invalidate_plan_if_stale()의 반환값만 보고 예약 여부를 정하면 안
+        된다 - 이미 KeyRelease에서 첫 글자 입력 때 무효화가 끝나 있어서(상태가
+        이미 NOT_COMPUTED), Enter를 눌러도 "새로 무효화된 게 없다"고 보고
+        재계산을 영영 예약 안 하는 버그가 났었다. 그래서 무효화는 안전하게 한
+        번 더 시도하고(이미 됐으면 아무 일도 안 함), 예약 여부는 "지금
+        NOT_COMPUTED이고 예전에 계산해본 적은 있다"는 상태 자체로 판단한다."""
+        self._invalidate_plan_if_stale()
+        if self._plan_state == "NOT_COMPUTED" and self._last_computed_snapshot is not None:
+            self.status_var.set("⚠️ 파라미터 변경됨 - 잠시 후 자동 재계산...")
+            self._schedule_auto_recompute()
 
     def _schedule_auto_recompute(self):
         """슬라이더를 드래그하는 동안 매 픽셀마다 재계산하면 버벅이므로,
