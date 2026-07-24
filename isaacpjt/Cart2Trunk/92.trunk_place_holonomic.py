@@ -555,6 +555,19 @@ ENTRY_HOLDING_Z = min(place_release_z + ENTRY_CLEARANCE_ABOVE_RELEASE, SAFE_TRAN
 print(f"[STAGE 1.1 사전계산] ENTRY_HOLDING_Z={ENTRY_HOLDING_Z:.3f} "
       f"(release_z+{ENTRY_CLEARANCE_ABOVE_RELEASE:.2f}, 천장한계 {SAFE_TRANSIT_Z:.3f} 이내로 클램프)", flush=True)
 
+# 사용자 설계(5차) - LIFT_TRAVEL_M=0.35(LIFT_MAX≈0.388)는 "차체 밑을 지나는" 시나리오의
+# 안전마진인데, 스크립트 시작부터 계속 LIFT_MAX에 고정해두고 그 이후 ENTRY_HOLDING_Z(0.83)
+# ->place_release_z 낙차를 팔 혼자서만 커버해왔다 - 팔이 그 큰 낙차+수평 reach를 동시에
+# 감당하는 자세에서 팔꿈치/팔뚝이 트렁크 입구 프레임을 스쳤다(91.py PICK Phase A와 같은
+# 원리로 해결: 리프트로 마운트 자체를 목표 높이 가까이 올리면 팔은 작은 나머지 거리만
+# 커버하면 되어 자세가 컴팩트하게 유지된다). 이 시점(STAGE 3 마지막 PLACE 하강)에는 섀시가
+# 이미 차체 밑이 아니라 트렁크 입구/안쪽에 있으므로, under-car 캡(LIFT_MAX) 대신 트렁크
+# 천장 안전한계(SAFE_TRANSIT_Z)까지 리프트를 더 올려도 된다. release_z 바로 아래(0.05m
+# 남짓)까지만 마운트를 올려서 팔이 감당할 나머지 하강량을 최소화한다.
+PLACE_LIFT_MAX = min(place_release_z - 0.05, SAFE_TRANSIT_Z - 0.05)
+print(f"[PLACE 하강용 리프트 상한] PLACE_LIFT_MAX={PLACE_LIFT_MAX:.3f} "
+      f"(release_z-0.05, 천장한계 {SAFE_TRANSIT_Z:.3f} 이내로 클램프)", flush=True)
+
 
 # ================= 씬 구성 =================
 world = World(stage_units_in_meters=1.0)
@@ -884,9 +897,44 @@ def move_link6(target_pos, steps=WAYPOINT_STEPS, hold_gripper_closed=True, label
     return ee_pos, err
 
 
+def descend_and_raise_lift(target_xy, target_z, target_lift_h, steps=250,
+                            orientation=DOWN_QUAT, hold_gripper_closed=True, label=""):
+    """사용자 설계(5차, PICK Phase A와 동일 원리) - 리프트가 고정된 채로 팔만으로 큰 낙차를
+    내리면, 그 낙차+수평 reach를 동시에 감당하는 자세에서 팔꿈치/팔뚝이 옆 구조물(여기서는
+    트렁크 입구 프레임)을 스칠 수 있다. 리프트를 target_lift_h까지 올리면서(마운트 자체가
+    목표 높이로 다가감) 동시에 link6의 절대 목표 z를 target_z까지 내린다 - 마운트가 목표에
+    가까워질수록 팔이 커버해야 할 나머지 거리가 자연스럽게 줄어들어, 자세가 훨씬 컴팩트하게
+    유지된다."""
+    start_h = lift_state["h"]
+    start_ee, _ = m0609_robot.end_effector.get_world_pose()
+    start_z = float(start_ee[2])
+    for i in range(steps):
+        alpha = (i + 1) / steps
+        h = start_h + (target_lift_h - start_h) * alpha
+        z = start_z + (target_z - start_z) * alpha
+        lift_state["h"] = h
+        sync_rmp_base()
+        actions = controller.forward(
+            target_end_effector_position=np.array([target_xy[0], target_xy[1], z], dtype=float),
+            target_end_effector_orientation=orientation,
+        )
+        m0609_robot.apply_action(actions)
+        if hold_gripper_closed:
+            m0609_robot.gripper.close()
+        set_lift_height(h)
+        world.step(render=True)
+    ee_pos, _ = m0609_robot.end_effector.get_world_pose()
+    err = float(np.linalg.norm(np.array(ee_pos) - np.array([target_xy[0], target_xy[1], target_z])))
+    print(f"[리프트+하강{' ' + label if label else ''}] 리프트 {start_h:.3f} -> {lift_state['h']:.3f} "
+          f"팔목표z {start_z:.3f} -> {target_z:.3f} ee={np.round(ee_pos, 3)} err={err:.4f}m", flush=True)
+    return ee_pos, err
+
+
 def drive_and_reach(target_x, target_y, ee_target_pos, ee_orientation=DOWN_QUAT,
                      tolerance_xy=0.03, max_speed=0.4, kp_xy=1.8, max_steps=3000,
-                     hold_gripper_closed=True, label=""):
+                     hold_gripper_closed=True, label="",
+                     abort_fn=None, hard_stop_on_condition=False, max_speed_fn=None,
+                     debug_interval=0, debug_fn=None):
     """홀로노믹 베이스 전진과 매니퓰레이터 목표 추종을 같은 스텝에서 동시에 진행한다(사용자
     설계). 원래 drive_to()는 주행 중 step_hold(1)만 불러서 팔에 아무 명령도 안 보냈다 - 리프트
     텔레포트(set_lift_height)가 매 프레임 팔 전체를 섀시 기준으로 재배치하므로, 직전에
@@ -896,7 +944,14 @@ def drive_and_reach(target_x, target_y, ee_target_pos, ee_orientation=DOWN_QUAT,
     고침: 매 스텝 (a) 바퀴 속도 명령과 (b) RMPflow 목표 추종 명령을 함께 내린다. ee_target_pos는
     고정된 world 목표(트렁크 안 최종 배치 지점)라서, 섀시가 X축으로 다가갈수록 팔이 그 목표에
     필요한 수평 reach를 실시간으로 줄여가며 자연스럽게 따라온다 - "Z축 정렬 후 하강"이 아니라
-    "X축 기준으로 옆에서 안쪽으로 밀어넣는" 동작이 여기서 나온다."""
+    "X축 기준으로 옆에서 안쪽으로 밀어넣는" 동작이 여기서 나온다.
+
+    사용자 지적(STAGE 2 충돌 분석 이후 STAGE 3에도 동일 적용) - drive_until()에 추가했던
+    안전장치(자세 붕괴 감지/즉시 정지/근접 시 저속화)가 여기엔 없었다. STAGE 3은 팔이
+    "얼어붙은" 게 아니라 능동적으로 추종하므로 drive_until의 "기준 오프셋 대비 편차" 감지는
+    그대로 못 쓰지만(추종 중엔 원래도 오차가 있으므로), abort_fn/hard_stop_on_condition/
+    max_speed_fn을 동일한 인터페이스로 지원해서 호출부가 이 상황에 맞는 감지 로직(예: 박스
+    Y 이탈, 그리퍼 이탈)을 넣을 수 있게 한다."""
     ee_target_pos = np.array(ee_target_pos, dtype=float)
     start_pos, start_quat = base_robot.get_world_pose()
     tx = target_x if target_x is not None else float(start_pos[0])
@@ -907,18 +962,28 @@ def drive_and_reach(target_x, target_y, ee_target_pos, ee_orientation=DOWN_QUAT,
     STALL_WINDOW, STALL_MIN_PROGRESS = 150, 0.008
     last_check_pos = np.array([float(start_pos[0]), float(start_pos[1])])
     stalled = False
+    aborted = False
     step = 0
     for step in range(1, max_steps + 1):
+        if debug_interval and debug_fn is not None and step % debug_interval == 0:
+            debug_fn(step)
+        if abort_fn is not None and abort_fn():
+            aborted = True
+            print(f"  [자세 붕괴 감지] {step}스텝에서 abort_fn() True - 주행 즉시 중단(실패)", flush=True)
+            if debug_fn is not None:
+                debug_fn(step)
+            break
         pos, quat = base_robot.get_world_pose()
         yaw_deg = float(np.degrees(quat_to_euler_angles(quat)[2]))
         ex_w, ey_w = tx - float(pos[0]), ty - float(pos[1])
         if abs(ex_w) < tolerance_xy and abs(ey_w) < tolerance_xy:
             break
+        step_max_speed = max_speed_fn() if max_speed_fn is not None else max_speed
         yaw_rad = np.radians(yaw_deg)
         ex_l = ex_w * np.cos(yaw_rad) + ey_w * np.sin(yaw_rad)
         ey_l = -ex_w * np.sin(yaw_rad) + ey_w * np.cos(yaw_rad)
-        vx_t = float(np.clip(kp_xy * ex_l, -max_speed, max_speed))
-        vy_t = float(np.clip(kp_xy * ey_l, -max_speed, max_speed))
+        vx_t = float(np.clip(kp_xy * ex_l, -step_max_speed, step_max_speed))
+        vy_t = float(np.clip(kp_xy * ey_l, -step_max_speed, step_max_speed))
         _smooth_state["vx"] += SMOOTH_ALPHA * (vx_t - _smooth_state["vx"])
         _smooth_state["vy"] += SMOOTH_ALPHA * (vy_t - _smooth_state["vy"])
         _smooth_state["wz"] *= (1 - SMOOTH_ALPHA)  # 회전 없음 - yaw는 그대로 유지
@@ -942,27 +1007,51 @@ def drive_and_reach(target_x, target_y, ee_target_pos, ee_orientation=DOWN_QUAT,
             if progress < STALL_MIN_PROGRESS and (abs(ex_w) > tolerance_xy or abs(ey_w) > tolerance_xy):
                 stalled = True
                 print(f"  [정체 감지] {progress:.4f}m밖에 못 움직임 - 중단", flush=True)
+                if debug_fn is not None:
+                    debug_fn(step)
                 break
             last_check_pos = cur
-    for _ in range(30):
-        _smooth_state["vx"] *= 1 - SMOOTH_ALPHA
-        _smooth_state["vy"] *= 1 - SMOOTH_ALPHA
-        base_robot.apply_action(holo_forward(_smooth_state["vx"], _smooth_state["vy"], _smooth_state["wz"]))
-        sync_rmp_base()
-        actions = controller.forward(
-            target_end_effector_position=ee_target_pos, target_end_effector_orientation=ee_orientation,
-        )
-        m0609_robot.apply_action(actions)
-        if hold_gripper_closed:
-            m0609_robot.gripper.close()
-        set_lift_height(lift_state["h"])
-        world.step(render=True)
+
+    if hard_stop_on_condition and aborted:
+        # 이미 자세 붕괴(충돌 의심)가 감지된 상황 - 관성으로 더 밀고 들어가지 않도록 부드러운
+        # 감속 대신 그 자리에서 즉시 속도를 0으로 만든다. 팔은 계속 ee_target_pos를 추종시켜서
+        # (충돌 지점에서 그냥 buzz하지 않고) RMPflow가 알아서 안전한 쪽으로 풀게 둔다.
+        _smooth_state["vx"] = 0.0
+        _smooth_state["vy"] = 0.0
+        _smooth_state["wz"] = 0.0
+        zero_action = holo_forward(0.0, 0.0, 0.0)
+        for _ in range(8):
+            base_robot.apply_action(zero_action)
+            sync_rmp_base()
+            actions = controller.forward(
+                target_end_effector_position=ee_target_pos, target_end_effector_orientation=ee_orientation,
+            )
+            m0609_robot.apply_action(actions)
+            if hold_gripper_closed:
+                m0609_robot.gripper.close()
+            set_lift_height(lift_state["h"])
+            world.step(render=True)
+    else:
+        for _ in range(30):
+            _smooth_state["vx"] *= 1 - SMOOTH_ALPHA
+            _smooth_state["vy"] *= 1 - SMOOTH_ALPHA
+            base_robot.apply_action(holo_forward(_smooth_state["vx"], _smooth_state["vy"], _smooth_state["wz"]))
+            sync_rmp_base()
+            actions = controller.forward(
+                target_end_effector_position=ee_target_pos, target_end_effector_orientation=ee_orientation,
+            )
+            m0609_robot.apply_action(actions)
+            if hold_gripper_closed:
+                m0609_robot.gripper.close()
+            set_lift_height(lift_state["h"])
+            world.step(render=True)
     final_pos, final_quat = base_robot.get_world_pose()
     ee_pos, _ = m0609_robot.end_effector.get_world_pose()
     ee_err = float(np.linalg.norm(np.array(ee_pos) - ee_target_pos))
     print(f"[주행+추종 완료]{' ' + label if label else ''} {step}스텝, 섀시=({float(final_pos[0]):.3f},"
-          f"{float(final_pos[1]):.3f}) 팔ee={np.round(ee_pos, 3)} ee_err={ee_err:.4f}m 정체={stalled}", flush=True)
-    return final_pos, ee_pos, ee_err, not stalled
+          f"{float(final_pos[1]):.3f}) 팔ee={np.round(ee_pos, 3)} ee_err={ee_err:.4f}m "
+          f"자세붕괴={aborted} 정체={stalled}", flush=True)
+    return final_pos, ee_pos, ee_err, not stalled, aborted
 
 
 viewport = vp_util.get_active_viewport()
@@ -1220,16 +1309,64 @@ if STAGE >= 3:
     # "Z축 정렬 후 하강"이 아니라 "X축 기준으로 옆에서 안쪽으로 밀어넣는" 동작. 진입 높이는
     # STAGE 1.1의 ENTRY_HOLDING_Z를 그대로 유지하다가, XY가 다 맞은 뒤에야 release 높이로
     # 내린다(입구 턱을 넘긴 높이를 여기서 미리 낮추면 STAGE 1.1의 의미가 없어진다).
+    #
+    # 사용자 지적(4차, STAGE 2 통과 후 재검토) - 예전 버전은 drive_and_reach()의 섀시 목표를
+    # "지금 섀시가 있는 바로 그 자리"로 넣었다 - drive_and_reach는 섀시 오차가 tolerance_xy
+    # 이내면 바로 끝나므로, 사실상 섀시는 한 발짝도 안 움직이고 팔만 뻗는 결과가 됐다(주석의
+    # "홀로노믹+팔 동시 조정"이 실제로는 발생하지 않음). 고침: 섀시 목표를 place_world_xy 쪽으로
+    # 실제로 전진시키되, 목표 지점 바로 위까지 밀어붙이지 않고 STAGE3_ARM_REACH_MARGIN만큼
+    # 앞에서 멈춘다 - STAGE 1/2 디버그 로그에서 실측된 "팔이 접은 자세로 섀시보다 자연스럽게
+    # 앞서는 정도"(~0.36m)와 비슷한 여유를 남겨서, 팔이 과도하게 뻗지 않고도 도달하게 한다.
+    # 또한 STAGE 2에서 만든 안전장치(자세 붕괴 감지/즉시 정지/근접 시 저속화)를 여기도 그대로
+    # 적용한다 - STAGE 2는 팔이 얼어붙어 있어 "기준 오프셋 대비 편차"로 충돌을 감지했지만,
+    # 여기는 팔이 능동적으로 추종 중이므로 대신 박스 Y 이탈/흡착 해제만으로 감지한다.
+    STAGE3_ARM_REACH_MARGIN = 0.35
+    STAGE3_Y_TOLERANCE = 0.04
+    stage3_target_x = min(place_world_xy[0] - STAGE3_ARM_REACH_MARGIN, TRUNK_X_MAX)
     print(f"[PLACE 목표] xy={np.round(place_world_xy, 3)} release_z={place_release_z:.3f} "
-          f"entry_holding_z={ENTRY_HOLDING_Z:.3f}", flush=True)
+          f"entry_holding_z={ENTRY_HOLDING_Z:.3f} 섀시목표_x={stage3_target_x:.3f}", flush=True)
 
-    _stage3_chassis_pos, _ = base_robot.get_world_pose()
-    drive_and_reach(
-        target_x=float(_stage3_chassis_pos[0]), target_y=float(_stage3_chassis_pos[1]),
+    def _stage3_pose_broken():
+        # STAGE 2와 달리 팔이 능동적으로 목표를 추종 중이라 "기준 오프셋 대비 편차"는 못
+        # 쓴다(추종 중엔 원래도 오차가 있음) - 대신 박스가 중앙선에서 벗어났는지, 흡착이
+        # 풀렸는지로 충돌을 감지한다(STAGE 2에서 실제로 관측된 붕괴 신호와 동일한 종류).
+        _, _, box_center = _get_box_x_edges()
+        y_broken = abs(float(box_center[1]) - ANCHOR_Y) > STAGE3_Y_TOLERANCE
+        detached = not m0609_robot.gripper.is_closed()
+        return y_broken or detached
+
+    def _stage3_max_speed():
+        chassis_pos, _ = base_robot.get_world_pose()
+        remaining = abs(stage3_target_x - float(chassis_pos[0]))
+        if remaining < 0.08:
+            return 0.025
+        if remaining < 0.15:
+            return 0.05
+        return 0.10
+
+    def _stage3_debug(step):
+        chassis_pos, _ = base_robot.get_world_pose()
+        ee_pos, _ = m0609_robot.end_effector.get_world_pose()
+        rear_x, front_x, box_center = _get_box_x_edges()
+        print(f"  [DEBUG step={step}] 섀시목표_x={stage3_target_x:.3f} | "
+              f"섀시중심=({float(chassis_pos[0]):.3f},{float(chassis_pos[1]):.3f}) | "
+              f"팔ee=({ee_pos[0]:.3f},{ee_pos[1]:.3f},{ee_pos[2]:.3f}) | "
+              f"박스 뒤={rear_x:.3f} 앞={front_x:.3f} 중심={np.round(box_center, 3)} "
+              f"붙어있음={m0609_robot.gripper.is_closed()}", flush=True)
+
+    _, _, _, _, stage3_aborted = drive_and_reach(
+        target_x=stage3_target_x, target_y=ANCHOR_Y,
         ee_target_pos=(place_world_xy[0], place_world_xy[1], ENTRY_HOLDING_Z),
         ee_orientation=DOWN_QUAT, hold_gripper_closed=True,
-        label="STAGE3: 정밀 접근(홀로노믹+팔 동시 조정)",
+        max_speed=0.10, max_speed_fn=_stage3_max_speed,
+        abort_fn=_stage3_pose_broken, hard_stop_on_condition=True,
+        label="STAGE3: 정밀 접근(홀로노믹+팔 동시 조정, 저속)",
+        debug_interval=5, debug_fn=_stage3_debug,
     )
+    if stage3_aborted:
+        print("[실패] STAGE 3 정밀 접근 중 자세 붕괴(충돌 의심)가 감지돼 즉시 중단했습니다 - "
+              "STAGE3_ARM_REACH_MARGIN을 늘리거나 접근 경로를 재검토하세요. PLACE를 계속 "
+              "진행하지 않는 것을 권장합니다.", flush=True)
 
     # 위 결합 이동이 정체/시간 부족으로 덜 수렴했을 경우를 대비한 마무리 정렬(여전히 진입 높이).
     side_entry_pos = (place_world_xy[0], place_world_xy[1], ENTRY_HOLDING_Z)
@@ -1238,10 +1375,15 @@ if STAGE >= 3:
     snapshot(eye=[chassis_pos0[0] - 1.2, chassis_pos0[1] - 2.0, chassis_pos0[2] + 1.3],
              target=[place_world_xy[0], place_world_xy[1], TRUNK_FLOOR_Z], fname="_trunkplace_01_approaching.png")
 
-    # ENTRY_HOLDING_Z(입구 턱 클리어 높이) -> place_release_z까지 하강 - STAGE 1.1 이전
-    # (HOLDING_Z 기준, 0.05m 낙차)보다 낙차가 커졌으므로 스텝을 조금 더 준다.
-    move_link6((place_world_xy[0], place_world_xy[1], place_release_z), steps=250,
-               label="PLACE 하강(진입높이 -> release 높이)")
+    # 사용자 설계(5차) - ENTRY_HOLDING_Z -> place_release_z 낙차를 팔 혼자 감당하게 하는 대신,
+    # 리프트를 PLACE_LIFT_MAX까지 같이 올려서(마운트 자체가 목표 높이로 다가감) 팔이 커버할
+    # 나머지 거리를 최소화한다(91.py PICK Phase A와 같은 원리) - 팔꿈치/팔뚝이 트렁크 입구
+    # 프레임을 스치는 걸 막기 위함. 섀시는 이미 입구를 지나 트렁크 안쪽에 있으므로 under-car
+    # 안전캡(LIFT_MAX) 대신 천장 안전한계까지 리프트를 더 써도 된다.
+    descend_and_raise_lift(
+        (place_world_xy[0], place_world_xy[1]), place_release_z, PLACE_LIFT_MAX, steps=250,
+        label="PLACE 하강(진입높이 -> release 높이, 리프트 동시 상승)",
+    )
 
     snapshot(eye=[chassis_pos0[0] - 1.0, chassis_pos0[1] - 1.6, chassis_pos0[2] + 1.0],
              target=[place_world_xy[0], place_world_xy[1], TRUNK_FLOOR_Z], fname="_trunkplace_02_descended.png")
