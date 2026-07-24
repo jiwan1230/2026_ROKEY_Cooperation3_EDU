@@ -50,11 +50,22 @@ PlacedBox = _m03.PlacedBox
 MARGIN = 0.02  # 2cm (실측 검증값)
 
 
-def has_wall_margin(x: float, y: float, z: float, box: "Box", trunk, margin: float = MARGIN) -> bool:
-    """트렁크 옆벽/안쪽벽까지 x·y 방향으로 margin 이상 떨어져 있는지 확인 (바닥/천장 제외)."""
+def has_wall_margin(
+    x: float, y: float, z: float, box: "Box", trunk, margin: float = MARGIN,
+    entrance_margin: Optional[float] = None,
+) -> bool:
+    """트렁크 옆벽/안쪽벽까지 x·y 방향으로 margin 이상 떨어져 있는지 확인 (바닥/천장 제외).
+
+    [entrance_margin] "HMI 화면 설계 가이드라인" 문서의 "트렁크 입구 여유 거리"
+    - 입구 쪽 벽에만 margin 대신 이 값을 쓴다(trunk.entrance_near_x로 어느 쪽이
+    입구인지 판단). None(기본값)이면 margin과 동일(하위 호환) - 안쪽 벽/옆벽은
+    항상 margin 그대로."""
+    entrance_req = entrance_margin if entrance_margin is not None else margin
+    near_x_req = entrance_req if trunk.entrance_near_x else margin
+    far_x_req = margin if trunk.entrance_near_x else entrance_req
     return (
-        x >= margin - 1e-9
-        and x + box.width <= trunk.width - margin + 1e-9
+        x >= near_x_req - 1e-9
+        and x + box.width <= trunk.width - far_x_req + 1e-9
         and y >= margin - 1e-9
         and y + box.depth <= trunk.depth - margin + 1e-9
     )
@@ -97,6 +108,7 @@ def has_box_margin(
 def has_sufficient_margin(
     x: float, y: float, z: float, box: "Box", trunk, placed: List["PlacedBox"], margin: float = MARGIN,
     wall_margin: Optional[float] = None, obstacle_margin: Optional[float] = None,
+    entrance_margin: Optional[float] = None,
 ) -> bool:
     """
     벽 마진 + 박스 간 마진을 모두 확인 (하드 컷 - ⑬/⑮와 같은 원칙).
@@ -105,10 +117,13 @@ def has_sufficient_margin(
     같은 값을 벽에도 그대로 쓴다(하위 호환). 다르게 주면 벽 판정에만 이 값이
     쓰이고, 박스-박스 판정은 그대로 margin을 쓴다.
     [obstacle_margin] has_box_margin 참고 - "장애물 간격" 슬라이더.
+    [entrance_margin] "트렁크 입구 여유 거리" 슬라이더 - wall_margin(정해졌으면
+    그 값, 아니면 margin)을 기본으로 삼되, 입구 쪽 벽만 이 값으로 덮어쓴다.
+    has_wall_margin 참고.
     """
     effective_wall_margin = wall_margin if wall_margin is not None else margin
     return (
-        has_wall_margin(x, y, z, box, trunk, effective_wall_margin)
+        has_wall_margin(x, y, z, box, trunk, effective_wall_margin, entrance_margin=entrance_margin)
         and has_box_margin(x, y, z, box, placed, margin, obstacle_margin=obstacle_margin)
     )
 

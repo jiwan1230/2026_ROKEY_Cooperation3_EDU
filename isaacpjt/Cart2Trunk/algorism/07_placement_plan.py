@@ -64,7 +64,7 @@ def place_one_box(
     allow_stacking: bool = False, score_fn=None, margin: Optional[float] = None,
     extra_validity_fn=None, allow_rotation: bool = True,
     wall_margin: Optional[float] = None, obstacle_margin: Optional[float] = None,
-    ceiling_margin: Optional[float] = None,
+    ceiling_margin: Optional[float] = None, entrance_margin: Optional[float] = None,
 ) -> Optional["PlacementPlan"]:
     """
     현재 상태(state)에서 box 하나를 놓을 최선의 자리를 찾아 배치한다.
@@ -99,16 +99,18 @@ def place_one_box(
     (하위 호환). False면 정자세로 안 들어가면 바로 실패 처리 - 재시도 자체를
     안 한다.
 
-    [wall_margin/obstacle_margin/ceiling_margin] 문서의 나머지 마진 슬라이더
-    3종(벽면 간격/장애물 간격/천장 간격) - 전부 None(기본값)이면 margin(박스
-    간격)과 17_margin_check.MARGIN / 15_overhead_clearance_check.
-    OVERHEAD_CLEARANCE 그대로 쓴다(하위 호환). 17_margin_check.
-    has_sufficient_margin/15_overhead_clearance_check.has_overhead_clearance
-    참고.
+    [wall_margin/obstacle_margin/ceiling_margin/entrance_margin] 문서의 나머지
+    마진 슬라이더 4종(벽면 간격/장애물 간격/천장 간격/입구 여유 거리) - 전부
+    None(기본값)이면 margin(박스 간격)과 17_margin_check.MARGIN / 15_overhead_
+    clearance_check.OVERHEAD_CLEARANCE 그대로 쓴다(하위 호환). entrance_margin은
+    wall_margin(정해졌으면 그 값, 아니면 margin) 위에서 입구 쪽 벽만 한 번 더
+    덮어쓴다. 17_margin_check.has_sufficient_margin/
+    15_overhead_clearance_check.has_overhead_clearance 참고.
     """
     logger.info(f"[{box.id}] 시도 (부피 {box.volume*1000:.1f}L, {box.width}x{box.depth}x{box.height})")
     kwargs = dict(score_fn=score_fn, margin=margin, extra_validity_fn=extra_validity_fn,
-                  wall_margin=wall_margin, obstacle_margin=obstacle_margin, ceiling_margin=ceiling_margin)
+                  wall_margin=wall_margin, obstacle_margin=obstacle_margin, ceiling_margin=ceiling_margin,
+                  entrance_margin=entrance_margin)
     plan = _place_one_orientation(box, trunk, state, order, allow_stacking, rotated=False, **kwargs)
     if plan is not None:
         return plan
@@ -125,7 +127,7 @@ def _place_one_orientation(
     allow_stacking: bool, rotated: bool, score_fn=None, margin: Optional[float] = None,
     extra_validity_fn=None,
     wall_margin: Optional[float] = None, obstacle_margin: Optional[float] = None,
-    ceiling_margin: Optional[float] = None,
+    ceiling_margin: Optional[float] = None, entrance_margin: Optional[float] = None,
 ) -> Optional["PlacementPlan"]:
     """place_one_box()의 실제 배치 로직 - 주어진 box의 치수(정자세 또는 이미
     회전된 치수)를 그대로 하나의 "자세"로 취급해서 자리를 찾는다."""
@@ -136,11 +138,13 @@ def _place_one_orientation(
     # [③ 보강] 순수 모서리 확장만으로는 못 만드는 "이 박스라면 벽에 딱 붙는 자리"
     # + "이미 놓인 다른 박스 옆면에 딱 붙는 자리"를 지금 놓으려는 box 크기 기준으로
     # 추가 생성 - state.candidates에는 저장하지 않고 이번 배치 판단에만 잠깐 섞어
-    # 쓴다 (다른 박스 크기에는 안 맞을 수 있어서). wall_flush는 wall_margin으로
-    # 생성해야 한다 - margin(box_margin)으로만 생성하면(과거 버그) has_wall_margin이
-    # 더 큰 wall_margin을 요구할 때 그 후보가 거부되고 대안이 없어 배치가 실패한다
-    # (obstacle_margin과 같은 종류의 버그였음 - generate_box_flush_candidates 참고).
-    wall_flush = generate_wall_flush_candidates(box, trunk, state.candidates, margin=_wall_margin)
+    # 쓴다 (다른 박스 크기에는 안 맞을 수 있어서). wall_flush는 wall_margin/
+    # entrance_margin으로 생성해야 한다 - margin(box_margin)으로만 생성하면(과거
+    # 버그) has_wall_margin이 더 큰 값을 요구할 때 그 후보가 거부되고 대안이 없어
+    # 배치가 실패한다 (obstacle_margin과 같은 종류의 버그였음 -
+    # generate_box_flush_candidates 참고).
+    wall_flush = generate_wall_flush_candidates(box, trunk, state.candidates, margin=_wall_margin,
+                                                 entrance_margin=entrance_margin)
     box_flush = generate_box_flush_candidates(box, trunk, state.candidates, state.placed, margin=_margin,
                                                obstacle_margin=obstacle_margin)
     # ⑰(마진) 도입 후 발견: "벽에 마진만큼 띄운 자리"가 하필 다른 박스와는 마진
@@ -164,7 +168,8 @@ def _place_one_orientation(
         and has_overhead_clearance(z, box, trunk, clearance=_ceiling_margin)
         and has_clear_approach_path(x, y, z, box, trunk, state.placed, clearance=_ceiling_margin)
         and has_sufficient_margin(x, y, z, box, trunk, state.placed, margin=_margin,
-                                   wall_margin=wall_margin, obstacle_margin=obstacle_margin)
+                                   wall_margin=wall_margin, obstacle_margin=obstacle_margin,
+                                   entrance_margin=entrance_margin)
         and (extra_validity_fn is None or extra_validity_fn(x, y, z, box, trunk, state.placed))
     ]
 

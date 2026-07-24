@@ -382,6 +382,7 @@ class PlannerGUI(tk.Tk):
         # 하나의 메커니즘으로 일반화: 트렁크맵/박스목록을 포함해 뭐가 됐든 계산
         # 당시와 달라지면 그 계획은 더 이상 신뢰할 수 없다고 본다.
         self._last_computed_snapshot = None
+        self._auto_recompute_job = None  # 슬라이더/토글 변경 후 디바운싱된 자동 재계산 예약용
 
         self._build_header()
         # 이 환경의 Tk/Tcl이 위젯을 아주 빠르게 대량 생성하면(특히 Canvas 기반
@@ -508,6 +509,7 @@ class PlannerGUI(tk.Tk):
             ("벽면 간격 (m · 기본 박스간격과 동일)", "wall_margin_var"),
             ("천장 여유 (m · 기본 0.20)", "ceiling_margin_var"),
             ("장애물 간격 (m · 기본 박스간격과 동일)", "obstacle_margin_var"),
+            ("입구 여유 거리 (m · 기본 벽면간격과 동일)", "entrance_margin_var"),
         ]
         self.margin_entries = []
         for col, (label, var_name) in enumerate(margin_fields):
@@ -539,12 +541,27 @@ class PlannerGUI(tk.Tk):
             bg=Palette.surface, highlightthickness=0, troughcolor=Palette.segment_bg)
         self.contact_pref_scale.grid(row=1, column=1, sticky="w", padx=(28, 0), pady=(4, 0))
 
-        self._field_label(row2c, "박스 90도 회전 허용").grid(row=0, column=2, sticky="w", padx=(28, 0))
+        self._field_label(row2c, "바닥부터 채우기 강도").grid(row=0, column=2, sticky="w", padx=(28, 0))
+        self.height_pref_var = tk.DoubleVar(value=1.0)
+        self.height_pref_scale = tk.Scale(
+            row2c, from_=0.0, to=2.0, resolution=0.1, orient="horizontal", length=200,
+            variable=self.height_pref_var, showvalue=True, font=Font.caption,
+            bg=Palette.surface, highlightthickness=0, troughcolor=Palette.segment_bg)
+        self.height_pref_scale.grid(row=1, column=2, sticky="w", padx=(28, 0), pady=(4, 0))
+
+        self._field_label(row2c, "박스 90도 회전 허용").grid(row=0, column=3, sticky="w", padx=(28, 0))
         rotation_frame = tk.Frame(row2c, bg=Palette.surface)
-        rotation_frame.grid(row=1, column=2, sticky="w", padx=(28, 0), pady=(4, 0))
+        rotation_frame.grid(row=1, column=3, sticky="w", padx=(28, 0), pady=(4, 0))
         self.allow_rotation_var = tk.BooleanVar(value=True)
         self.rotation_switch = ToggleSwitch(rotation_frame, self.allow_rotation_var)
         self.rotation_switch.pack(side="left")
+
+        self._field_label(row2c, "적재 순서 고정(박스 목록 순서 그대로)").grid(row=0, column=4, sticky="w", padx=(28, 0))
+        fixed_order_frame = tk.Frame(row2c, bg=Palette.surface)
+        fixed_order_frame.grid(row=1, column=4, sticky="w", padx=(28, 0), pady=(4, 0))
+        self.fixed_order_var = tk.BooleanVar(value=False)
+        self.fixed_order_switch = ToggleSwitch(fixed_order_frame, self.fixed_order_var)
+        self.fixed_order_switch.pack(side="left")
 
         # ---- 3행: 박스 목록 JSON (접이식 느낌으로 작게, 필요할 때만 손으로 수정) ----
         row3 = tk.Frame(inner, bg=Palette.surface)
@@ -560,8 +577,9 @@ class PlannerGUI(tk.Tk):
         # 달라지므로 _on_param_changed가 기존 계획을 무효화한다. ----
         for var in (self.trunk_map_var, self.box_preset_var, self.mode_var, self.margin_var,
                     self.wall_margin_var, self.ceiling_margin_var, self.obstacle_margin_var,
-                    self.entrance_pref_var, self.contact_pref_var, self.stacking_var,
-                    self.allow_rotation_var):
+                    self.entrance_margin_var, self.entrance_pref_var, self.contact_pref_var,
+                    self.height_pref_var, self.stacking_var, self.allow_rotation_var,
+                    self.fixed_order_var):
             var.trace_add("write", self._on_param_changed)
 
         # ---- 4행: 승인 워크플로우 - "HMI 화면 설계 가이드라인" 4절이 요구하는
@@ -730,10 +748,15 @@ class PlannerGUI(tk.Tk):
         wall_margin = _parse_optional_float(self.wall_margin_var)
         obstacle_margin = _parse_optional_float(self.obstacle_margin_var)
         ceiling_margin = _parse_optional_float(self.ceiling_margin_var)
+        entrance_margin = _parse_optional_float(self.entrance_margin_var)
         entrance_preference = self.entrance_pref_var.get()
         contact_preference = self.contact_pref_var.get()
+        height_preference = self.height_pref_var.get()
         allow_stacking = self.stacking_var.get()
         allow_rotation = self.allow_rotation_var.get()
+        # "적재 순서 고정"이 켜져 있으면, 박스 목록 JSON에 적힌 순서를 그대로 fixed_order로
+        # 씀 - 사용자가 순서를 바꾸고 싶으면 JSON에서 박스를 재배열하면 된다.
+        fixed_order = [b["id"] for b in cart_boxes_raw] if self.fixed_order_var.get() else None
 
         self.status_var.set("계산 중...")
         self.update_idletasks()
@@ -742,8 +765,9 @@ class PlannerGUI(tk.Tk):
         plans, unloadable, trunk, obstacles = plan_from_trunk_map_data(
             data, cart_boxes_raw, mode=mode, margin=margin, allow_stacking=allow_stacking,
             allow_rotation=allow_rotation, wall_margin=wall_margin, obstacle_margin=obstacle_margin,
-            ceiling_margin=ceiling_margin, entrance_preference=entrance_preference,
-            contact_preference=contact_preference,
+            ceiling_margin=ceiling_margin, entrance_margin=entrance_margin,
+            entrance_preference=entrance_preference, contact_preference=contact_preference,
+            height_preference=height_preference, fixed_order=fixed_order,
         )
         calc_time_sec = time.perf_counter() - t0
         effective_margin = margin if margin is not None else DEFAULT_MARGIN
@@ -824,7 +848,9 @@ class PlannerGUI(tk.Tk):
         log_lines = [f"[{run_name}] mode={mode}, margin={effective_margin:.2f}m, "
                      f"쌓기={'허용' if allow_stacking else '1층전용'}, "
                      f"회전={'허용' if allow_rotation else '비허용'}, "
-                     f"입구/깊이축={entrance_preference:+.1f}, 접촉면가중치={contact_preference:.1f} "
+                     f"입구/깊이축={entrance_preference:+.1f}, 접촉면가중치={contact_preference:.1f}, "
+                     f"바닥우선강도={height_preference:.1f}, "
+                     f"순서고정={'예' if fixed_order else '아니오'} "
                      f"-> {len(plans)}/{len(cart_boxes_raw)}개 배치"]
         for p in plans:
             log_lines.append(f"  PLACED {p.box_id}: pos=({p.position[0]:.2f},{p.position[1]:.2f},{p.position[2]:.2f}) rotated={p.rotated}")
@@ -850,10 +876,13 @@ class PlannerGUI(tk.Tk):
             "wall_margin": wall_margin,
             "obstacle_margin": obstacle_margin,
             "ceiling_margin": ceiling_margin,
+            "entrance_margin": entrance_margin,
             "allow_stacking": allow_stacking,
             "allow_rotation": allow_rotation,
             "entrance_preference": entrance_preference,
             "contact_preference": contact_preference,
+            "height_preference": height_preference,
+            "fixed_order": fixed_order,
         }
         self._pending_task = None
         self._last_computed_snapshot = self._current_param_snapshot()
@@ -888,11 +917,13 @@ class PlannerGUI(tk.Tk):
             entry.configure(state=entry_state)
         self.entrance_pref_scale.configure(state=scale_state)
         self.contact_pref_scale.configure(state=scale_state)
+        self.height_pref_scale.configure(state=scale_state)
         self.box_text.configure(state=entry_state)
         self.gen_button.set_enabled(enabled)
         self.mode_control.set_enabled(enabled)
         self.stacking_switch.set_enabled(enabled)
         self.rotation_switch.set_enabled(enabled)
+        self.fixed_order_switch.set_enabled(enabled)
         self.run_button.set_enabled(enabled)
         self.recompute_button.set_enabled(enabled)
         self.reset_button.set_enabled(enabled)
@@ -956,33 +987,57 @@ class PlannerGUI(tk.Tk):
             "wall_margin": self.wall_margin_var.get(),
             "obstacle_margin": self.obstacle_margin_var.get(),
             "ceiling_margin": self.ceiling_margin_var.get(),
+            "entrance_margin": self.entrance_margin_var.get(),
             "entrance_preference": self.entrance_pref_var.get(),
             "contact_preference": self.contact_pref_var.get(),
+            "height_preference": self.height_pref_var.get(),
             "allow_stacking": self.stacking_var.get(),
             "allow_rotation": self.allow_rotation_var.get(),
+            "fixed_order": self.fixed_order_var.get(),
         }
 
-    def _on_param_changed(self, *_args):
-        """트렁크맵/박스목록/모드/마진/우선순위/쌓기/회전 중 뭐든 하나라도 계산
-        시점과 달라지면 기존 계획을 무효화한다("HMI 핵심 동작 원칙" #2, #5를
-        하나로 일반화 - box_snapshot_id/trunk_map_id가 계산 때와 달라진 것도,
-        재스캔으로 트렁크가 바뀐 것도 결국 "계산 당시 입력과 지금이 다르다"는
-        같은 문제라서 한 메커니즘으로 다룬다)."""
+    def _invalidate_plan_if_stale(self) -> bool:
+        """트렁크맵/박스목록/모드/마진/우선순위/쌓기/회전/순서고정 중 뭐든
+        하나라도 계산 시점과 달라지면 기존 계획을 무효화한다("HMI 핵심 동작
+        원칙" #2, #5를 하나로 일반화 - box_snapshot_id/trunk_map_id가 계산 때와
+        달라진 것도, 재스캔으로 트렁크가 바뀐 것도 결국 "계산 당시 입력과
+        지금이 다르다"는 같은 문제라서 한 메커니즘으로 다룬다). 실제로
+        무효화가 일어났으면 True."""
         if self._plan_state == "NOT_COMPUTED" or self._last_computed_snapshot is None:
-            return
+            return False
         if self._current_param_snapshot() == self._last_computed_snapshot:
-            return
+            return False
         was_approved = self._plan_state == "APPROVED"
         self._pending_task = None
         self._set_plan_state("NOT_COMPUTED")
         suffix = " (승인도 함께 취소됨)" if was_approved else ""
-        self._append_log(f"[무효화] 파라미터가 변경되어 기존 계획을 무효화했습니다{suffix} - ①로 다시 계산하세요.")
-        self.status_var.set("⚠️ 파라미터 변경됨 - 다시 계산 필요")
+        self._append_log(f"[무효화] 파라미터가 변경되어 기존 계획을 무효화했습니다{suffix}.")
+        return True
+
+    def _on_param_changed(self, *_args):
+        """슬라이더/토글/드롭다운처럼 항상 유효한 값만 나오는 파라미터가
+        바뀌면, 무효화뿐 아니라 디바운싱된 자동 재계산까지 예약한다(진짜
+        "즉시 재계산" - 매번 버튼을 누를 필요 없음)."""
+        if self._invalidate_plan_if_stale():
+            self.status_var.set("⚠️ 파라미터 변경됨 - 잠시 후 자동 재계산...")
+            self._schedule_auto_recompute()
 
     def _on_box_text_modified(self, event=None):
+        """박스 목록 JSON은 타이핑 도중 문법이 잠깐 깨진 상태를 거칠 수 있어서
+        (예: 여는 중괄호만 친 순간), 자동 재계산은 하지 않고 무효화까지만 한다
+        - "다시 계산" 버튼을 직접 눌러야 반영된다."""
         if self.box_text.edit_modified():
-            self._on_param_changed()
+            if self._invalidate_plan_if_stale():
+                self.status_var.set("⚠️ 박스 목록이 변경됨 - '다시 계산'을 눌러주세요")
             self.box_text.edit_modified(False)  # Text 위젯의 modified 플래그는 수동으로 꺼줘야 계속 감지됨
+
+    def _schedule_auto_recompute(self):
+        """슬라이더를 드래그하는 동안 매 픽셀마다 재계산하면 버벅이므로,
+        마지막 변경 후 400ms 동안 추가 변경이 없을 때만 실제로 재계산한다
+        (_on_window_resize의 디바운싱과 같은 방식)."""
+        if self._auto_recompute_job is not None:
+            self.after_cancel(self._auto_recompute_job)
+        self._auto_recompute_job = self.after(400, self._run)
 
     def _on_reset_defaults(self):
         """전략 파라미터만 기본값으로 되돌린다 (트렁크맵/박스목록 선택은 사용자
@@ -992,10 +1047,13 @@ class PlannerGUI(tk.Tk):
         self.wall_margin_var.set("")
         self.obstacle_margin_var.set("")
         self.ceiling_margin_var.set("")
+        self.entrance_margin_var.set("")
         self.entrance_pref_var.set(1.0)
         self.contact_pref_var.set(1.0)
+        self.height_pref_var.set(1.0)
         self.stacking_var.set(False)
         self.allow_rotation_var.set(True)
+        self.fixed_order_var.set(False)
         self._append_log("[기본값 복원] 적재 전략 파라미터를 기본값으로 되돌렸습니다.")
 
     def _on_box_selected(self, *_args):

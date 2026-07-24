@@ -162,7 +162,9 @@ def fits_dims(box: Box, trunk) -> bool:
     return box.width <= trunk.width and box.depth <= trunk.depth and box.height <= trunk.height
 
 
-def generate_wall_flush_candidates(box: Box, trunk, candidates, margin: float = 0.0) -> Set[Tuple[float, float, float]]:
+def generate_wall_flush_candidates(
+    box: Box, trunk, candidates, margin: float = 0.0, entrance_margin: Optional[float] = None,
+) -> Set[Tuple[float, float, float]]:
     """
     "이 박스라면 벽 A/B/C에 (margin만큼 띄우고) 붙을 수 있는 자리" 후보를 추가로 만든다.
 
@@ -177,22 +179,35 @@ def generate_wall_flush_candidates(box: Box, trunk, candidates, margin: float = 
     가능하므로 state.candidates에는 저장하지 않고, ⑦(place_one_box)이 매번 그 박스에
     맞게 새로 만들어서 후보 풀에 잠깐 섞어 쓴다. margin=0.0(기본값)이면 이전과 동일하게
     완전히 벽에 붙는 자리를 만든다 - ⑰(마진 확인)가 켜졌을 때만 margin>0으로 호출된다.
+
+    [wall_entrance_x/entrance_margin - 실제로 발견된 격차] 예전엔 "가장 안쪽 벽(A)"
+    플러시만 명시적으로 만들고 입구 쪽 벽은 안 만들었다. 빈 트렁크의 첫 박스는
+    seed candidates가 {(0,0,0)}뿐이라, 입구쪽 margin 후보가 아예 후보 풀에 없는
+    경우가 있었다 - ⑤ entrance_preference로 입구를 아무리 강하게 우선해도 "첫
+    박스"는 그 자리를 고를 수조차 없었다는 뜻. 이제 입구 쪽도 대칭으로 명시
+    생성하고, entrance_margin(None이면 margin과 동일 - 하위 호환)으로 "트렁크
+    입구 여유 거리" 슬라이더를 반영한다.
     """
     extra: Set[Tuple[float, float, float]] = set()
-    wall_a_x = (trunk.width - box.width - margin) if trunk.entrance_near_x else margin
+    _entrance_margin = entrance_margin if entrance_margin is not None else margin
+    wall_a_x = (trunk.width - box.width - margin) if trunk.entrance_near_x else _entrance_margin
+    wall_entrance_x = _entrance_margin if trunk.entrance_near_x else (trunk.width - box.width - _entrance_margin)
     wall_c_y = margin
     wall_b_y = trunk.depth - box.depth - margin
 
     for (x, y, z) in candidates:
-        extra.add((wall_a_x, y, z))  # 벽 A(안쪽)에서 margin만큼 뗀 변형 - y/z는 기존 후보 그대로
-        extra.add((x, wall_c_y, z))  # 벽 C(y=0)에서 margin만큼 뗀 변형 - x/z는 기존 후보 그대로
-        extra.add((x, wall_b_y, z))  # 벽 B(y=depth쪽)에서 margin만큼 뗀 변형 - x/z는 기존 후보 그대로
+        extra.add((wall_a_x, y, z))         # 벽 A(안쪽)에서 margin만큼 뗀 변형 - y/z는 기존 후보 그대로
+        extra.add((wall_entrance_x, y, z))  # 입구 쪽 벽에서 entrance_margin만큼 뗀 변형
+        extra.add((x, wall_c_y, z))         # 벽 C(y=0)에서 margin만큼 뗀 변형 - x/z는 기존 후보 그대로
+        extra.add((x, wall_b_y, z))         # 벽 B(y=depth쪽)에서 margin만큼 뗀 변형 - x/z는 기존 후보 그대로
         # 구석(코너) 자리 - x/y 둘 다 벽에서 margin만큼 뗀 조합. margin=0이면 wall_a_x/
         # wall_c_y/wall_b_y 조합이 이미 코너와 같은 값이라 새 정보가 없지만, margin>0일
         # 땐 위 세 변형이 한쪽 축만 margin 처리해서 나머지 축(예: y=0인 채로)이 여전히
         # 벽에 붙어있는 무효 후보가 되므로, 양쪽 다 margin 처리된 진짜 코너 후보가 따로 필요하다.
         extra.add((wall_a_x, wall_c_y, z))
         extra.add((wall_a_x, wall_b_y, z))
+        extra.add((wall_entrance_x, wall_c_y, z))
+        extra.add((wall_entrance_x, wall_b_y, z))
 
     return extra
 

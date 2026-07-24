@@ -123,8 +123,9 @@ _DEFAULT_CART_BOXES = [
 def plan_from_trunk_map_data(
     data: dict, cart_boxes_raw: list, mode: str = "large_first", margin=None,
     allow_stacking: bool = False, allow_rotation: bool = True,
-    wall_margin=None, obstacle_margin=None, ceiling_margin=None,
-    entrance_preference: float = 1.0, contact_preference: float = 1.0,
+    wall_margin=None, obstacle_margin=None, ceiling_margin=None, entrance_margin=None,
+    entrance_preference: float = 1.0, contact_preference: float = 1.0, height_preference: float = 1.0,
+    fixed_order=None,
 ) -> tuple:
     """
     trunk_map.json(dict)과 카트 박스 목록(dict 리스트)을 받아
@@ -145,8 +146,9 @@ def plan_from_trunk_map_data(
     plans, unloadable = replan_after_rescan(
         cart_boxes, trunk, obstacles, mode=mode, margin=margin, allow_stacking=allow_stacking,
         allow_rotation=allow_rotation, wall_margin=wall_margin, obstacle_margin=obstacle_margin,
-        ceiling_margin=ceiling_margin, entrance_preference=entrance_preference,
-        contact_preference=contact_preference,
+        ceiling_margin=ceiling_margin, entrance_margin=entrance_margin,
+        entrance_preference=entrance_preference, contact_preference=contact_preference,
+        height_preference=height_preference, fixed_order=fixed_order,
     )
     return plans, unloadable, trunk, obstacles
 
@@ -283,21 +285,33 @@ class TrunkMapPlannerNode(Node):
         self.declare_parameter("wall_margin", -1.0)
         self.declare_parameter("obstacle_margin", -1.0)
         self.declare_parameter("ceiling_margin", -1.0)
+        self.declare_parameter("entrance_margin", -1.0)
         self._wall_margin = self._none_if_unset(self.get_parameter("wall_margin").value)
         self._obstacle_margin = self._none_if_unset(self.get_parameter("obstacle_margin").value)
         self._ceiling_margin = self._none_if_unset(self.get_parameter("ceiling_margin").value)
+        self._entrance_margin = self._none_if_unset(self.get_parameter("entrance_margin").value)
 
         self.declare_parameter("entrance_preference", 1.0)
         self.declare_parameter("contact_preference", 1.0)
+        self.declare_parameter("height_preference", 1.0)
         self._entrance_preference = self.get_parameter("entrance_preference").value
         self._contact_preference = self.get_parameter("contact_preference").value
+        self._height_preference = self.get_parameter("height_preference").value
+
+        # 빈 배열 = "지정 안 함"(mode 기본 정렬 사용) - ROS2 파라미터는 문자열 배열을
+        # 그대로 지원한다.
+        self.declare_parameter("fixed_order", [""])
+        fixed_order_param = [s for s in self.get_parameter("fixed_order").value if s]
+        self._fixed_order = fixed_order_param if fixed_order_param else None
 
         self.get_logger().info(
             f"적재 정책: loading_mode={self._loading_mode}, "
             f"margin={'기본값' if self._margin is None else self._margin}, "
             f"쌓기={'허용' if self._allow_stacking else '1층전용'}, "
             f"회전={'허용' if self._allow_rotation else '비허용'}, "
-            f"entrance_preference={self._entrance_preference}, contact_preference={self._contact_preference}"
+            f"entrance_preference={self._entrance_preference}, contact_preference={self._contact_preference}, "
+            f"height_preference={self._height_preference}, "
+            f"fixed_order={'없음' if self._fixed_order is None else self._fixed_order}"
         )
 
         self.declare_parameter("save_image", True)
@@ -330,8 +344,9 @@ class TrunkMapPlannerNode(Node):
             data, self._cart_boxes_raw, mode=self._loading_mode, margin=self._margin,
             allow_stacking=self._allow_stacking, allow_rotation=self._allow_rotation,
             wall_margin=self._wall_margin, obstacle_margin=self._obstacle_margin,
-            ceiling_margin=self._ceiling_margin, entrance_preference=self._entrance_preference,
-            contact_preference=self._contact_preference,
+            ceiling_margin=self._ceiling_margin, entrance_margin=self._entrance_margin,
+            entrance_preference=self._entrance_preference, contact_preference=self._contact_preference,
+            height_preference=self._height_preference, fixed_order=self._fixed_order,
         )
         _log_plan_result(self.get_logger().info, data, plans, unloadable, len(self._cart_boxes_raw))
 
@@ -346,8 +361,9 @@ class TrunkMapPlannerNode(Node):
 
 def _run_test_file(path: str, mode: str, margin, save_image: bool, cart_boxes_raw: list,
                     allow_stacking: bool = False, allow_rotation: bool = True,
-                    wall_margin=None, obstacle_margin=None, ceiling_margin=None,
-                    entrance_preference: float = 1.0, contact_preference: float = 1.0) -> None:
+                    wall_margin=None, obstacle_margin=None, ceiling_margin=None, entrance_margin=None,
+                    entrance_preference: float = 1.0, contact_preference: float = 1.0,
+                    height_preference: float = 1.0, fixed_order=None) -> None:
     """ROS2 없이 파일 기반으로 파이프라인만 먼저 확인 (HANDOFF.md 8절 공통 액션 아이템)."""
     box_summary = ", ".join(f"{b['id']}({b['width']}x{b['depth']}x{b['height']})" for b in cart_boxes_raw)
     print(f"카트 박스 {len(cart_boxes_raw)}개: {box_summary}")
@@ -355,8 +371,9 @@ def _run_test_file(path: str, mode: str, margin, save_image: bool, cart_boxes_ra
     plans, unloadable, trunk, obstacles = plan_from_trunk_map_data(
         data, cart_boxes_raw, mode=mode, margin=margin, allow_stacking=allow_stacking,
         allow_rotation=allow_rotation, wall_margin=wall_margin, obstacle_margin=obstacle_margin,
-        ceiling_margin=ceiling_margin, entrance_preference=entrance_preference,
-        contact_preference=contact_preference,
+        ceiling_margin=ceiling_margin, entrance_margin=entrance_margin,
+        entrance_preference=entrance_preference, contact_preference=contact_preference,
+        height_preference=height_preference, fixed_order=fixed_order,
     )
     _log_plan_result(print, data, plans, unloadable, len(cart_boxes_raw))
 
@@ -390,10 +407,16 @@ def main():
     parser.add_argument("--wall-margin", type=float, default=None, help="벽 간격(m) - 생략하면 --margin 값 그대로")
     parser.add_argument("--obstacle-margin", type=float, default=None, help="장애물 간격(m) - 생략하면 --margin 값 그대로")
     parser.add_argument("--ceiling-margin", type=float, default=None, help="천장 여유(m) - 생략하면 15_overhead_clearance_check.OVERHEAD_CLEARANCE(0.20m)")
+    parser.add_argument("--entrance-margin", type=float, default=None,
+                         help="트렁크 입구 여유 거리(m) - 생략하면 --wall-margin(또는 --margin) 값 그대로")
     parser.add_argument("--entrance-preference", type=float, default=1.0,
                          help="입구(-1)~깊은위치(+1) 우선순위 축 (기본 1.0=지금까지 동작과 동일)")
     parser.add_argument("--contact-preference", type=float, default=1.0,
                          help="접촉면(공간활용/안정성 근사) 가중치 배율 (기본 1.0=지금까지 동작과 동일)")
+    parser.add_argument("--height-preference", type=float, default=1.0,
+                         help="바닥부터 채우기 강도 배율 (기본 1.0, 0=높이 무시 - 쌓기를 꺼리지 않게 됨)")
+    parser.add_argument("--fixed-order",
+                         help='적재 순서를 직접 고정 - 박스 id를 쉼표로 나열 (예: "A,B,C") - 생략하면 --mode 기준 자동 정렬')
     args, ros_args = parser.parse_known_args()
 
     logging.basicConfig(level=getattr(logging, args.log_level), format="[%(name)s] %(message)s")
@@ -405,11 +428,14 @@ def main():
             cart_boxes_raw = json.loads(args.cart_boxes_json)
         else:
             cart_boxes_raw = _DEFAULT_CART_BOXES
+        fixed_order = args.fixed_order.split(",") if args.fixed_order else None
         _run_test_file(args.test_file, args.mode, args.margin, save_image=not args.no_image,
                         cart_boxes_raw=cart_boxes_raw, allow_stacking=args.allow_stacking,
                         allow_rotation=not args.no_rotation, wall_margin=args.wall_margin,
                         obstacle_margin=args.obstacle_margin, ceiling_margin=args.ceiling_margin,
-                        entrance_preference=args.entrance_preference, contact_preference=args.contact_preference)
+                        entrance_margin=args.entrance_margin, entrance_preference=args.entrance_preference,
+                        contact_preference=args.contact_preference, height_preference=args.height_preference,
+                        fixed_order=fixed_order)
         return
 
     rclpy.init(args=ros_args)

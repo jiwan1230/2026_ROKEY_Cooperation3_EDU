@@ -86,3 +86,27 @@ def test_mode_count_first_still_respects_pickup_constraint():
     # count_first면 부피만 보면 Bottom(작음)이 먼저겠지만, Top이 위에 얹혀 있어서
     # 물리적으로 Top부터 집어야 한다 - 픽업 제약이 부피 정렬보다 우선.
     assert [b.id for b in order] == ["Top", "Bottom"]
+
+
+# ---------------------------------------------------------------------------
+# "HMI 화면 설계 가이드라인" 문서의 "적재 순서 고정 여부" - 사용자가 직접 순서를
+# 지정할 수 있어야 한다.
+# ---------------------------------------------------------------------------
+
+def test_fixed_order_overrides_volume_based_sort():
+    boxes = [Box("Large", 0.5, 0.35, 0.3), Box("Small", 0.3, 0.2, 0.15), Box("Medium", 0.4, 0.3, 0.25)]
+    order = decide_loading_order(boxes, fixed_order=["Small", "Large", "Medium"])
+    assert [b.id for b in order] == ["Small", "Large", "Medium"]
+
+
+def test_fixed_order_still_respects_pickup_constraint():
+    """사용자가 지정한 순서라도, 물리적으로 불가능한 픽업 순서(밑에 깔린 걸
+    먼저 집기)는 허용하지 않는다 - 안전이 사용자 지정보다 우선."""
+    bottom = Box("Bottom", width=0.5, depth=0.5, height=0.3)
+    top = Box("Top", width=0.1, depth=0.1, height=0.1, rests_on_id="Bottom")
+
+    # 사용자가 (물리적으로 불가능한) Bottom-먼저 순서를 지정해도
+    order = decide_loading_order([bottom, top], fixed_order=["Bottom", "Top"])
+
+    # Top이 위에 얹혀 있는 한 Bottom을 먼저 집을 수 없으므로 Top이 먼저 나와야 함
+    assert [b.id for b in order] == ["Top", "Bottom"]

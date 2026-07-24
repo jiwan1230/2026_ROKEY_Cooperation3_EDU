@@ -160,11 +160,13 @@ def score_candidate(x: float, y: float, z: float, box: "Box", trunk,
     return height_term - contact_term - wall_a_term - wall_bc_term, touches  # 낮을수록 좋은 자리
 
 
-def make_weighted_score_fn(entrance_preference: float = 1.0, contact_preference: float = 1.0):
+def make_weighted_score_fn(
+    entrance_preference: float = 1.0, contact_preference: float = 1.0, height_preference: float = 1.0,
+):
     """
-    "HMI 화면 설계 가이드라인" 문서 4절의 적재 우선순위 슬라이더 중 2개 축을
+    "HMI 화면 설계 가이드라인" 문서 4절의 적재 우선순위 슬라이더 중 3개 축을
     반영하는 score_fn을 만들어 반환한다 (place_one_box의 score_fn 확장점에
-    바로 꽂아 쓸 수 있음). 기본값 (1.0, 1.0)은 기존 score_candidate와
+    바로 꽂아 쓸 수 있음). 기본값 (1.0, 1.0, 1.0)은 기존 score_candidate와
     완전히 동일하게 동작한다(하위 호환).
 
     [entrance_preference] "입구 우선 ↔ 깊은 위치 우선" 축. 양수면 지금까지처럼
@@ -178,11 +180,18 @@ def make_weighted_score_fn(entrance_preference: float = 1.0, contact_preference:
     벽/다른 박스에 지지된다(안정성 근사)"를 동시에 대변하는 유일한 지표라서,
     이 하나의 손잡이로 두 축을 근사한다. 진짜 지지력 기반 안정성 점수(예:
     ⑬ 받침 비율을 그레이디드 점수로)는 팀 논의 후 별도로 설계해야 한다.
+
+    [height_preference] "바닥부터 채우기" 축의 강도 배율 - HEIGHT_WEIGHT(낮은
+    자리 우대)에 곱한다. 1.0=기존 강도, 0=높이를 아예 신경 안 씀(쌓기를 꺼리지
+    않게 됨 - allow_stacking=True와 같이 쓰면 더 적극적으로 위층을 활용하는
+    쪽으로 기움), 1보다 크면 바닥 선호를 더 강하게. 음수는 의미가 없어서
+    (쌓인 자리를 오히려 우대) 지원하지 않는다 - 반대 방향이 필요하면
+    allow_stacking=False로 아예 쌓기를 막는 게 맞는 접근.
     """
     def _score(x: float, y: float, z: float, box: "Box", trunk,
                placed: List["PlacedBox"]) -> Tuple[float, int]:
         touches = count_touching_faces(x, y, z, box, trunk, placed)
-        height_term = HEIGHT_WEIGHT * (z / trunk.height)
+        height_term = HEIGHT_WEIGHT * height_preference * (z / trunk.height)
         contact_term = CONTACT_WEIGHT * contact_preference * (touches / 6)
         wall_a_term = WALL_A_WEIGHT * entrance_preference * entrance_distance_ratio(x, box, trunk)
         wall_bc_term = WALL_BC_WEIGHT * (1 - side_wall_distance_ratio(y, box, trunk))

@@ -10,6 +10,8 @@ test_17_margin_check.py
 import sys, pathlib
 from importlib import import_module
 
+import pytest
+
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))  # tests/ -> algorism/
 _m02 = import_module("02_trunk_space_state")
 _m03 = import_module("03_extreme_point_candidates")
@@ -173,3 +175,62 @@ def test_obstacle_margin_applies_only_to_boxes_flagged_as_obstacle():
 def test_box_is_obstacle_defaults_to_false():
     box = Box("A", width=0.2, depth=0.2, height=0.2)
     assert box.is_obstacle is False
+
+
+# ---------------------------------------------------------------------------
+# "HMI 화면 설계 가이드라인" 문서의 "트렁크 입구 여유 거리" - wall_margin과 별개로
+# 입구 쪽 벽만 다른 간격을 줄 수 있어야 한다.
+# ---------------------------------------------------------------------------
+
+def test_entrance_margin_applies_only_to_entrance_side_wall():
+    """entrance_near_x=True면 x=0쪽이 입구 - entrance_margin은 x=0쪽에만 적용되고
+    반대쪽(안쪽 벽)은 margin(또는 wall_margin) 그대로여야 한다."""
+    trunk = Trunk(width=1.0, depth=1.0, height=1.0, entrance_near_x=True)
+    box = Box("A", width=0.2, depth=0.2, height=0.2)
+
+    # 입구(x=0)에서 0.10m: entrance_margin=0.10이면 통과, margin(0.02) 기준이면 거부됐을 값
+    assert has_wall_margin(0.10, 0.5, 0.0, box, trunk, margin=0.02, entrance_margin=0.10) is True
+    # 안쪽 벽(x+width=1.0)에서는 여전히 margin(0.02)만 있으면 됨 - entrance_margin과 무관
+    assert has_wall_margin(0.78, 0.5, 0.0, box, trunk, margin=0.02, entrance_margin=0.10) is True
+    # 입구에서 0.05m밖에 안 띄우면 entrance_margin=0.10 기준으로 거부되어야 함
+    assert has_wall_margin(0.05, 0.5, 0.0, box, trunk, margin=0.02, entrance_margin=0.10) is False
+
+
+def test_entrance_margin_flips_side_when_entrance_is_on_far_x():
+    """entrance_near_x=False면 x=width쪽이 입구 - entrance_margin이 그쪽에 적용돼야 한다."""
+    trunk = Trunk(width=1.0, depth=1.0, height=1.0, entrance_near_x=False)
+    box = Box("A", width=0.2, depth=0.2, height=0.2)
+
+    # 입구(x+width=1.0)에서 0.10m 띄운 자리: x=1.0-0.2-0.10=0.70
+    assert has_wall_margin(0.70, 0.5, 0.0, box, trunk, margin=0.02, entrance_margin=0.10) is True
+    # 입구에서 0.05m만 띄우면(x=0.75) entrance_margin=0.10 기준 거부
+    assert has_wall_margin(0.75, 0.5, 0.0, box, trunk, margin=0.02, entrance_margin=0.10) is False
+
+
+def test_entrance_margin_none_falls_back_to_margin():
+    """entrance_margin을 안 주면 margin과 동일하게 동작 (하위 호환)."""
+    trunk = Trunk(width=1.0, depth=1.0, height=1.0, entrance_near_x=True)
+    box = Box("A", width=0.2, depth=0.2, height=0.2)
+    assert has_wall_margin(0.02, 0.5, 0.0, box, trunk, margin=0.02) is True
+    assert has_wall_margin(0.01, 0.5, 0.0, box, trunk, margin=0.02) is False
+
+
+def test_place_one_box_can_sit_flush_at_entrance_margin_distance():
+    """통합 테스트: 빈 트렁크의 '첫 박스'도 entrance_margin 거리의 입구쪽 후보를
+    실제로 만날 수 있어야 한다 (기존엔 안쪽 벽 플러시 후보만 명시적으로 생성돼서,
+    입구쪽 마진 후보가 아예 없는 경우가 있었음 - entrance_preference=-1로 입구를
+    강하게 우선하면 이 후보가 선택돼야 확인 가능)."""
+    from importlib import import_module as im
+    _m05 = im("05_candidate_scoring")
+    make_weighted_score_fn = _m05.make_weighted_score_fn
+
+    trunk = Trunk(width=1.0, depth=1.0, height=0.5)
+    state = ExtremePointState()
+    box = Box("A", width=0.2, depth=0.2, height=0.15)
+
+    entrance_first_score = make_weighted_score_fn(entrance_preference=-1.0)
+    plan = place_one_box(box, trunk, state, order=1, margin=0.02, entrance_margin=0.10,
+                          score_fn=entrance_first_score)
+    assert plan is not None
+    x, _y, _z = plan.position
+    assert x == pytest.approx(0.10)

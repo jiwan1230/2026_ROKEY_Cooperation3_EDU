@@ -9,6 +9,8 @@ contact_preference)가 그대로 관통되는지 확인 - trunk_map_planner_node
 import sys, pathlib
 from importlib import import_module
 
+import pytest
+
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))  # tests/ -> algorism/
 _m02 = import_module("02_trunk_space_state")
 _m03 = import_module("03_extreme_point_candidates")
@@ -52,3 +54,29 @@ def test_entrance_preference_changes_positions():
     pos_default = {p.box_id: p.position for p in plans_default}
     pos_entrance_first = {p.box_id: p.position for p in plans_entrance_first}
     assert pos_default != pos_entrance_first
+
+
+def test_entrance_margin_is_threaded_through():
+    trunk = Trunk(width=1.0, depth=1.0, height=0.5)
+    boxes = [Box("A", width=0.2, depth=0.2, height=0.15)]
+
+    plans, _ = replan_after_rescan(boxes, trunk, [], entrance_preference=-1.0, entrance_margin=0.10)
+    assert len(plans) == 1
+    assert plans[0].position[0] == pytest.approx(0.10)
+
+
+def test_height_preference_is_threaded_through():
+    trunk = Trunk(width=0.32, depth=0.32, height=0.9)
+    boxes = [Box("Floor1", 0.28, 0.28, 0.2), Box("Floor2", 0.28, 0.28, 0.2)]
+
+    plans, unloadable = replan_after_rescan(boxes, trunk, [], allow_stacking=True, height_preference=0.0)
+    assert len(unloadable) == 0
+    assert len(plans) == 2
+
+
+def test_fixed_order_is_threaded_through():
+    trunk = Trunk(width=1.5, depth=1.5, height=0.9)
+    boxes = [Box("Large", 0.50, 0.35, 0.30), Box("Small", 0.30, 0.20, 0.15), Box("Medium", 0.40, 0.30, 0.25)]
+
+    plans, _ = replan_after_rescan(boxes, trunk, [], fixed_order=["Small", "Medium", "Large"])
+    assert [p.box_id for p in plans] == ["Small", "Medium", "Large"]

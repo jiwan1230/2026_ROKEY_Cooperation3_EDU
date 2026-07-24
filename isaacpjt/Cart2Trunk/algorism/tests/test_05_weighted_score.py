@@ -52,6 +52,25 @@ def test_negative_entrance_preference_prefers_entrance_over_deep_position():
     assert entrance_first(*shallow, box, trunk, [])[0] < entrance_first(*deep, box, trunk, [])[0]
 
 
+def test_zero_height_preference_ignores_height_penalty():
+    """"바닥부터 채우기" 축 - height_preference=0이면 z가 높아도 페널티가 없어야
+    한다(=쌓기를 꺼리지 않게 됨). 기본값(1.0)에서는 낮은 자리가 더 좋아야 한다."""
+    trunk = Trunk(width=1.0, depth=1.0, height=1.0)
+    box = Box("A", 0.2, 0.2, 0.2)
+    low = (0.2, 0.2, 0.0)
+    high = (0.2, 0.2, 0.5)
+
+    floor_first = make_weighted_score_fn(height_preference=1.0, contact_preference=0.0)
+    assert floor_first(*low, box, trunk, [])[0] < floor_first(*high, box, trunk, [])[0]
+
+    # contact_preference=0으로 접촉면(바닥 접촉 여부로 z=0/z=0.5가 달라지는 항)을
+    # 제거해야 height_preference 하나만 순수하게 비교할 수 있다.
+    height_indifferent = make_weighted_score_fn(height_preference=0.0, contact_preference=0.0)
+    assert height_indifferent(*low, box, trunk, [])[0] == pytest.approx(
+        height_indifferent(*high, box, trunk, [])[0]
+    )
+
+
 def test_zero_contact_preference_ignores_touching_faces():
     """contact_preference=0이면 접촉면 수가 점수에 전혀 영향을 주지 않아야 한다."""
     trunk = Trunk(width=1.0, depth=1.0, height=1.0)
