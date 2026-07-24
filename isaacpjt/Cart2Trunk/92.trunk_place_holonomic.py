@@ -604,20 +604,28 @@ def box_needs_tilt(box_height_z, ceiling_z=CEILING_WORLD_Z, floor_ref_z=TRUNK_FL
     available = float(ceiling_z) - float(floor_ref_z)
     return required > available, required, available
 
-# 사용자 설계(5차) - LIFT_TRAVEL_M=0.35(LIFT_MAX≈0.388)는 "차체 밑을 지나는" 시나리오의
-# 안전마진인데, 스크립트 시작부터 계속 LIFT_MAX에 고정해두고 그 이후 ENTRY_HOLDING_Z(0.83)
-# ->place_release_z 낙차를 팔 혼자서만 커버해왔다 - 팔이 그 큰 낙차+수평 reach를 동시에
-# 감당하는 자세에서 팔꿈치/팔뚝이 트렁크 입구 프레임을 스쳤다(91.py PICK Phase A와 같은
-# 원리로 해결: 리프트로 마운트 자체를 목표 높이 가까이 올리면 팔은 작은 나머지 거리만
-# 커버하면 되어 자세가 컴팩트하게 유지된다). 이 시점(STAGE 3 마지막 PLACE 하강)에는 섀시가
-# 이미 차체 밑이 아니라 트렁크 입구/안쪽에 있으므로, under-car 캡(LIFT_MAX) 대신 트렁크
-# 천장 안전한계(SAFE_TRANSIT_Z)까지 리프트를 더 올려도 된다.
-# 사용자 실측(재검토) - release_z-0.05(≈0.53) 기준으로 STAGE 3을 돌려보니 효과는 확인됐지만
-# 조금 더 올려도 여유가 있어 보였다 - 0.65로 상향(마운트가 release_z보다 살짝 높아져 팔이
-# 아주 약간만 아래로 향하면 되는 상태, 여전히 천장 안전한계 이내).
-PLACE_LIFT_MAX = min(0.65, SAFE_TRANSIT_Z - 0.05)
-print(f"[PLACE 하강용 리프트 상한] PLACE_LIFT_MAX={PLACE_LIFT_MAX:.3f} "
-      f"(천장한계 {SAFE_TRANSIT_Z:.3f} 이내로 클램프)", flush=True)
+# 사용자 설계(5차, 최초 버전) - LIFT_TRAVEL_M=0.35(LIFT_MAX≈0.388)는 "차체 밑을 지나는"
+# 시나리오의 안전마진인데, ENTRY_HOLDING_Z(0.83)->place_release_z 낙차를 팔 혼자서만
+# 커버하면 팔꿈치/팔뚝이 트렁크 입구 프레임을 스친다(91.py PICK Phase A와 같은 원리로 해결:
+# 리프트로 마운트 자체를 목표 높이 가까이 올리면 팔은 작은 나머지 거리만 커버하면 되어
+# 자세가 컴팩트하게 유지된다). 처음엔 단일 SAFE_TRANSIT_Z(전역 상수) 기준 min(0.65, ...)로
+# 고정했었다 - 설계 문서 5차/6.6: 실제 배치 위치(place_world_xy)의 로컬 천장을 실측해서
+# 계산하도록 lift_bounds_for()로 일반화한다(로봇/차량 스폰 이후, STAGE 3에서 실제 사용 직전에
+# 호출 - ceiling_z_at()이 raycast라 물리 씬이 준비된 뒤에만 의미 있는 값을 준다).
+def lift_bounds_for(target_xy, ceiling_margin=None, hard_cap=0.65):
+    """target_xy 위치의 로컬 천장(ceiling_z_at)과 현재 섀시 높이를 실측해서, 리프트
+    마운트 자체가 천장에 닿지 않는 최댓값을 계산한다. 실측 실패(경계 밖 등) 시 옛
+    SAFE_TRANSIT_Z 기반 값으로 안전하게 대체한다."""
+    if ceiling_margin is None:
+        ceiling_margin = HORIZONTAL_PASS_MARGIN
+    chassis_pos, _ = base_robot.get_world_pose()
+    ceiling_here = ceiling_z_at(target_xy[0], target_xy[1])
+    if ceiling_here is None:
+        lift_max = min(hard_cap, SAFE_TRANSIT_Z - 0.05)
+    else:
+        lift_max_from_ceiling = ceiling_here - ceiling_margin - float(chassis_pos[2])
+        lift_max = max(LIFT_MIN, min(hard_cap, lift_max_from_ceiling))
+    return LIFT_MIN, lift_max
 
 
 # ================= 씬 구성 =================
@@ -1843,12 +1851,23 @@ if STAGE >= 3:
     # 그 결과 19스텝만에 "자세 붕괴"로 오판, STAGE 3이 항상 실패했다. 고침: 박스가 "그리퍼를
     # 잘 따라가고 있는지"(그리퍼 tip의 Y와 비교 - 붙어있다면 항상 거의 일치해야 함)로 바꾼다 -
     # 이게 진짜 "충돌/이탈"을 감지하는 방식이고, 목표 Y가 어디든 상관없이 성립한다.
+    # 사용자 설계 문서(6차: CEILING_HUGGING_TRANSIT) - STAGE 3는 ee 목표 z가 STAGE3_ENTRY_Z로
+    # 고정된 채 섀시+팔이 함께 전진하는데, 실제 로컬 천장은 구간마다 다르다(열린 리드 구간
+    # ~1.4m대 -> INTERNAL_CEILING_START_X 이후 ~1.07~1.11m대로 하강). 실측 재현 결과(3차
+    # 검증) 95스텝 지점에서 ee_err=0.645m, ee_z=1.04까지 튀는 실제 충돌이 확인됐다 - 매 스텝
+    # 실측 포락선이 그 지점 로컬 천장을 침범하는지 확인해서, 물리 엔진이 세게 밀어붙이기
+    # 전에(오차가 폭주하기 전에) 먼저 멈춘다.
+    STAGE3_CEILING_ABORT_MARGIN = 0.01
+
     def _stage3_pose_broken():
         tip_pos = _measure_tip_pos()
         _, _, box_center = _get_box_x_edges()
         y_broken = abs(float(box_center[1]) - float(tip_pos[1])) > STAGE3_Y_TOLERANCE
         detached = not m0609_robot.gripper.is_closed()
-        return y_broken or detached
+        if y_broken or detached:
+            return True
+        clearance = evaluate_pose_clearance()["minimum_clearance"]
+        return clearance is not None and clearance < STAGE3_CEILING_ABORT_MARGIN
 
     def _stage3_max_speed():
         chassis_pos, _ = base_robot.get_world_pose()
@@ -1897,10 +1916,13 @@ if STAGE >= 3:
              target=[place_world_xy[0], place_world_xy[1], TRUNK_FLOOR_Z], fname="_trunkplace_01_approaching.png")
 
     # 사용자 설계(5차) - ENTRY_HOLDING_Z -> place_release_z 낙차를 팔 혼자 감당하게 하는 대신,
-    # 리프트를 PLACE_LIFT_MAX까지 같이 올려서(마운트 자체가 목표 높이로 다가감) 팔이 커버할
-    # 나머지 거리를 최소화한다(91.py PICK Phase A와 같은 원리) - 팔꿈치/팔뚝이 트렁크 입구
-    # 프레임을 스치는 걸 막기 위함. 섀시는 이미 입구를 지나 트렁크 안쪽에 있으므로 under-car
-    # 안전캡(LIFT_MAX) 대신 천장 안전한계까지 리프트를 더 써도 된다.
+    # 리프트를 같이 올려서(마운트 자체가 목표 높이로 다가감) 팔이 커버할 나머지 거리를
+    # 최소화한다(91.py PICK Phase A와 같은 원리) - 팔꿈치/팔뚝이 트렁크 입구 프레임을 스치는
+    # 걸 막기 위함. 섀시는 이미 입구를 지나 트렁크 안쪽에 있으므로 under-car 안전캡(LIFT_MAX)
+    # 대신 천장 안전한계까지 리프트를 더 써도 된다 - lift_bounds_for()로 place_world_xy의
+    # 로컬 천장을 실측해서 상한을 정한다(옛 단일 SAFE_TRANSIT_Z 상수 대신, 설계 문서 5차).
+    _, PLACE_LIFT_MAX = lift_bounds_for(place_world_xy)
+    print(f"[PLACE 하강용 리프트 상한] PLACE_LIFT_MAX={PLACE_LIFT_MAX:.3f}(로컬 천장 실측 기반)", flush=True)
     descend_and_raise_lift(
         (place_world_xy[0], place_world_xy[1]), place_release_z, PLACE_LIFT_MAX, steps=250,
         label="PLACE 하강(진입높이 -> release 높이, 리프트 동시 상승)",
