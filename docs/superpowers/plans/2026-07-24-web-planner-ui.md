@@ -18,6 +18,7 @@
 - 무작위 박스 생성은 서버 왕복 없이 프론트엔드 JS에서 직접 처리한다.
 - 에러 응답은 항상 `{"error_code":..., "cause":..., "action":...}` 형태 (tkinter `_show_error` 패턴과 동일).
 - 백엔드 테스트는 라우트 레벨만 검증한다 (계산 로직 자체는 `algorism/`에 이미 149개 테스트가 있어 중복 검증하지 않음).
+- **이 컴퓨터에서 `web/backend`의 pytest를 실행할 때는 항상 `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`을 앞에 붙여야 한다** (예: `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest ...`). ROS2 humble이 전역 source돼 있어서 `PYTHONPATH`를 통해 `launch_testing`/`launch_testing_ros_pytest_entrypoint` 플러그인이 자동 로드되며 `ModuleNotFoundError: No module named 'yaml'` 등으로 크래시하기 때문 — `-p no:X` 플래그로는 막히지 않고 이 환경변수만 확실히 동작함(Task 2 검토에서 발견, 직접 재현·검증됨). `algorism/` 테스트가 `-p no:anyio`가 항상 필요한 것과 같은 종류의 환경 문제다.
 - 3D 뷰(react-three-fiber `Canvas`)는 WebGL이 필요해 jsdom에서 온전히 렌더 테스트하기 어렵다 — 좌표 변환 같은 순수 로직만 단위 테스트하고, 실제 렌더링은 사용자의 수동 브라우저 확인에 맡긴다 (이 세션은 브라우저 화면을 볼 수 없다는 기존 제약과 동일).
 - tkinter의 `ScoreBreakdownPanel`+`BoxDetailSelector`는 웹에서 `BoxDetailPanel.jsx` 하나로 합친다 — 드롭다운 선택이 점수 분해 표시를 직접 구동하므로 분리할 이유가 없다는 판단(구현 단계에서의 의도적 단순화).
 - 참고 스펙: `docs/superpowers/specs/2026-07-24-web-planner-ui-design.md`
@@ -292,7 +293,7 @@ def test_generate_random_boxes_count_and_ranges():
 ```bash
 cd "/home/sunwook/cobot3_ws/src/2026_ROKEY_Cooperation3_EDU/isaacpjt/Cart2Trunk/web/backend"
 source venv/bin/activate
-python -m pytest tests/test_algorism_bridge_resources.py -v
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/test_algorism_bridge_resources.py -v
 ```
 
 Expected: 5 passed (Step 1의 구현이 이미 완성돼 있으므로 RED 없이 바로 GREEN — 이 파일 자체가 얇은 어댑터라 TDD의 가치는 다음 태스크의 `compute_plan()`에서 더 크다).
@@ -391,7 +392,7 @@ def test_get_box_presets_returns_dict(monkeypatch):
 ```
 
 ```bash
-python -m pytest tests/test_routes_resources.py -v
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/test_routes_resources.py -v
 ```
 
 Expected: 2 passed.
@@ -588,7 +589,7 @@ def test_compute_plan_fixed_order_true_preserves_input_order():
 - [ ] **Step 3: 테스트 실행**
 
 ```bash
-python -m pytest tests/test_algorism_bridge_compute_plan.py -v
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/test_algorism_bridge_compute_plan.py -v
 ```
 
 Expected: 3 passed.
@@ -774,7 +775,7 @@ def test_post_plan_unknown_trunk_map_returns_404(monkeypatch, tmp_path):
 - [ ] **Step 4: 테스트 실행**
 
 ```bash
-python -m pytest tests/test_routes_plan.py -v
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/test_routes_plan.py -v
 ```
 
 Expected: 4 passed.
@@ -883,7 +884,7 @@ def test_send_task_rejects_unapproved():
 - [ ] **Step 3: 테스트 실행**
 
 ```bash
-python -m pytest tests/test_algorism_bridge_approval.py -v
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/test_algorism_bridge_approval.py -v
 ```
 
 Expected: 3 passed.
@@ -1025,8 +1026,8 @@ def test_send_without_task_returns_400():
 - [ ] **Step 4: 테스트 실행 + 전체 백엔드 스위트 확인**
 
 ```bash
-python -m pytest tests/test_routes_approval.py -v
-python -m pytest -v
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/test_routes_approval.py -v
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -v
 ```
 
 Expected: approval 3 passed; 백엔드 전체 스위트 20 passed(Task 1~7 누적).
@@ -2804,7 +2805,7 @@ git commit -m "web frontend: App.jsx 최종 배선 + useResourceLoader + 실행 
 
 ## 완료 기준
 
-- 백엔드: `cd web/backend && source venv/bin/activate && python -m pytest -v` 전부 통과.
+- 백엔드: `cd web/backend && source venv/bin/activate && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -v` 전부 통과.
 - 프론트엔드: `cd web/frontend && npm test` 전부 통과.
 - 사용자가 두 서버를 띄우고 Task 18 Step 6 체크리스트를 직접 확인.
 - `isaacpjt/Cart2Trunk/algorism/`, `planner_gui.py`, `trunk_map_planner_node.py`에 diff가 전혀 없음 (`git diff --stat`로 확인).
