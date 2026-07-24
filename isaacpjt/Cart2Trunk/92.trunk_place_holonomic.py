@@ -49,6 +49,7 @@ from pathlib import Path
 import numpy as np
 import omni.usd
 import omni.kit.viewport.utility as vp_util
+from omni.physx import get_physx_scene_query_interface
 from pxr import Usd, UsdGeom, UsdPhysics, PhysxSchema, UsdLux, UsdShade, Sdf, Gf
 
 from isaacsim.core.api import World
@@ -631,6 +632,69 @@ for _ in range(20):
     simulation_app.update()
 add_sdf_collision(stage, "/World/Vehicle")
 
+# ================= 실시간 지오메트리 함수 (설계 문서 6.1) =================
+# 사용자 설계 문서 - "EE를 목표점으로 이동시키는 코드"에서 "박스+로봇 전체의 포락선이
+# 트렁크의 구간별 자유공간 안에 유지되도록 하는 코드"로 전환하기 위한 기반. 93번 진단
+# 스크립트가 이미 확인한 것처럼, 트렁크는 CEILING_WORLD_Z 하나로 대표되는 평평한 천장이
+# 아니라 (1) 입구~내부천장 시작점까지는 열린 트렁크 리드 밑면이 실질적 천장, (2) 그 이후는
+# 안쪽으로 갈수록 완만히 낮아지는 진짜 고정 지붕, 이렇게 두 구간이다. 바닥도 슬로프다.
+# 하드코딩된 구간 경계(예: x=3.125) 대신, 차량 SDF 콜리전에 직접 raycast를 쏴서 "그 시점
+# 실제 형상"을 재는 함수로 만든다 - 차량 스케일이 또 바뀌어도 코드 수정이 필요 없다(이번
+# 세션에서 반복된 "예전 스케일 튜닝값이 새 스케일에서 안 맞음" 문제의 구조적 해결).
+_RAYCAST_VEHICLE_PREFIX = "/World/Vehicle"
+
+
+def _raycast_z(x, y, z_start, direction_z, max_dist=4.0):
+    """93번 진단은 로봇/바닥 콜리전이 없는 격리된 씬이라 raycast_closest()만으로 충분했다.
+    92.py는 홀로노믹 베이스/M0609(SDF 콜리전 있음)와 기본 지면(add_default_ground_plane)이
+    함께 있는 씬이라, 필터 없이 raycast하면 로봇 자신이나 바닥을 맞혀 "천장"이 0m 근처로
+    잘못 나오는 문제가 실측으로 확인됐다(STAGE 1에서 차량과 먼 위치일 때 특히 심함).
+    raycast_all()로 모든 히트를 모으고 /World/Vehicle 콜리전만 걸러서 그중 가장 가까운
+    것을 취한다."""
+    closest = {"dist": None, "z": None}
+
+    def _report(hit):
+        path = hit.rigid_body or hit.collision
+        if path and path.startswith(_RAYCAST_VEHICLE_PREFIX):
+            if closest["dist"] is None or hit.distance < closest["dist"]:
+                closest["dist"] = hit.distance
+                closest["z"] = float(hit.position[2])
+        return True  # 계속 다른 히트도 모은다(가장 가까운 차량 히트를 찾아야 하므로)
+
+    get_physx_scene_query_interface().raycast_all(
+        Gf.Vec3f(float(x), float(y), float(z_start)), Gf.Vec3f(0.0, 0.0, float(direction_z)), max_dist, _report)
+    return closest["z"]
+
+
+def ceiling_z_at(x, y=0.0):
+    """위->아래 raycast로 그 (x,y)의 실제 천장(구간에 따라 열린 리드 밑면 또는 고정 지붕) z."""
+    return _raycast_z(x, y, z_start=2.5, direction_z=-1.0)
+
+
+def floor_z_at(x, y=0.0):
+    """아래->위 raycast로 그 (x,y)의 실제 바닥/문턱 z."""
+    return _raycast_z(x, y, z_start=-0.5, direction_z=1.0)
+
+
+def detect_internal_ceiling_start_x(y=0.0, x_lo=None, x_hi=None, step=0.02, drop_threshold=0.10):
+    """TRUNK_ENTRANCE_X부터 TRUNK_X_MAX까지 ceiling_z_at()을 스캔해서 급격한 하강(열린
+    트렁크 리드 밑면 -> 고정 내부 지붕으로의 전환)을 자동 검출한다 - x=3.125라는 매직넘버를
+    하드코딩하지 않고, 지금 이 씬의 실제 차량 형상에서 실측으로 찾는다. 전환점을 못 찾으면
+    (예: 이 차량 모델에 열린 리드에 의한 단차가 없는 경우) 안전하게 TRUNK_ENTRANCE_X를
+    반환한다(구간 구분 없이 전체를 "고정 지붕"으로 취급하는 것과 동일 - 더 보수적)."""
+    x_lo = TRUNK_ENTRANCE_X if x_lo is None else x_lo
+    x_hi = TRUNK_X_MAX if x_hi is None else x_hi
+    xs = np.arange(x_lo, x_hi + 1e-9, step)
+    prev_z = None
+    for x in xs:
+        z = ceiling_z_at(x, y)
+        if z is not None and prev_z is not None and (prev_z - z) > drop_threshold:
+            return float(x)
+        if z is not None:
+            prev_z = z
+    return float(x_lo)
+
+
 area_light = UsdLux.SphereLight.Define(stage, "/World/TrunkPlaceAreaLight")
 area_light.CreateRadiusAttr(0.3)
 area_light.CreateIntensityAttr(80000)
@@ -647,6 +711,38 @@ LIFT_MAX = LIFT_MIN + LIFT_TRAVEL_M
 m0609_path, m0609_base_link_path, lift_translate_op, lift_scale_op = mount_m0609(stage, LIFT_MIN)
 gripper_body_path = f"{m0609_path}/{GRIPPER_BODY_NAME}"
 ee_path = f"{m0609_path}/{EE_LINK_NAME}"
+
+# ================= 운반 포락선 측정 (설계 문서 6.2) =================
+# 사용자 지적 - 실제로 입구/천장을 통과해야 하는 건 박스 혼자가 아니라 "박스 + 그리퍼 +
+# link_6 + 손목/전완 링크"까지 포함한 하나의 강체 뭉치다. PROBE_ARM_ENVELOPE로 이미 검증한
+# "메시 포인트를 Usd.TraverseInstanceProxies()로 인스턴스 안까지 순회하며 world로 직접
+# 변환" 방식(BBoxCache의 치수 제곱 버그를 우회함이 실측으로 확인됨)을 Z축 전용에서 XYZ
+# 전체로 일반화한다. M0609 URDF 기준 link_1~6 확인됨 - 손목/전완에 해당하는 link_4/5를
+# 기본으로 포함한다(필요시 조정 가능).
+CARRY_ENVELOPE_PARTS = [gripper_body_path, ee_path, f"{m0609_path}/link_5", f"{m0609_path}/link_4"]
+
+
+def _mesh_world_aabb(root_prim_path):
+    """PROBE_ARM_ENVELOPE의 _mesh_world_z_range를 XYZ 전체로 일반화 - 메시 포인트를
+    직접 world로 변환해 축별 min/max를 구한다(BBoxCache 스케일 제곱 버그 회피, 검증됨)."""
+    root_prim = stage.GetPrimAtPath(root_prim_path)
+    mins = [None, None, None]
+    maxs = [None, None, None]
+    for prim in Usd.PrimRange(root_prim, Usd.TraverseInstanceProxies()):
+        if prim.GetTypeName() != "Mesh":
+            continue
+        mesh = UsdGeom.Mesh(prim)
+        pts = mesh.GetPointsAttr().Get()
+        if not pts:
+            continue
+        mat = UsdGeom.Xformable(prim).ComputeLocalToWorldTransform(Usd.TimeCode.Default())
+        for p in pts:
+            wp = mat.Transform(p)
+            for i in range(3):
+                v = float(wp[i])
+                mins[i] = v if mins[i] is None else min(mins[i], v)
+                maxs[i] = v if maxs[i] is None else max(maxs[i], v)
+    return tuple(mins), tuple(maxs)
 
 for _ in range(20):
     simulation_app.update()
@@ -895,6 +991,15 @@ def drive_until(condition_fn, target_x=None, target_y=None, target_yaw_deg=None,
 
 step_hold(60)
 print("\n[안정화 완료]\n", flush=True)
+
+# 사용자 설계 문서(1차: 기하학 측정 및 로그 출력) - 물리가 안정화된 지금 시점에 차량 SDF
+# 콜리전에 직접 raycast를 쏴서 실제 입구~내부천장 전환점을 찾는다(하드코딩된 x=3.125 대신).
+INTERNAL_CEILING_START_X = detect_internal_ceiling_start_x()
+print(f"[지오메트리 실측] INTERNAL_CEILING_START_X={INTERNAL_CEILING_START_X:.3f} "
+      f"(TRUNK_ENTRANCE_X={TRUNK_ENTRANCE_X:.3f}~TRUNK_X_MAX={TRUNK_X_MAX:.3f} 구간 raycast 스캔)", flush=True)
+for _x in [TRUNK_ENTRANCE_X, TRUNK_X_MIN, INTERNAL_CEILING_START_X, TRUNK_X_MAX]:
+    _cz, _fz = ceiling_z_at(_x), floor_z_at(_x)
+    print(f"  x={_x:.3f}: ceiling_z={_cz} floor_z={_fz}", flush=True)
 
 print(f"\n[리프트] 도킹({LIFT_MIN:.3f}) -> 최고({LIFT_MAX:.3f})", flush=True)
 move_lift_to(LIFT_MAX, steps=120)
@@ -1176,50 +1281,82 @@ print(f"[문턱 통과 방식 판정] 박스높이={TEST_BOX_SIZE[2]:.3f}m 필�
 # 최종: 메시 포인트 직접 변환 방식을 유지하되 Usd.TraverseInstanceProxies()로 인스턴스 안까지
 # 들어가도록 고쳤다. 박스 자체는 이미 정확한 치수(TEST_BOX_SIZE)와 실측 world pose를 알고
 # 있으므로 bbox 계산 없이 그대로 쓴다(불필요하게 버그가 있는 API에 또 의존할 이유가 없음).
+# ================= 박스 가장자리 / 운반 포락선 / 자세 클리어런스 (설계 문서 2, 6.2-6.3) =================
+# 사용자 지적 - 박스만 봐서는 안 되고 "박스 + 그리퍼 + link_6 + 전완"까지 포함한 전체 포락선이
+# 트렁크 구간별 자유공간 안에 있는지를 봐야 한다. _get_box_x_edges()는 예전에 STAGE>=2 블록
+# 안에서만 쓰던 함수인데, OBB->AABB 투영 공식(abs(R[0,i])*half_dim[i] 합산 - 분리축 정리와
+# 동일, 이미 정확함이 검증됨)이라 그대로 재사용하고 위치만 모듈 스코프로 옮긴다(STAGE 1
+# 시점부터도 로그로 확인할 수 있게).
+def _get_box_x_edges():
+    """박스의 실시간 world pose(중심+회전)와 실제 치수(TEST_BOX_SIZE)로 world X축 투영
+    반길이를 직접 계산한다(BBoxCache의 치수 제곱 버그를 우회, 검증됨)."""
+    box_pos, box_quat = test_box.get_world_pose()
+    center = np.asarray(box_pos, dtype=float)
+    rotation = quat_wxyz_to_matrix(np.asarray(box_quat, dtype=float))
+    half_dims = np.asarray(TEST_BOX_SIZE, dtype=float) / 2.0
+    projected_half_x = (
+        abs(rotation[0, 0]) * half_dims[0]
+        + abs(rotation[0, 1]) * half_dims[1]
+        + abs(rotation[0, 2]) * half_dims[2]
+    )
+    rear_x = float(center[0] - projected_half_x)
+    front_x = float(center[0] + projected_half_x)
+    return rear_x, front_x, center
+
+
+def measure_carry_envelope():
+    """박스 + CARRY_ENVELOPE_PARTS(그리퍼/link_6/전완)의 결합 world AABB.
+    X는 이미 검증된 _get_box_x_edges()의 회전-투영값과 메시 AABB 중 더 바깥쪽을 취한다."""
+    mins = [None, None, None]
+    maxs = [None, None, None]
+    for part in CARRY_ENVELOPE_PARTS:
+        part_min, part_max = _mesh_world_aabb(part)
+        for i in range(3):
+            if part_min[i] is None:
+                continue
+            mins[i] = part_min[i] if mins[i] is None else min(mins[i], part_min[i])
+            maxs[i] = part_max[i] if maxs[i] is None else max(maxs[i], part_max[i])
+    box_rear_x, box_front_x, box_center = _get_box_x_edges()
+    box_bottom_z = float(box_center[2]) - TEST_BOX_SIZE[2] / 2.0
+    return {
+        "bottom_z": box_bottom_z,
+        "top_z": maxs[2] if maxs[2] is not None else box_bottom_z + TEST_BOX_SIZE[2],
+        "rear_x": min(box_rear_x, mins[0]) if mins[0] is not None else box_rear_x,
+        "front_x": max(box_front_x, maxs[0]) if maxs[0] is not None else box_front_x,
+        "y_min": mins[1], "y_max": maxs[1],
+    }
+
+
+def evaluate_pose_clearance():
+    """설계 문서 6.3 - 지금 자세가 문턱/천장 대비 얼마나 여유 있는지 실측해서 반환한다.
+    ceiling_z_at/floor_z_at은 라이브 raycast라 x=3.125 같은 매직넘버 없이 그 시점 실제
+    형상을 그대로 반영한다."""
+    env = measure_carry_envelope()
+    ceiling_here = ceiling_z_at(env["front_x"])
+    floor_here = floor_z_at(env["rear_x"])
+    box_to_threshold = (env["bottom_z"] - floor_here) if floor_here is not None else None
+    box_to_ceiling = (ceiling_here - env["top_z"]) if ceiling_here is not None else None
+    candidates = [v for v in [box_to_threshold, box_to_ceiling] if v is not None]
+    return {
+        "box_to_threshold": box_to_threshold,
+        "box_to_ceiling": box_to_ceiling,
+        "minimum_clearance": min(candidates) if candidates else None,
+        "envelope": env,
+    }
+
+
+def _log_clearance(label):
+    c = evaluate_pose_clearance()
+    env = c["envelope"]
+    print(f"\n[포락선 클리어런스: {label}] rear_x={env['rear_x']:.3f} front_x={env['front_x']:.3f} "
+          f"bottom_z={env['bottom_z']:.3f} top_z={env['top_z']:.3f}", flush=True)
+    print(f"[클리어런스: {label}] box_to_threshold={c['box_to_threshold']} "
+          f"box_to_ceiling={c['box_to_ceiling']} minimum_clearance={c['minimum_clearance']}", flush=True)
+    return c
+
+
 PROBE_ARM_ENVELOPE = os.environ.get("PROBE_ARM_ENVELOPE") == "1"
-if PROBE_ARM_ENVELOPE:
-    def _mesh_world_z_range(root_prim_path):
-        root_prim = stage.GetPrimAtPath(root_prim_path)
-        z_min, z_max = None, None
-        for prim in Usd.PrimRange(root_prim, Usd.TraverseInstanceProxies()):
-            if prim.GetTypeName() != "Mesh":
-                continue
-            mesh = UsdGeom.Mesh(prim)
-            pts = mesh.GetPointsAttr().Get()
-            if not pts:
-                continue
-            mat = UsdGeom.Xformable(prim).ComputeLocalToWorldTransform(Usd.TimeCode.Default())
-            for p in pts:
-                wp = mat.Transform(p)
-                z = float(wp[2])
-                z_min = z if z_min is None else min(z_min, z)
-                z_max = z if z_max is None else max(z_max, z)
-        return z_min, z_max
-
-    def _probe_arm_envelope(label):
-        link6_zmin, link6_zmax = _mesh_world_z_range(ee_path)
-        gripper_zmin, gripper_zmax = _mesh_world_z_range(gripper_body_path)
-        box_center_z = float(test_box.get_world_pose()[0][2])
-        box_bottom_z = box_center_z - TEST_BOX_SIZE[2] / 2.0
-        box_top_z = box_center_z + TEST_BOX_SIZE[2] / 2.0
-        _candidates = [v for v in [link6_zmax, gripper_zmax] if v is not None]
-        print(f"\n[팔 수직 포락선 실측: {label}] link_6 z=[{link6_zmin}, {link6_zmax}] "
-              f"gripper_body z=[{gripper_zmin}, {gripper_zmax}] "
-              f"박스 top={box_top_z:.4f} bottom={box_bottom_z:.4f}", flush=True)
-        if not _candidates:
-            print("[실패] link_6/gripper_body 둘 다 메시를 못 찾았습니다 - 프림 경로를 재확인하세요.", flush=True)
-            return None
-        arm_top_z = max(_candidates)
-        print(f"[결론: {label}] 박스 바닥({box_bottom_z:.4f}) ~ 팔 최상단({arm_top_z:.4f}) "
-              f"전체 수직 길이 = {arm_top_z - box_bottom_z:.4f}m "
-              f"(박스만의 두께는 {TEST_BOX_SIZE[2]:.4f}m - 차이 {arm_top_z - box_bottom_z - TEST_BOX_SIZE[2]:.4f}m는 "
-              "93번 진단이 빠뜨렸던, link_6/그리퍼가 박스 위로 튀어나온 길이)", flush=True)
-        if CEILING_WORLD_Z:
-            print(f"[천장 대비] CEILING_WORLD_Z={CEILING_WORLD_Z:.4f} - 팔 최상단({arm_top_z:.4f}) "
-                  f"= 여유 {CEILING_WORLD_Z - arm_top_z:.4f}m", flush=True)
-        return box_bottom_z, arm_top_z
-
-    _probe_arm_envelope("STAGE1(HOLDING_Z)")
+_log_clearance("STAGE1(HOLDING_Z)")
 
 chassis_pos0, _ = base_robot.get_world_pose()
 snapshot(eye=[chassis_pos0[0] - 2.2, chassis_pos0[1] - 3.2, chassis_pos0[2] + 1.6],
@@ -1239,8 +1376,7 @@ if STAGE >= 1.1:
     move_link6(entry_pos, steps=200, hold_gripper_closed=True, orientation=DOWN_QUAT,
                label="STAGE1.1: 입구 턱 클리어 높이로 상승")
 
-    if PROBE_ARM_ENVELOPE:
-        _probe_arm_envelope("STAGE1.1(ENTRY_HOLDING_Z)")
+    _log_clearance("STAGE1.1(ENTRY_HOLDING_Z)")
 
     chassis_pos0, _ = base_robot.get_world_pose()
     snapshot(eye=[chassis_pos0[0] - 2.0, chassis_pos0[1] - 2.8, chassis_pos0[2] + 1.4],
@@ -1317,22 +1453,8 @@ if STAGE >= 2:
             Usd.TimeCode.Default())
         return np.array(gripper_mat.Transform(Gf.Vec3d(*TIP_LOCAL_OFFSET)), dtype=float)
 
-    def _get_box_x_edges():
-        """BBoxCache 대신 박스의 실시간 world pose(중심+회전)와 이미 알고 있는 실제 치수
-        (TEST_BOX_SIZE)로 world X축 투영 반길이를 직접 계산한다 - get_world_aabb()가 치수를
-        잘못 돌려주던 문제(제곱값처럼 나옴, 원인 미상 - scale 이중 적용 추정)를 우회한다."""
-        box_pos, box_quat = test_box.get_world_pose()
-        center = np.asarray(box_pos, dtype=float)
-        rotation = quat_wxyz_to_matrix(np.asarray(box_quat, dtype=float))
-        half_dims = np.asarray(TEST_BOX_SIZE, dtype=float) / 2.0
-        projected_half_x = (
-            abs(rotation[0, 0]) * half_dims[0]
-            + abs(rotation[0, 1]) * half_dims[1]
-            + abs(rotation[0, 2]) * half_dims[2]
-        )
-        rear_x = float(center[0] - projected_half_x)
-        front_x = float(center[0] + projected_half_x)
-        return rear_x, front_x, center
+    # _get_box_x_edges()는 이제 모듈 스코프(STAGE 1 부착 직후)에 정의돼 있다 - 여기서 다시
+    # 정의하지 않고 그대로 재사용한다.
 
     # ---- 기준값(자세 붕괴 감지용) - STAGE 2 시작 시점, 아직 충돌 전의 "정상" 상대 위치 ----
     stage2_hold_q = np.asarray(m0609_robot.get_joint_positions(), dtype=float).copy()
@@ -1528,6 +1650,7 @@ if STAGE >= 2:
     stage2_end_ee_pos, _ = m0609_robot.end_effector.get_world_pose()
     print(f"[STAGE2 체크포인트 저장] 섀시={np.round(stage2_end_chassis_pos, 3)} "
           f"팔ee={np.round(stage2_end_ee_pos, 3)}", flush=True)
+    _log_clearance("STAGE2 종료(입구 통과 직후)")
 
     chassis_pos0, _ = base_robot.get_world_pose()
     snapshot(eye=[chassis_pos0[0] - 1.5, chassis_pos0[1] - 2.2, chassis_pos0[2] + 1.4],
