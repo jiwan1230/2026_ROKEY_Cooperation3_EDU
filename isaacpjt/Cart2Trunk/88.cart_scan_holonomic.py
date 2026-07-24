@@ -128,6 +128,15 @@ CONVERGENCE_CHECK_INTERVAL_STEPS = 25
 CONVERGENCE_MIN_STEPS = 75
 CONVERGENCE_PLATEAU_TOLERANCE_M = 0.001
 
+# 실측(2026-07-24, 다중시점 카트 스캔 실사용) - 5개 시점 모두에서 검출된 박스 위치가
+# 실제 물리 위치와 9~12cm씩, 게다가 두 박스 모두 비슷한 방향으로 어긋났다(무작위
+# 노이즈가 아니라 일정한 방향의 조직적 오차로 보임 - 사용자 지적). C-4에서 이미 한 번
+# 겪은 것과 같은 클래스의 버그(정지 직후 렌더가 물리를 못 따라간 상태에서 캡처)가
+# Z축이 아니라 X/Y에도 영향을 줬을 가능성이 있어, 각 시점 캡처 전 정지 시간을
+# 20 -> 90스텝으로 늘려 렌더 파이프라인이 확실히 새 카메라 자세를 반영한 뒤에
+# point cloud를 얻도록 한다(실험 - 오차가 줄어드는지 재측정 필요).
+POST_CONVERGENCE_SETTLE_STEPS = 90
+
 # ---- 스캔 자세 파라미터 (35.crate_scan_setup.py의 검증된 공식 그대로 재사용) ----
 # 사용자 지적 - 손목 조인트를 직접 돌리거나 사후 회전을 추가하는 방식은 전부 발산/엉뚱한
 # 방향을 봄으로 실패했다. 35.py를 보니 21도는 회전 트릭이 아니라 **eye 위치의 수평
@@ -888,12 +897,14 @@ for i, y_offset in enumerate(CART_SCAN_STRAFE_Y_OFFSETS):
     move_steps = 350 if i == 0 else 90
     move_link6(target_pos, steps=move_steps, label=f"스캔 위치 {i} 자세 수렴", orientation=target_quat)
 
-    # 실측 확인(중요 버그): 여기서 순수 world.step()만 20번 돌리면 set_lift_height()가
-    # 호출되지 않아서(step_hold()와 달리) M0609가 그 20스텝 동안 텔레포트로 "붙잡혀"
+    # 실측 확인(중요 버그): 여기서 순수 world.step()만 여러 번 돌리면 set_lift_height()가
+    # 호출되지 않아서(step_hold()와 달리) M0609가 그 스텝 동안 텔레포트로 "붙잡혀"
     # 있지 않고 중력에 그대로 노출된다 - 독립 articulation이라 실제로 아래로 떨어지고,
     # 그 상태에서 depth를 캡처하니 포인트클라우드가 의도한 높이보다 한참 낮게(z<0.6)
     # 나왔다. step_hold()를 써서 계속 텔레포트로 고정한 채 렌더 파이프라인만 따라잡게 한다.
-    step_hold(20)
+    # (POST_CONVERGENCE_SETTLE_STEPS 정의부 참고 - 20 -> 90으로 늘려 X/Y 위치 오차
+    # 원인이 렌더 지연인지 실험한다.)
+    step_hold(POST_CONVERGENCE_SETTLE_STEPS)
     vp_util.capture_viewport_to_file(viewport, str(OUT_DIR / f"_cartscan_view_{i}.png"))
 
     # 실측 확인: 수렴 직후 첫 호출에서 렌더 파이프라인이 아직 안 따라와 get_pointcloud()가
