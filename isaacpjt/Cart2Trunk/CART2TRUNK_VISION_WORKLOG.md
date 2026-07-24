@@ -226,19 +226,43 @@ Part A의 파이프라인은 "위 박스는 항상 아래 박스보다 작다"�
 - 산출물 파일명이 가이드라인의 `box_scan.json`과 다름(현재 `all_boxes_corners_*.json`)
 - 입력 방식이 가이드라인의 ROS2 토픽/Scan Action 구조가 아니라 파일 기반(.npy) 핸드오프
 
-## Isaac Sim 재현이 필요한 상황 (영상 녹화용 참고)
+## 재현 완료 자료 (스크린샷/PLY)
 
-아래는 실제 로봇 "동작"을 봐야 의미가 있던 상황들이다. 지금은 기록만 해두고, 나중에
-재현 요청하면 아래 정보로 다시 띄운다.
+2026-07-24, `git commit a0b631c` 시점을 안전한 복원 지점으로 남겨두고, 각 문제를 코드에
+임시로 되돌려서(끝나면 항상 백업본과 `diff` 없음을 확인 후 복구) 스크린샷/PLY로 재현했다.
+전부 `results/worklog_screenshots/{partA,partB,partC}/`에 있다.
 
-| 상황 | 재현 방법 | 비고 |
+### Part A
+| 항목 | 파일 | 비고 |
 |---|---|---|
-| A-3: azimuth ±60도로 IK 오차 0.17m 나던 모습 | `35.crate_scan_setup.py`의 `SCAN_AZIMUTH_DEG`를 ±60도로 임시 변경 후 실행 | 현재 ±50도로 확정돼 있어 되돌리려면 임시 수정 필요 |
-| C-3 이전: IK 오차 8~12cm로 팔이 목표에 못 닿는 모습 | `EYE_HEIGHT_ABOVE_CART=0.75`, `LIFT_TRAVEL_M=0.45`로 되돌리고 실행 | 현재 코드에는 0.55/0.55로 남아있어 되돌리려면 임시 수정 필요 |
-| C-7 1차: 관절이 순간이동(리셋)하며 "뚝" 끊기는 모습 | 리셋 블록을 코드에 다시 삽입해야 함(현재는 삭제됨) | git에 중간 상태를 커밋해두지 않아서, 요청 시 이 문서의 조치 내용 기반으로 재구성 |
-| C-7 최종: 베이스만 움직이고 팔은 거의 고정된 자연스러운 동작 | 현재 `88.cart_scan_holonomic.py`를 `DISPLAY=:1`로(헤드리스 아님) 그대로 실행 | 바로 재현 가능, 별도 조치 불필요 |
-| B 전체: 동일 크기 적층 스캔(다중 시점) | `35.crate_scan_setup.py`를 헤드리스 아님으로 실행 | 바로 재현 가능 |
+| 로봇 팔 스캔 궤적(±50도/tilt 8,28도, 9개 시점) | `partA/trajectory__verify_crate_scan_table_view_{0-8}.png` | 현재 확정 설정 그대로, 코드 변경 없음 |
+| 스캔 속도 - 빠른 버전(조기 종료) | `partA/trajectory__verify_crate_scan_table_view_*.png` (위와 동일 실행) | 9개 시점 소요 20.1초 |
+| 스캔 속도 - 느린 버전(조기 종료 비활성화) | `partA/slow__verify_crate_scan_table_view_{0-8}.png` | 9개 시점 소요 41.3초(약 2배) - `CONVERGENCE_MIN_STEPS`를 999999로 임시 변경 후 복구 |
+| Small 윗면 비스듬 - 버그 버전 | `partA/partA_skew_buggy.png`, `partA/partA_skew_buggy_box.ply` | z 편차 2.63~4.85mm(시도마다 다름) - `_cluster_plane_into_candidates()` 호출에 `up_vector` 대신 `normal` 전달 후 복구 |
+| Small 윗면 비스듬 - 수정 버전 | `partA/partA_skew_fixed.png`, `partA/partA_skew_fixed_box.ply` | z 편차 0.0000mm(완전 평평) |
 
-**중요**: 위 표에서 "이전 상태로 되돌려야 하는" 항목(±60도, 오차 8~12cm, 리셋 왕복
-동작)은 현재 코드를 임시로 수정해야 하므로, 요청 시 먼저 지금 상태를 별도로 저장해두고
-진행하겠음.
+### Part B
+| 항목 | 파일 | 비고 |
+|---|---|---|
+| 적층 박스 구조(Isaac Sim 배치 장면) | `partB/stacked_structure_layout.png` | Small(주황)이 Large(파랑) 위에 적층, Medium(초록)은 별도 |
+| XY-only 그룹핑 - 버그 버전 | `partB/partB_grouping_buggy.ply` | 박스 2개만 검출(Small 누락) - `_group_by_location()`의 Z-tolerance 조건 임시 제거 후 복구, 원래 크기 다른 적층 시나리오 캐시(`scan_cache/merged_table_scan_stacked_az50.ply`) 사용 |
+| XY-only 그룹핑 - 수정 버전 | `partB/partB_grouping_fixed.ply` | 박스 3개 정확히 검출 |
+| 유령 박스 - 버그 버전 | `partB/partB_ghost_buggy.ply` | 박스 5개(진짜 3 + 유령 2) - `CART2TRUNK_MIN_PLAUSIBLE_BOX_FOOTPRINT_SIDE_M=0.001` 환경변수만 사용(코드 변경 없음) |
+| 유령 박스 - 수정 버전 | `partB/partB_ghost_fixed.ply` | 박스 3개 정확히 검출 |
+
+### Part C
+| 항목 | 파일 | 비고 |
+|---|---|---|
+| 뚝뚝 끊기는 모습(순간이동 리셋) | `partC/choppy_reset__cartscan_view_{0-4}.png` | `set_joint_positions(_init_joints)` 순간이동 블록 임시 재삽입 후 복구 |
+| 원상태 복귀 후 스캔(부드럽지만 왕복) | `partC/roundtrip__cartscan_view_{0-4}.png` | 60스텝 보간 리셋 블록 임시 재삽입 후 복구(순간이동은 아니지만 여전히 왕복) |
+| 최종 성공 - 카트 안 박스 PLY | `partC/final_cart_boxes_success.ply`, `partC/final_cart_boxes_success.json` | Box_A 0.121×0.159(실제 0.16×0.12), Box_B 0.129×0.107(실제 0.13×0.10) |
+
+### 아직 재현 안 한 것 (요청 시 진행)
+| 상황 | 재현 방법 |
+|---|---|
+| A-3: azimuth ±60도로 IK 오차 0.17m 나던 모습 | `35.crate_scan_setup.py`의 `SCAN_AZIMUTH_DEG`를 ±60도로 임시 변경 후 실행(현재 ±50도) |
+| C-3 이전: IK 오차 8~12cm로 팔이 목표에 못 닿는 모습 | `EYE_HEIGHT_ABOVE_CART=0.75`, `LIFT_TRAVEL_M=0.45`로 되돌리고 실행(현재 0.55/0.55) |
+
+모든 임시 수정은 각각 적용 직후 재현·촬영하고 바로
+`diff backups/<파일> <실제파일>`로 원상복구를 확인한 뒤 다음 항목으로 넘어갔다 - 지금
+작업 디렉토리는 커밋 시점(`a0b631c`)과 동일한 상태다.
