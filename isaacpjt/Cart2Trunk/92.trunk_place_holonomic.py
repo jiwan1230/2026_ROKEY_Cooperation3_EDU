@@ -1625,22 +1625,38 @@ if STAGE >= 2:
     #
     # 주의 - 이 함수는 지금 실제로 "수평 통과 불가능한 큰 박스" 시나리오가 없어서(현재
     # placement_result.json의 박스는 수평 통과 가능 판정) 물리적 충돌 검증을 아직 못 했다.
-    # FORCE_TILT_TEST=1로 강제 진입시켜 코드 경로 자체는 확인할 수 있지만, tilt_deg/
-    # approach_standoff/restore_clear_margin 값은 실제 대형 박스가 생기면 그때 실측 기반으로
-    # 다시 튜닝해야 한다(이 프로젝트의 다른 모든 단계도 그렇게 완성됨).
-    def tilt_and_insert_through_entrance(entrance_x, box_height, tilt_deg=12.0, approach_standoff=None,
+    # FORCE_TILT_TEST=1로 강제 진입시켜 코드 경로 자체는 확인할 수 있지만, restore_clear_margin
+    # 값은 실제 대형 박스가 생기면 그때 실측 기반으로 다시 튜닝해야 한다(이 프로젝트의 다른
+    # 모든 단계도 그렇게 완성됨).
+    def tilt_and_insert_through_entrance(entrance_x, box_dims, tilt_deg=None, approach_standoff=None,
                                           restore_clear_margin=0.10, tilt_steps=150,
                                           drive_max_speed=0.05, tilt_standoff_safety_margin=0.05):
+        box_height = float(box_dims[2])
+        pivot_local_z = box_height / 2.0
+
+        if tilt_deg is None:
+            # 사용자 설계 문서(4차) - 고정 12도 대신, 문턱/천장을 동시에 만족하는 가장 작은
+            # 각도를 find_min_tilt_angle()로 탐색한다(2차에서 이미 만든 함수 재사용).
+            floor_ref, ceiling_ref = floor_z_at(entrance_x), ceiling_z_at(entrance_x)
+            if floor_ref is not None and ceiling_ref is not None:
+                tilt_deg = find_min_tilt_angle(box_dims, pivot_world_z=ENTRY_HOLDING_Z,
+                                                floor_clear_z=floor_ref, ceiling_clear_z=ceiling_ref)
+            if tilt_deg is None:
+                raise SystemExit(
+                    "[중단] Tilt-and-Insert: 문턱/천장을 동시에 만족하는 피치 각도를 찾지 "
+                    "못했습니다(INFEASIBLE) - 이 박스는 이 입구로 통과할 수 없습니다."
+                )
         tilt_quat = euler_angles_to_quat(np.array([0.0, np.pi - np.radians(tilt_deg), 0.0]))
 
         if approach_standoff is None:
-            # 사용자 실측 재현 - 큰 박스(0.4m)로 실제 테스트하니 TILT-2(제자리 피치 회전)에서
-            # 바로 충돌해서 err=0.06m로 실패했다. 원인: move_link6은 그리퍼(대략 박스 상단,
-            # 회전 피벗)의 world 위치를 고정한 채 orientation만 바꾸므로, 박스 하단(피벗에서
-            # box_height만큼 떨어짐)은 tilt_deg만큼 회전할 때 대략 box_height*sin(tilt_deg)
-            # 만큼 수평으로 휩쓴다 - 고정 0.15m 여유는 얇은 박스 기준이라 박스가 커지면
-            # 부족해진다(실측으로 확인된 버그). 박스 높이/회전각에서 필요 여유를 직접 계산한다.
-            approach_standoff = box_height * np.sin(np.radians(tilt_deg)) + tilt_standoff_safety_margin
+            # 사용자 실측 재현(이전 라운드) - box_height*sin(tilt_deg) 근사는 큰 박스에서
+            # 실측으로 충돌(err=0.06m)을 일으킨 버그였다. 4차: 근사 대신 실제 8개 꼭짓점을
+            # 회전시켜 얻은 정확한 수평 스윕(rotated_corner_extent, 2차에서 만든 함수 재사용)
+            # 으로 필요 여유를 계산한다.
+            sweep_x, _, _ = rotated_corner_extent(box_dims, tilt_deg, pivot_local_z)
+            approach_standoff = sweep_x + tilt_standoff_safety_margin
+            print(f"[TILT 파라미터 탐색] tilt_deg={tilt_deg} sweep_x={sweep_x:.3f} "
+                  f"approach_standoff={approach_standoff:.3f}", flush=True)
 
         def _tilt_broken():
             return not m0609_robot.gripper.is_closed()
@@ -1710,7 +1726,7 @@ if STAGE >= 2:
 
     if BOX_NEEDS_TILT:
         print("[STAGE2 경로] 박스가 커서 수평 통과 불가 - Tilt-and-Insert 경로 사용", flush=True)
-        tilt_and_insert_through_entrance(TRUNK_ENTRANCE_X, TEST_BOX_SIZE[2])
+        tilt_and_insert_through_entrance(TRUNK_ENTRANCE_X, TEST_BOX_SIZE)
         condition_met, aborted = True, False
     else:
         final_pos, final_yaw, condition_met, aborted = drive_until(
