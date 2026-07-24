@@ -1001,6 +1001,77 @@ for _x in [TRUNK_ENTRANCE_X, TRUNK_X_MIN, INTERNAL_CEILING_START_X, TRUNK_X_MAX]
     _cz, _fz = ceiling_z_at(_x), floor_z_at(_x)
     print(f"  x={_x:.3f}: ceiling_z={_cz} floor_z={_fz}", flush=True)
 
+# ================= 진입 가능성 판정 (설계 문서 2차: 6.4-6.5) =================
+# 사용자 설계 문서 - box_needs_tilt()는 "박스 높이 vs 천장-바닥 단일 차이"만 봐서, 박스의
+# X방향 길이가 진입 포켓(입구~내부천장 시작점) 길이보다 긴지는 아예 확인하지 않는다(전략
+# B가 필요한 진짜 조건 중 하나가 누락돼 있었음). 아래는 그 둘 다 보는 새 판정 함수 -
+# 지금은 옛 box_needs_tilt()와 나란히 로그만 비교하고, 실제 STAGE 2 경로 분기는 아직
+# 안 바꾼다(3~4차에서 교체 예정).
+def box_corners_local(box_dims):
+    hx, hy, hz = np.asarray(box_dims, dtype=float) / 2.0
+    return np.array([[sx * hx, sy * hy, sz * hz] for sx in (-1, 1) for sy in (-1, 1) for sz in (-1, 1)])
+
+
+def rotated_corner_extent(box_dims, pitch_deg, pivot_local_z):
+    """피벗(그리퍼 tip = 대략 박스 상단) 기준으로 pitch_deg만큼 피치 회전했을 때 8개
+    꼭짓점의 피벗-상대 world X 스윕과 최저/최고 Z를 반환한다 - box_height*sin(theta) 근사
+    대신 실제 회전으로 계산한다(설계 문서 4B-1/6.5). 박스는 그리퍼 하향(DOWN_QUAT) 자세라
+    로컬 X/Y/Z가 world X/Y/Z와 정렬돼 있다고 가정 - tilt_quat도 같은 축(월드 Y, 진행방향
+    X-Z 평면) 기준 피치 델타로 만들어져 있으므로 일관된 근사다."""
+    corners = box_corners_local(box_dims) - np.array([0.0, 0.0, pivot_local_z])
+    theta = np.radians(pitch_deg)
+    c, s = np.cos(theta), np.sin(theta)
+    rotated_x = corners[:, 0] * c + corners[:, 2] * s
+    rotated_z = -corners[:, 0] * s + corners[:, 2] * c
+    return float(rotated_x.max() - rotated_x.min()), float(rotated_z.min()), float(rotated_z.max())
+
+
+def find_min_tilt_angle(box_dims, pivot_world_z, floor_clear_z, ceiling_clear_z,
+                         tilt_deg_candidates=range(2, 31, 2), bottom_margin=0.02, top_margin=0.02):
+    """pivot_world_z(그리퍼 tip 높이)에서 회전시켰을 때, 회전된 최저점이 floor_clear_z보다
+    높고 최고점이 ceiling_clear_z보다 낮은 가장 작은 각도를 찾는다(고정 12도 대신 탐색)."""
+    pivot_local_z = float(box_dims[2]) / 2.0
+    for deg in tilt_deg_candidates:
+        _, lo_z, hi_z = rotated_corner_extent(box_dims, deg, pivot_local_z)
+        world_lo, world_hi = pivot_world_z + lo_z, pivot_world_z + hi_z
+        if world_lo >= floor_clear_z + bottom_margin and world_hi <= ceiling_clear_z - top_margin:
+            return deg
+    return None
+
+
+def classify_entry_strategy(box_dims):
+    """반환: (strategy, info) - strategy는 "HORIZONTAL_INSERT"|"TILT_AND_INSERT"|"INFEASIBLE".
+    설계 문서 6.4 - box_needs_tilt()가 놓쳤던 "박스 X길이 vs 진입포켓 길이" 조건을 추가하고,
+    Tilt 필요 시 find_min_tilt_angle()로 실제 실현 가능한 최소 각도까지 확인한다."""
+    transition_pocket_length = INTERNAL_CEILING_START_X - TRUNK_ENTRANCE_X
+    box_x_len = float(box_dims[0])
+    envelope_height = float(box_dims[2]) + GRIPPER_ARM_OVERHEAD + 2.0 * HORIZONTAL_PASS_MARGIN
+
+    openings = []
+    for x in np.arange(TRUNK_ENTRANCE_X, INTERNAL_CEILING_START_X, 0.02):
+        cz, fz = ceiling_z_at(x), floor_z_at(x)
+        if cz is not None and fz is not None:
+            openings.append(cz - fz)
+    worst_opening = min(openings) if openings else None
+
+    info = {
+        "transition_pocket_length": transition_pocket_length, "box_x_len": box_x_len,
+        "envelope_height": envelope_height, "worst_opening": worst_opening,
+    }
+    if worst_opening is not None and envelope_height <= worst_opening and box_x_len <= transition_pocket_length:
+        info["strategy"] = "HORIZONTAL_INSERT"
+        return "HORIZONTAL_INSERT", info
+
+    floor_ref, ceiling_ref = floor_z_at(TRUNK_ENTRANCE_X), ceiling_z_at(TRUNK_ENTRANCE_X)
+    angle = None
+    if floor_ref is not None and ceiling_ref is not None:
+        angle = find_min_tilt_angle(box_dims, pivot_world_z=ENTRY_HOLDING_Z,
+                                     floor_clear_z=floor_ref, ceiling_clear_z=ceiling_ref)
+    info["tilt_angle_deg"] = angle
+    info["strategy"] = "TILT_AND_INSERT" if angle is not None else "INFEASIBLE"
+    return info["strategy"], info
+
+
 print(f"\n[리프트] 도킹({LIFT_MIN:.3f}) -> 최고({LIFT_MAX:.3f})", flush=True)
 move_lift_to(LIFT_MAX, steps=120)
 
@@ -1266,6 +1337,11 @@ if os.environ.get("FORCE_TILT_TEST") == "1":
 print(f"[문턱 통과 방식 판정] 박스높이={TEST_BOX_SIZE[2]:.3f}m 필요공간={_tilt_required:.3f}m "
       f"가용공간={_tilt_available:.3f}m -> {'TILT_AND_INSERT 필요' if BOX_NEEDS_TILT else '수평 통과 가능(기존 STAGE 2/3)'}",
       flush=True)
+
+# 사용자 설계 문서(2차: 진입 가능성 판정) - 새 classify_entry_strategy()를 옛 box_needs_tilt()
+# 결과와 나란히 로그로 비교한다(아직 실제 경로 분기는 안 바꿈 - 3~4차에서 교체 예정).
+_new_strategy, _new_strategy_info = classify_entry_strategy(TEST_BOX_SIZE)
+print(f"[신규 진입전략 판정] strategy={_new_strategy} info={_new_strategy_info}", flush=True)
 
 # 사용자 지적 - 93번 진단은 "박스 자체의 수직 두께"만 필요공간으로 계산했는데, 실제로 입구를
 # 통과해야 하는 건 박스 혼자가 아니라 "박스를 아래에 매달고 있는 그리퍼 + 그 그리퍼가 붙은
