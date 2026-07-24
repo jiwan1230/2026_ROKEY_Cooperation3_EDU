@@ -102,7 +102,13 @@ M0609_RMPFLOW_CONFIG_PATH = str(M0609_DIR / "rmpflow/m0609_rmpflow_common.yaml")
 M0609_MOUNT_Z_ABOVE_CHASSIS_TOP = 0.02
 LIFT_COLUMN_RADIUS = 0.045
 # 사용자 지적: 카트+바스켓을 잘 내려다보려면 리프트를 조금 더 올려야 한다(0.35 -> 0.45).
-LIFT_TRAVEL_M = 0.45
+# [다중 시점 스캔 추가 후 실측] 원래 SCAN_EYE(EYE_HEIGHT_ABOVE_CART=0.75, tilt=30도)로
+# 계산한 link6 목표까지 필요한 3D 거리가 약 0.91m로 나왔다 - M0609(Doosan, 이름 자체가
+# 0.9m reach/6kg payload를 뜻함)의 최대 도달 거리와 거의 같거나 넘는다. 그래서 IK가
+# 350스텝을 다 써도 수렴 못 하고 8~12cm 오차로 멈췄다(물리적으로 못 닿는 거리라 스텝을
+# 늘려도 소용없음). 리프트를 더 올려서 팔 자신의 base 높이를 목표에 가깝게 만들면
+# 수직 방향 도달 거리가 줄어든다(카메라 자세 자체는 안 바뀜 - 순수하게 팔이 닿기 쉬워짐).
+LIFT_TRAVEL_M = 0.55
 
 EE_LINK_NAME = "link_6"
 GRIPPER_BODY_NAME = "vgp20_suction_plate"
@@ -115,13 +121,24 @@ DOWN_QUAT = euler_angles_to_quat(np.array([0.0, np.pi, 0.0]))
 WORLD_UP = (0.0, 0.0, 1.0)
 CAMERA_AXES = "usd"
 
+# 35.crate_scan_setup.py의 converge_to_pose()와 동일한 조기 종료(plateau) 수렴 -
+# 목표 근처에서 정체되면 남은 스텝을 다 채우지 않고 바로 멈춘다(속도 개선, 정확도는
+# 그대로 - 35.py에서 A/B 비교로 이미 검증됨).
+CONVERGENCE_CHECK_INTERVAL_STEPS = 25
+CONVERGENCE_MIN_STEPS = 75
+CONVERGENCE_PLATEAU_TOLERANCE_M = 0.001
+
 # ---- 스캔 자세 파라미터 (35.crate_scan_setup.py의 검증된 공식 그대로 재사용) ----
 # 사용자 지적 - 손목 조인트를 직접 돌리거나 사후 회전을 추가하는 방식은 전부 발산/엉뚱한
 # 방향을 봄으로 실패했다. 35.py를 보니 21도는 회전 트릭이 아니라 **eye 위치의 수평
 # 오프셋을 height*tan(21도)로 계산**해서 eye/look_at 자체의 기하학적 배치로 21도가
 # 자연히 나오게 하는 방식이었다(35.py 205-212행) - 그 공식을 그대로 가져온다.
 CART_BASKET_FLOOR_Z = 0.68
-EYE_HEIGHT_ABOVE_CART = 0.75  # 35.py의 EYE_HEIGHT_ABOVE_TABLE과 동일값
+# [다중 시점 스캔 추가 후 실측] 0.75(35.py 값 그대로 가져온 것)로는 IK 도달 거리가
+# 팔의 물리적 최대 도달 범위를 넘어서 매 시점 8~12cm 오차로 수렴 실패했다(위
+# LIFT_TRAVEL_M 주석 참고) - 0.55로 낮춰서 필요 도달 거리를 줄인다. LIFT_TRAVEL_M을
+# 같이 올린 것과 합쳐서 팔 base<->목표 거리를 충분히 줄이는 게 목표.
+EYE_HEIGHT_ABOVE_CART = 0.55
 SCAN_TILT_FROM_VERTICAL_DEG = 30.0  # 35.py의 SCAN_TILT_FROM_VERTICAL_DEG와 동일
 _scan_horizontal_offset = EYE_HEIGHT_ABOVE_CART * np.tan(np.radians(SCAN_TILT_FROM_VERTICAL_DEG))
 
@@ -691,6 +708,12 @@ if camera_prim_path is None:
 print(f"[CAMERA] 스캔에 사용할 depth 카메라: {camera_prim_path} (후보 전체: {all_cameras})", flush=True)
 camera = Camera(prim_path=camera_prim_path, resolution=(CAMERA_WIDTH, CAMERA_HEIGHT))
 camera.initialize()
+# 35.crate_scan_setup.py와 동일 - get_pointcloud()가 내부적으로 이 depth annotator에
+# 의존한다. 이걸 빼먹으면 camera.initialize()만으로는 depth 프레임이 붙지 않아서
+# get_pointcloud()가 매번 빈(1차원) 배열을 반환한다(88.py 실측 확인 - 5개 시점 전부
+# shape=(0,)로 실패했었음).
+camera.add_distance_to_image_plane_to_frame()
+camera.add_rgb_to_frame()
 step_hold(10)
 
 link6_pos0, link6_quat0 = m0609_robot.end_effector.get_world_pose()
@@ -735,20 +758,49 @@ def sync_rmp_base():
     controller.rmp_flow.set_robot_base_pose(robot_position=base_pos, robot_orientation=chassis_quat)
 
 
-def move_link6(target_pos, steps=WAYPOINT_STEPS, label="", orientation=DOWN_QUAT):
-    for i in range(steps):
+def move_link6(target_pos, steps=WAYPOINT_STEPS, label="", orientation=DOWN_QUAT,
+                early_exit=True, min_steps=CONVERGENCE_MIN_STEPS,
+                check_interval=CONVERGENCE_CHECK_INTERVAL_STEPS,
+                plateau_tolerance=CONVERGENCE_PLATEAU_TOLERANCE_M):
+    """35.crate_scan_setup.py의 converge_to_pose()와 동일한 조기 종료 로직 - 목표
+    근처에서 더 이상 움직이지 않으면(plateau) min_steps 이후부터 check_interval마다
+    확인해서 바로 멈춘다. base(섀시)가 스캔 도중 움직일 수 있으므로(88.py 고유
+    상황) sync_rmp_base()를 매 스텝 호출해 RMPflow가 항상 현재 base pose를
+    기준으로 풀게 한다."""
+    target_pos = np.array(target_pos, dtype=float)
+    last_check_pos = None
+    steps_run = 0
+    for step in range(steps):
         sync_rmp_base()
         actions = controller.forward(
-            target_end_effector_position=np.array(target_pos, dtype=float),
+            target_end_effector_position=target_pos,
             target_end_effector_orientation=orientation,
         )
         m0609_robot.apply_action(actions)
         set_lift_height(lift_state["h"])
         world.step(render=True)
+        steps_run += 1
+
+        if not early_exit:
+            continue
+        if step + 1 < min_steps:
+            continue
+        if (step + 1) % check_interval != 0:
+            continue
+        current_pos, _ = m0609_robot.end_effector.get_world_pose()
+        current_pos = np.array(current_pos)
+        if last_check_pos is not None:
+            movement = float(np.linalg.norm(current_pos - last_check_pos))
+            if movement < plateau_tolerance:
+                break
+        last_check_pos = current_pos
+
     ee_pos, _ = m0609_robot.end_effector.get_world_pose()
-    err = np.linalg.norm(np.array(ee_pos) - np.array(target_pos))
-    print(f"[웨이포인트{' ' + label if label else ''}] target={np.round(target_pos, 3)} "
+    err = np.linalg.norm(np.array(ee_pos) - target_pos)
+    print(f"[웨이포인트{' ' + label if label else ''}] {steps_run}/{steps}스텝, target={np.round(target_pos, 3)} "
           f"ee={np.round(ee_pos, 3)} err={err:.4f}m", flush=True)
+    if err > 0.05:
+        print(f"[경고]{' ' + label if label else ''} IK 수렴 오차가 5cm를 넘습니다.", flush=True)
     return ee_pos, err
 
 
@@ -784,47 +836,131 @@ snapshot(
     fname="_cartscan_01_approached.png",
 )
 
-# ================= 2. SCAN_POSE (35.crate_scan_setup.py의 검증된 공식/패턴 그대로) =================
-# 35.py 205~212행과 완전히 동일한 구성: eye는 목표(바스켓) 바로 위에서 height*tan(21도)만큼
-# 로봇 쪽으로(우리 접근축인 +X 방향으로) 수평 오프셋을 준 지점, look_at은 바스켓 바닥
-# 중심. lookat_to_link6_target()이 이 eye/look_at을 바로 link6 목표 pos+quat으로 역산하고,
-# 35.py의 converge_to_pose()처럼 웨이포인트 분할 없이 한 번에 수렴시킨다(먼 대각선 재배치가
-# 아니라 원래 이 근방에 있던 eye 근처로 가는 것이라 한 번에 가도 안정적으로 수렴함).
-SCAN_EYE = np.array([
-    cart_center_xy[0] + _scan_horizontal_offset,
-    cart_center_xy[1],
-    CART_BASKET_FLOOR_Z + EYE_HEIGHT_ABOVE_CART,
-])
-SCAN_LOOK_AT = np.array([cart_center_xy[0], cart_center_xy[1], CART_BASKET_FLOOR_Z])
+# ================= 2. 다중 시점 스캔 (베이스 strafe로 시점 다양화) =================
+# 35.crate_scan_setup.py의 테이블 스캔은 "섀시 고정 + 팔 azimuth 스윙"으로 시점을
+# 늘렸다(테이블이 넓고 평평해서 팔이 도달 범위 안에서 넓게 돌아볼 여지가 있었음).
+# 카트 바스켓은 다르다: 로봇이 도킹한 지점에서 긴 축(Y, ~0.9m)이 멀리 뻗어있는
+# 좁고 긴 형태이고, 도킹 거리 자체가 빠듯하다(STANDOFF_MARGIN=0.10m) - 팔만 크게
+# 스윙하면 카트 벽/철망에 부딪힐 위험이 있다. 대신 이 홀로노믹 베이스는 옴니휠로
+# 회전 없이 옆으로(strafe) 미끄러질 수 있다(88.py 파일 설계 의도, 사용자 확인) -
+# 팔 대신 섀시 자체를 카트의 긴 축(Y)을 따라 여러 위치로 옮기고, 각 위치에서는
+# 고정된 tilt로 아래를 보는 방식으로 시점을 다양화한다.
+#
+# 섀시가 매 시점 실제로 이동하므로(35.py는 섀시가 고정이라 base_pos/R_base를
+# 한 번만 재고 모든 시점에 그대로 썼음), 각 시점의 world 좌표 point cloud를
+# "그 시점의" base_link 기준으로 바로 변환하면 시점마다 원점이 달라져서 어긋난다.
+# 그래서 스윕 도중에는 world 좌표 그대로 누적해두고, 스윕이 끝나고 베이스가
+# 중앙(기준 위치)으로 돌아온 뒤 base_link를 딱 한 번만 측정해서 전체 누적
+# point cloud를 그 기준 프레임으로 한 번에 변환한다.
+CART_SCAN_STRAFE_Y_OFFSETS = [-0.28, -0.14, 0.0, 0.14, 0.28]
+CART_SCAN_ROI_MARGIN_M = 0.15
+CART_SCAN_ROI_MAX_HEIGHT_M = 0.40  # CART_BASKET_FLOOR_Z 위로 이만큼까지만(카트 손잡이/배경 배제)
 
-target_pos, target_quat = lookat_to_link6_target(SCAN_EYE, SCAN_LOOK_AT)
-print(f"[SCAN_POSE 목표] link6_pos={np.round(target_pos, 3)} eye={np.round(SCAN_EYE, 3)} "
-      f"look_at={np.round(SCAN_LOOK_AT, 3)}", flush=True)
-move_link6(target_pos, steps=350, label="스캔 자세 수렴", orientation=target_quat)
+OPTICAL_TO_USD_CAMERA_AXES = np.diag([1.0, -1.0, -1.0])
+
+accumulated_world_points = []
+
+for i, y_offset in enumerate(CART_SCAN_STRAFE_Y_OFFSETS):
+    strafe_y = cart_center_xy[1] + y_offset
+    drive_to(target_x=target_xy[0], target_y=strafe_y, label=f"스캔 위치 {i}(y_offset={y_offset:+.2f})")
+
+    # [설계 변경 - 사용자 지적] 원래는 매 시점마다 관절을 초기 자세로 리셋(보간
+    # 이동)한 뒤 처음부터 다시 350스텝 수렴시켰다(IK 오차가 시점을 거칠수록
+    # 누적되는 문제를 막기 위한 조치였음). 그런데 이 방식은 "카메라를 원상태로
+    # 되돌렸다가 다시 스캔 자세로 이동"하는 불필요한 왕복 동작으로 보여서
+    # 부자연스럽다는 지적을 받았다.
+    #
+    # 각 시점의 목표(target_pos/target_quat)는 "베이스 기준 상대 자세"로 보면
+    # 거의 동일하다 - look_at이 strafe_y를 그대로 따라가는 순수 평행이동 관계라,
+    # 팔의 물리적 도달 거리 문제(리프트 높이/EYE_HEIGHT 조정으로 이미 해결, 3mm
+    # 수렴)만 없었다면 애초에 관절이 시점마다 크게 바뀔 이유가 없었다. 그래서
+    # 팔을 리셋하지 않고 이전 시점에서 수렴된 자세를 그대로 이어받는다 - 베이스가
+    # strafe로 이동하는 동안 팔은 가만히 있다가, 도착 후 아주 짧게만(이미 거의
+    # 맞는 자세이므로) 미세 조정한다. 첫 시점(i==0)만 초기 자세에서 출발하므로
+    # 조금 더 긴 스텝 예산을 준다.
+    scan_eye_i = np.array([
+        cart_center_xy[0] + _scan_horizontal_offset,
+        strafe_y,
+        CART_BASKET_FLOOR_Z + EYE_HEIGHT_ABOVE_CART,
+    ])
+    scan_look_at_i = np.array([cart_center_xy[0], strafe_y, CART_BASKET_FLOOR_Z])
+    target_pos, target_quat = lookat_to_link6_target(scan_eye_i, scan_look_at_i)
+    move_steps = 350 if i == 0 else 90
+    move_link6(target_pos, steps=move_steps, label=f"스캔 위치 {i} 자세 수렴", orientation=target_quat)
+
+    # 실측 확인(중요 버그): 여기서 순수 world.step()만 20번 돌리면 set_lift_height()가
+    # 호출되지 않아서(step_hold()와 달리) M0609가 그 20스텝 동안 텔레포트로 "붙잡혀"
+    # 있지 않고 중력에 그대로 노출된다 - 독립 articulation이라 실제로 아래로 떨어지고,
+    # 그 상태에서 depth를 캡처하니 포인트클라우드가 의도한 높이보다 한참 낮게(z<0.6)
+    # 나왔다. step_hold()를 써서 계속 텔레포트로 고정한 채 렌더 파이프라인만 따라잡게 한다.
+    step_hold(20)
+    vp_util.capture_viewport_to_file(viewport, str(OUT_DIR / f"_cartscan_view_{i}.png"))
+
+    # 실측 확인: 수렴 직후 첫 호출에서 렌더 파이프라인이 아직 안 따라와 get_pointcloud()가
+    # 빈/기형(1차원) 배열을 반환하는 경우가 있었다(스캔 위치 0에서 실제로 발생 - IndexError로
+    # 스크립트 전체가 죽음). 렌더를 몇 스텝 더 돌리며 최대 3회 재시도하고, 그래도 안 되면
+    # 이 시점만 건너뛴다(전체 스캔을 죽이지 않음 - 다른 시점들로도 충분히 커버 가능).
+    pts_world_i = None
+    for retry in range(3):
+        candidate = np.asarray(camera.get_pointcloud(world_frame=True))
+        if candidate.ndim == 2 and candidate.shape[1] == 3 and len(candidate) > 0:
+            pts_world_i = candidate
+            break
+        print(f"[경고] 스캔 위치 {i}: get_pointcloud() 결과가 비정상(shape={candidate.shape}) "
+              f"-> 재시도 {retry + 1}/3", flush=True)
+        step_hold(15)
+
+    if pts_world_i is None:
+        print(f"[경고] 스캔 위치 {i}: point cloud 획득 실패 - 이 시점은 건너뜀", flush=True)
+        continue
+
+    keep = (
+        (pts_world_i[:, 0] >= cart_min[0] - CART_SCAN_ROI_MARGIN_M)
+        & (pts_world_i[:, 0] <= cart_max[0] + CART_SCAN_ROI_MARGIN_M)
+        & (pts_world_i[:, 1] >= cart_min[1] - CART_SCAN_ROI_MARGIN_M)
+        & (pts_world_i[:, 1] <= cart_max[1] + CART_SCAN_ROI_MARGIN_M)
+        # 실측 확인: CART_BASKET_FLOOR_Z(0.68)가 하드코딩된 추정값이라, 처리된
+        # point cloud에 바스켓 철망 테두리만 잡히고 바닥/박스가 전혀 안 보였다 -
+        # 진짜 바닥이 이 추정치보다 낮은 곳에 있을 가능성이 커서, 실제 위치를
+        # 알아내기 위해 하한을 훨씬 넉넉하게 낮춘다(원인 파악 후 상수 자체를 보정 예정).
+        & (pts_world_i[:, 2] >= CART_BASKET_FLOOR_Z - 0.30)
+        & (pts_world_i[:, 2] <= CART_BASKET_FLOOR_Z + CART_SCAN_ROI_MAX_HEIGHT_M)
+    )
+    pts_world_i = pts_world_i[keep]
+    accumulated_world_points.append(pts_world_i)
+    print(f"[카트 스캔 {i}] y_offset={y_offset:+.2f} world_points={len(pts_world_i)}", flush=True)
+
+# ================= 3. 기준 위치(중앙)로 복귀 + base_link 기준 변환/저장 =================
+drive_to(target_x=target_xy[0], target_y=cart_center_xy[1], label="스캔 기준 위치(중앙) 복귀")
 snapshot(
-    eye=[target_xy[0] - 0.8, target_xy[1] - 1.0, SCAN_EYE[2] + 0.3],
+    eye=[target_xy[0] - 0.8, target_xy[1] - 1.0, cart_center_xy[1] + 1.5],
     target=[cart_center_xy[0], cart_center_xy[1], 0.4],
-    fname="_cartscan_02_hover.png",
+    fname="_cartscan_02_scan_center.png",
 )
 
-ee_pos_scan, ee_quat_scan = m0609_robot.end_effector.get_world_pose()
-print(f"[SCAN_POSE 도달] ee_pos={np.round(ee_pos_scan, 4)} ee_quat={np.round(ee_quat_scan, 4)}", flush=True)
-snapshot(
-    eye=[target_xy[0] - 0.8, target_xy[1] - 1.0, SCAN_EYE[2] + 0.3],
-    target=[cart_center_xy[0], cart_center_xy[1], 0.4],
-    fname="_cartscan_03_scan_pose.png",
-)
+if not accumulated_world_points:
+    raise RuntimeError("모든 스캔 시점에서 point cloud 획득에 실패했습니다 - 카메라/렌더 파이프라인을 점검하세요.")
 
-# ================= 3. base_to_camera_transform.json 저장 + ROS2 카메라 브리지 연결 =================
-step_hold(10)
 base_pos_final, base_quat_final = base_robot.get_world_pose()
 base_pos_final = np.array(base_pos_final) + np.array([0.0, 0.0, lift_state["h"]])
+R_base = quat_wxyz_to_matrix(np.array(base_quat_final))
+
+merged_world_points = np.vstack(accumulated_world_points)
+merged_base_points = (R_base.T @ (merged_world_points - base_pos_final).T).T.astype(np.float32)
+
+scan_cache_path = PERCEPTION_DIR / "scan_cache" / "merged_cart_scan.npy"
+scan_cache_path.parent.mkdir(parents=True, exist_ok=True)
+np.save(scan_cache_path, merged_base_points)
+print(f"[카트 스캔] {len(CART_SCAN_STRAFE_Y_OFFSETS)}개 시점 누적, 총 {len(merged_base_points)}포인트 "
+      f"-> {scan_cache_path}", flush=True)
+
+# ================= 4. base_to_camera_transform.json 저장 + ROS2 카메라 브리지 연결 =================
+# (레거시 단일 프레임 경로용 - box_top_extractor.py가 그대로 읽을 수 있도록 유지.
+# 새 다중 시점 파이프라인은 위에서 저장한 merged_cart_scan.npy를
+# perception/run_scan_batch.py로 직접 처리하므로 이 섹션과 무관하게 동작한다.)
+step_hold(10)
 cam_pos_final, cam_quat_final = camera.get_world_pose(camera_axes=CAMERA_AXES)
 R_cam_final = quat_wxyz_to_matrix(np.array(cam_quat_final))
-
-# 32.py와 동일 보정 - optical(+Y down,+Z forward) <-> USD 카메라 축(+Y up,-Z forward)
-OPTICAL_TO_USD_CAMERA_AXES = np.diag([1.0, -1.0, -1.0])
-R_base = quat_wxyz_to_matrix(np.array(base_quat_final))
 R_base_to_cam = R_base.T @ R_cam_final @ OPTICAL_TO_USD_CAMERA_AXES
 t_base_to_cam = R_base.T @ (np.array(cam_pos_final) - base_pos_final)
 
@@ -833,8 +969,9 @@ transform_payload = {
     "R": R_base_to_cam.tolist(),
     "t": t_base_to_cam.tolist(),
     "note": (
-        "88.cart_scan_holonomic.py가 만든 고정 카트 스캔 자세(SCAN_POSE, eye/look_at 기하학적 "
-        f"{SCAN_TILT_FROM_VERTICAL_DEG}deg 틸트) 전용. 팔이 이 자세를 벗어나면 무효 - 재측정 필요."
+        "88.cart_scan_holonomic.py가 만든 스캔 기준(중앙) 자세 전용(레거시 단일 프레임 경로용). "
+        "팔/베이스가 이 자세를 벗어나면 무효 - 재측정 필요. 다중 시점 파이프라인은 "
+        "scan_cache/merged_cart_scan.npy를 직접 쓴다."
     ),
     "measured_base_pos": base_pos_final.tolist(),
     "measured_base_quat": np.asarray(base_quat_final).tolist(),
@@ -868,13 +1005,14 @@ try:
 except Exception as e:
     print(f"[경고] 카메라 시점 저장 실패: {e}", flush=True)
 
-print("\n[안내] SCAN_POSE 고정 완료. 다음 단계:", flush=True)
-print("  1) 별도 터미널에서:", flush=True)
-print("       source /opt/ros/humble/setup.bash", flush=True)
+print("\n[안내] 다중 시점 카트 스캔 완료. 다음 단계:", flush=True)
+print("  1) 별도 터미널에서 (perception venv, ROS2 불필요):", flush=True)
 print("       source perception/.venv/bin/activate", flush=True)
-print("       python3 perception/box_top_extractor.py", flush=True)
-print("  2) 화면에서 카트+박스가 잘 보이면 S키로 저장, Q로 종료.", flush=True)
-print(f"  3) 결과는 ~/box_pointcloud/all_boxes_corners_*.json 에 저장됨", flush=True)
+print("       cd perception", flush=True)
+print(f"       python3 run_scan_batch.py --input {scan_cache_path} --marker <marker_path>", flush=True)
+print(f"  2) 결과는 ~/box_pointcloud/all_boxes_corners_*.json, all_boxes_completed_*.ply 에 저장됨", flush=True)
+print("  (레거시: 라이브 단일 프레임이 필요하면 box_top_extractor.py를 별도 venv에서 실행 - "
+      "위 base_to_camera_transform.json이 이 스크립트가 남긴 중앙 자세 기준)", flush=True)
 print("     (다음 단계 스크립트에서 box_scan.json 스키마로 변환 예정 - 계획 파일 참고)\n", flush=True)
 
 if HEADLESS:
