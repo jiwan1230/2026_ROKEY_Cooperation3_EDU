@@ -501,6 +501,7 @@ def select_support_candidate(
     min_boundary_ray_hits: int = MIN_BOUNDARY_RAY_HITS,
     support_min_area_ratio: Optional[float] = None,
     max_support_area_ratio: Optional[float] = None,
+    allow_plane_only_fallback: bool = False,
     debug: bool = False,
     debug_log: DebugLog = None,
 ) -> Optional[PlaneClusterCandidate]:
@@ -518,12 +519,30 @@ def select_support_candidate(
     그걸 정상적인 박스 지지면(support_type="box_top")으로 잘못 채택해버려서 실제로는
     "바닥까지 내려간" 것인데 라벨만 정상처럼 보이는 문제가 있었다. 진짜 박스 위에
     놓인 물체라면 지지면 크기가 top과 비슷한 자릿수여야 한다는 물리적 사실을 이용해
-    테이블처럼 압도적으로 큰 평면을 미리 걸러낸다."""
+    테이블처럼 압도적으로 큰 평면을 미리 걸러낸다.
+
+    allow_plane_only_fallback(기본 False, 하위호환 유지 - live 단일 시점 경로/
+    box_top_extractor.py는 이 인자를 안 넘기므로 기존 동작 그대로)이 True일 때만:
+    엄격한 검사(hit_count >= min_boundary_ray_hits, "그 지점에 실제 관측 포인트가
+    있어야 함")를 통과하는 후보가 하나도 없으면, 이 포인트 근접 조건만 뺀 나머지
+    (법선 정렬/거리 범위/편차/면적비) 기하 조건은 그대로 만족하는 후보들로 2차
+    후보군을 다시 만들어 그중 최선을 대신 채택한다. 실측 확인(88.cart_scan_holonomic.py
+    다중 시점 적층 시나리오): 한 박스(Large) 위에 다른 박스 2개(Medium/Small)가
+    나란히 얹혀 서로 다른 영역을 가리면, Medium 바로 밑처럼 카메라가 원천적으로
+    못 본 자리는 Large의 관측 포인트가 존재하지 않는다 - Large 자체는 다른 부분
+    (가려지지 않은 앞쪽)에서 이미 확실한 박스 윗면으로 검출됐는데도, 이 특정
+    top 아래쪽만 놓고 보면 "포인트가 없다"는 이유로 엄격한 검사가 실패해서 진짜
+    바닥까지 뚫고 내려간 것으로 잘못 복원됐다(실측: 높이 0.11m여야 할 박스가
+    0.21m로 나옴). 여러 박스가 하나의 큰 아래 박스를 나눠서 가리는 배치라면 이
+    시나리오에 국한되지 않고 재현되는 일반적인 문제라, live 경로에는 아직 없는
+    검증(오프라인 다중 시점 배치에서만 우선 적용 - 시점을 여러 번 합쳐 이미
+    노이즈에 강하다는 전제가 있어야 안전하다)으로 분리해 켠다."""
     top_corners = order_rectangle_corners(top.corners_3d.copy())
     down_direction = _normalize(down_direction)
     top_area = top.width * top.height
 
     ranked = []
+    plane_only_ranked = []
     for candidate in candidates:
         if candidate.candidate_id == top.candidate_id:
             continue
@@ -556,6 +575,8 @@ def select_support_candidate(
         if spread > max_ray_distance_spread_m:
             continue
 
+        plane_only_ranked.append((median_distance, spread, candidate))
+
         intersections = top_corners + ray_distances[:, None] * down_direction[None, :]
         candidate_points = np.asarray(candidate.points, dtype=np.float64)
         if len(candidate_points) == 0:
@@ -571,6 +592,17 @@ def select_support_candidate(
             continue
 
         ranked.append((median_distance, -hit_count, spread, float(np.min(nearest_distances)), candidate))
+
+    if not ranked and allow_plane_only_fallback and plane_only_ranked:
+        plane_only_ranked.sort(key=lambda item: (item[0], item[1]))
+        best = plane_only_ranked[0]
+        if debug and debug_log:
+            debug_log(
+                f"[DEBUG box_top support] top={top.candidate_id}: 엄격한 포인트 근접 검사를 "
+                f"통과한 후보가 없음(가려진 영역으로 추정) -> 평면 방정식만으로 candidate="
+                f"{best[2].candidate_id} (median_distance={best[0]:.3f}) 채택"
+            )
+        return best[2]
 
     if not ranked:
         if debug and debug_log:

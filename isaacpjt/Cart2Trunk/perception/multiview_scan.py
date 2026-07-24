@@ -99,6 +99,26 @@ DEDUP_OVERLAP_RATIO_MIN = float(os.environ.get("CART2TRUNK_DEDUP_OVERLAP_RATIO_M
 # (~13~20배)보다는 훨씬 작게 잡는다.
 MAX_SUPPORT_AREA_RATIO = float(os.environ.get("CART2TRUNK_MAX_SUPPORT_AREA_RATIO", "6.0"))
 
+# 같은 그룹(같은 물리적 박스) 안에서 시도별로 지지면 탐색이 갈릴 때, "바닥까지
+# 뚫고 내려간" 오검출을 걸러내는 상한 - 이 데모의 가장 큰 박스(Large) 높이(0.12m)
+# 보다는 넉넉하게, 실측된 오검출 높이(카트 바닥까지, ~0.17~0.21m)보다는 확실히
+# 작게 잡는다. detect_boxes_in_base_frame()의 그룹별 최선 선택에서 사용.
+STACKED_HEIGHT_PLAUSIBILITY_CEILING_M = float(
+    os.environ.get("CART2TRUNK_STACKED_HEIGHT_PLAUSIBILITY_CEILING_M", "0.16")
+)
+
+# 88.cart_scan_holonomic.py 적층 시나리오(Large 위에 Medium+Small)에서 실측 확인:
+# MAX_SUPPORT_AREA_RATIO를 넉넉히 늘려도, 카트 바닥 자체가 (좁게 크롭된 뒤에도) 위를
+# 향한 평면으로 잡히면서 우연히 top 면적 대비 배수 조건을 통과하는 경우가 있었다 -
+# 이때 select_support_candidate가 순위를 "median_distance 오름차순"으로 매기므로
+# 정상이라면 더 가까운 Large가 이겨야 하는데, SUPPORT_SIZE_PREFERENCE_RATIO(관측
+# 점 수 기준 tier)에서 바닥 조각이 Large와 같은 tier로 묶이면 그 안에서 우연히
+# 순위가 뒤집힐 수 있다(실측: Medium 높이가 0.11m가 아니라 바닥까지 뚫린 0.21m로
+# 복원됨). 실제 적층에서 지지면은 top 바로 아래(대략 top 박스 높이 이내)에 있어야
+# 한다는 물리적 사실로 바닥 후보를 아예 배제한다 - 이 데모의 가장 큰 박스(Large)
+# 높이(0.12m)보다는 넉넉하게, 카트 바닥까지의 실제 거리(~0.21m)보다는 확실히 작게.
+MAX_SUPPORT_RAY_DISTANCE_M = float(os.environ.get("CART2TRUNK_MAX_SUPPORT_RAY_DISTANCE_M", str(bg.MAX_RAY_DISTANCE_M)))
+
 
 def _debug_log(message: str) -> None:
     print(message, flush=True)
@@ -138,12 +158,18 @@ def _detect_boxes_once(scene_pcd, debug: bool = False) -> list[dict]:
 
     boxes = []
     for top_candidate in ordered_candidates:
+        # allow_plane_only_fallback=True: 여러 다중 시점 배치를 이미 노이즈 저항성
+        # 있게 합친 이 오프라인 경로에서만 켠다 - box_top_extractor.py 등 live
+        # 단일 시점 경로(box_geometry.select_support_candidate의 다른 모든 호출부)는
+        # 이 인자를 넘기지 않아 기존 엄격한 동작 그대로 유지된다.
         support = bg.select_support_candidate(
             top_candidate,
             candidates,
             DOWN_VECTOR,
             support_min_area_ratio=bg.SUPPORT_MIN_AREA_RATIO,
             max_support_area_ratio=MAX_SUPPORT_AREA_RATIO,
+            max_ray_distance_m=MAX_SUPPORT_RAY_DISTANCE_M,
+            allow_plane_only_fallback=True,
             debug=debug,
             debug_log=_debug_log,
         )
@@ -319,7 +345,23 @@ def _split_hidden_same_size_stacks(
     노이즈/유령일 가능성이 높은 후보 위에 또 다른 유령 후보를 만들어 오탐을 배가시킬
     수 있다(실측 확인: fill_ratio=0.716, 12번 중 6번만 나타난 후보에서 실제로
     발생) - 그래서 이미 충분히 신뢰할 만한(fill_ratio가 높은) top 후보에만 이
-    탐색을 적용한다."""
+    탐색을 적용한다.
+
+    [88.cart_scan_holonomic.py 적층 시나리오에서 실측으로 찾은 치명적 버그] 이
+    함수는 원래 "select_support_candidate가 지지면을 못 찾아 floor로 떨어진"
+    박스만 대상으로 삼을 셈이었는데, 실제로는 support_type을 전혀 안 보고
+    fill_ratio만으로 모든 선택된 박스에 적용되고 있었다 - 그래서 이미
+    select_support_candidate(+allow_plane_only_fallback)가 Large를 정확히
+    지지면으로 찾아서 올바른 corners(높이 0.09m)를 갖고 있던 Medium도 여기서
+    다시 find_stacked_layers()로 "혹시 안 보이는 데 또 있나" 재탐색을 당했다.
+    find_stacked_layers()는 detect_floor_boundary()의 재귀 호출인데, 이건
+    select_support_candidate와 별개의(더 약한) 탐색이라 같은 가려짐 문제에
+    걸려 카트 바닥까지 내려갔고, 그 결과로 corners가 통째로 덮어써져서(실측:
+    0.09m -> 0.21m) 앞서 제대로 찾은 결과가 조용히 사라졌다. 이 함수의 진짜
+    목적(윗박스가 아랫박스를 완전히 가려서 독립 후보 자체가 안 잡히는 경우)에
+    맞게, support_type이 이미 "box_top"(다른 박스를 지지면으로 정상적으로
+    찾음)인 박스는 건드리지 않는다 - "floor"로 떨어진(=진짜 지지 박스를 못
+    찾은) 박스에만 이 재탐색을 적용한다."""
     processed_points = np.asarray(scene_pcd.points)
     result = list(boxes)
     next_synthetic_id = -1
@@ -327,6 +369,8 @@ def _split_hidden_same_size_stacks(
     for box in list(boxes):
         top_candidate = box["top"]
         if top_candidate.fill_ratio < MIN_TRUSTED_FILL_RATIO_FOR_HIDDEN_SEARCH:
+            continue
+        if box["support_type"] != "floor":
             continue
 
         depths = bg.find_stacked_layers(
@@ -461,7 +505,24 @@ def detect_boxes_in_base_frame(
         print("[multiview_scan] 전처리 후 point가 너무 적습니다 - 검출 생략", flush=True)
         return []
 
-    all_trial_boxes = [_detect_boxes_once(scene_pcd, debug=debug) for _ in range(trials)]
+    # 실측 확인(88.cart_scan_holonomic.py 적층 시나리오): Open3D의 segment_plane()은
+    # "시드 고정 없음"이라고 알려져 있지만, 프로세스 시작 시 초기화된 전역 RNG
+    # 상태(o3d.utility.random)를 그대로 이어 쓰기 때문에 한 프로세스 안에서 반복
+    # 호출한 24번의 trial이 서로 강하게 상관돼 있었다 - 실제로 한 번의 run_scan_batch.py
+    # 실행 안에서는 24번 다 좋은 결과(또는 24번 다 나쁜 결과)가 몰리고, 다른 실행에서는
+    # 정반대로 몰리는 극단적인 편차가 관찰됐다(하나의 실행 안에서 다양성이 없으면,
+    # trials/min_appearance_fraction으로 "우연히 걸린 조각" 노이즈를 걸러내려는 설계
+    # 의도 자체가 무력화된다). 매 trial 시작 전에 OS 엔트로피로 전역 시드를 다시 심어서
+    # trial마다 독립적인 RANSAC 샘플링이 되게 한다.
+    all_trial_boxes = []
+    for _ in range(trials):
+        # o3d.utility.random.seed()는 부호 있는 32비트 int만 받는다 - os.urandom(4)를
+        # 부호 없는 정수로 그대로 넘기면 절반 확률로 int32 최댓값(2**31-1)을 넘어서
+        # "incompatible function arguments" 예외로 죽는다(실측 확인: 그래서 여러 번의
+        # "성공한 것처럼 보인" 재현이 사실은 매번 크래시해서 새로 저장을 못 하고
+        # 이전 결과 파일을 계속 읽고 있었을 뿐이었다).
+        o3d.utility.random.seed(int.from_bytes(os.urandom(4), "little") % (2**31 - 1))
+        all_trial_boxes.append(_detect_boxes_once(scene_pcd, debug=debug))
     trial_counts = [len(b) for b in all_trial_boxes]
     print(
         f"[multiview_scan] 검출 {trials}회 반복, 시도별 박스 개수={trial_counts}",
@@ -487,7 +548,28 @@ def detect_boxes_in_base_frame(
                 flush=True,
             )
             continue
-        best = max(items, key=lambda b: (b["top"].fill_ratio, len(b["top"].points)))
+        # 실측 확인(88.cart_scan_holonomic.py 적층 시나리오): fill_ratio는 "윗면
+        # 사각형이 얼마나 잘 채워졌는가"만 볼 뿐 "아래쪽 지지면을 제대로 찾았는가"와는
+        # 무관하다 - 같은 물리적 박스라도 시도(trial)마다 지지면 탐색 결과가 갈릴 수
+        # 있어서(가려진 영역이라 어떤 시도는 진짜 지지 박스를 찾고 어떤 시도는 바닥까지
+        # 뚫고 내려간다), fill_ratio만 보고 고르면 우연히 fill_ratio가 더 높았던
+        # "잘못 떨어진" 인스턴스가 선택되어 박스 높이가 실제보다 훨씬 크게(예: 0.11m여야
+        # 할 게 0.21m) 복원되는 사례가 있었다. 처음엔 support_type=="box_top"을
+        # 우선하려 했지만, allow_plane_only_fallback도 "다른 top 후보"에 매칭되면
+        # 똑같이 "box_top"으로 표시되므로(그 다른 후보가 진짜 지지 박스가 아니라
+        # 우연히 위를 향한 바닥 조각이어도 구분 못 함) 신뢰할 수 없었다 - 대신 "바닥까지
+        # 뚫고 내려간 오검출은 항상 높이를 실제보다 부풀리기만 한다(줄이는 방향으로는
+        # 절대 안 틀림)"는 물리적 사실을 직접 이용한다: 같은 그룹 안에서 완성된 박스
+        # 높이가 STACKED_HEIGHT_PLAUSIBILITY_CEILING_M 이내인 인스턴스를 우선하고,
+        # 그 안에서 fill_ratio로 타이브레이크한다(전부 이 상한을 넘으면 어쩔 수 없이
+        # 기존처럼 fill_ratio 1위를 그대로 씀).
+        def _box_height_m(b: dict) -> float:
+            zs = b["corners"][:, 2]
+            return float(zs.max() - zs.min())
+
+        plausible = [b for b in items if _box_height_m(b) <= STACKED_HEIGHT_PLAUSIBILITY_CEILING_M]
+        pool = plausible if plausible else items
+        best = max(pool, key=lambda b: (b["top"].fill_ratio, len(b["top"].points)))
         narrower_side = min(float(best["top"].width), float(best["top"].height))
         wider_side = max(float(best["top"].width), float(best["top"].height))
         if narrower_side < MIN_PLAUSIBLE_BOX_FOOTPRINT_SIDE_M:

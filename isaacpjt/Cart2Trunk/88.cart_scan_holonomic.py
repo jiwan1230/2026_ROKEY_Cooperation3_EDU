@@ -528,31 +528,83 @@ cart_half_x = (cart_max[0] - cart_min[0]) / 2.0
 cart_half_y = (cart_max[1] - cart_min[1]) / 2.0
 print(f"[카트 bbox] min={cart_min} max={cart_max} center_xy={cart_center_xy} half_x={cart_half_x:.3f}", flush=True)
 
-# ---- 카트 안에 박스 2개 배치 (84.py와 동일 패턴) - 우선 실제 비전 검증용으로 2개만 ----
+# ---- 카트 안에 적층 박스 3개 배치 (84.py의 단순 낙하 패턴 + 35.py의 "같은 높이차 유지"
+# 낙하 트릭을 결합) ----
+# 시나리오: 큰 박스(Large)가 바닥에 깔리고, 그 위에 중간(Medium)+작은(Small) 박스가
+# Large의 윗면에 나란히(서로 위아래로 쌓이지 않고) 올라간 구조. "위 박스는 항상 아래
+# 박스보다 작다"는 전제는 지키되(Medium/Small on Large, Small on Medium은 아님),
+# 한 박스 위에 2개가 동시에 얹힌 형태를 인식해야 하는 케이스.
+# world.reset()이 아직 호출되기 전(587행)이라 이 시점의 world.step()은 물리 타임라인을
+# 진행시키지 않는다 - 그래서 아래 spawn_z 계산은 "낙하 후 정착 높이"가 아니라
+# "spawn 시점 기준 상대 높이차"다. Medium/Small의 spawn_z를 (Large spawn_z + Large
+# 높이 + margin)으로 잡으면, world.reset() 이후 셋 다 같은 중력으로 동시에 떨어지기
+# 시작해도 이 높이차가 낙하 내내 유지되다가 Large가 먼저 바닥에 닿아 멈추면 Medium/
+# Small은 남은 差만큼만 더 떨어져 그 위에 안착한다(35.crate_scan_setup.py의
+# STACK_TOP_NAME 낙하와 동일 원리, perception/SAME_SIZE_STACK_DETECTION_LOG.md 참고).
 box_material = PhysicsMaterial(
     prim_path="/World/Physics_Materials/box_material",
     static_friction=1.2, dynamic_friction=1.0, restitution=0.0,
 )
+CART_STACK_BASE_NAME = "Large"
+# Medium/Small을 Large 중심(dy=0)에 두면 Large 윗면 전체를 거의 다 덮어버려서, 남는
+# 노출부가 가장자리의 가는 조각(폭 <2cm)들뿐이 된다 - RANSAC 사각형 후보로 인식되기엔
+# 너무 얇아 MIN_BOX_SIDE_M(0.04m) 필터에 전부 걸려 Large 자체가 통째로 검출 실패한다
+# (실측 확인: 검출 0개). Medium/Small을 Large 뒤쪽(+Y) 절반에만 나란히 놓아서, 앞쪽
+# 절반(약 0.28x0.10m)을 아무것도 안 덮인 하나의 깨끗한 직사각형으로 남긴다.
+# 실측 확인(2차): 위처럼 앞쪽을 비워서 Large는 검출됐지만, Medium/Small 사이 간격이
+# 2cm(<DBSCAN_EPS_M=2.5cm)였고 높이차도 2cm(0.09 vs 0.07, PLANE_DISTANCE_THRESHOLD_M
+# =1cm와 비슷한 수준)라 RANSAC이 둘을 하나의 "타협 평면"으로 묶어서 fill_ratio가
+# 0.55~0.98로 요동치는 불안정한 병합 후보 1개로만 나왔다. 간격을 4cm(DBSCAN eps보다
+# 확실히 넓게)로 벌리고, 높이차도 4cm(Small을 0.07->0.05로 낮춤, 평면 거리 임계값보다
+# 확실히 크게)로 벌려서 RANSAC/DBSCAN이 둘을 독립된 평면·클러스터로 분리하게 한다.
+# 실측 확인(3차): XY 크롭(위 CART_SCAN_ROI_HALF_X/Y_M)으로 카트 벽 노이즈를 없애자
+# Large/Medium/Small 모두 자체적으로는 안정적으로 검출됐지만, Small의 검출 높이가
+# Large 윗면(노출 앞쪽 절반)에서 겨우 0.047m(=Small 자신의 높이 0.05m) 위였는데
+# 이게 DEDUP_OVERLAP_Z_TOLERANCE_M(0.05m, multiview_scan.py)보다 작아서
+# _dedup_overlapping_footprints()가 "Small은 사실 Large와 같은 높이에서 나온 다른
+# 조각"으로 잘못 판단해(Small 중심이 Large의 큰 사각형 범위 안에 들어가 있어서 AABB가
+# 겹침) 제거해버렸다 - 진짜 적층인데 오탐으로 지워진 것. DEDUP_OVERLAP_Z_TOLERANCE_M은
+# 다른 시나리오(RANSAC이 같은 평면을 여러 조각으로 쪼개는 문제)를 잡기 위한 범용
+# 값이라 여기서 낮추지 않고, 대신 Small의 높이를 0.05->0.07로 올려 Large와의 높이차를
+# 그 임계값보다 확실히 크게(0.07>0.05) 벌린다. Medium도 0.09->0.11로 같이 올려서
+# Medium-Small 간 높이차(RANSAC 평면 분리에 필요, 2차에서 확인한 원인)를 0.04m로
+# 유지한다(Medium은 Large의 0.12보다는 작아야 하므로 0.11까지만).
 CART_BOX_SPECS = [
-    ("Box_A", (0.16, 0.12, 0.11), (0.0, -cart_half_y * 0.35)),
-    ("Box_B", (0.13, 0.10, 0.09), (0.0, cart_half_y * 0.35)),
+    # (name, size(x,y,z), Large 중심 기준 offset(dx,dy), mass_kg)
+    ("Large", (0.30, 0.22, 0.12), (0.0, 0.0), 1.2),
+    ("Medium", (0.13, 0.10, 0.11), (-0.075, 0.045), 0.6),
+    ("Small", (0.11, 0.09, 0.07), (0.085, 0.045), 0.3),
 ]
 CART_BOX_DROP_HEIGHT_ABOVE_FLOOR = 0.10
-for name, size, (dx, dy) in CART_BOX_SPECS:
+_CART_STACK_TOP_SPAWN_MARGIN_M = 0.05
+_cart_large_size = next(size for name, size, _off, _m in CART_BOX_SPECS if name == CART_STACK_BASE_NAME)
+_cart_large_spawn_z = CART_BASKET_FLOOR_Z + CART_BOX_DROP_HEIGHT_ABOVE_FLOOR
+for name, size, (dx, dy), mass_kg in CART_BOX_SPECS:
+    if name == CART_STACK_BASE_NAME:
+        spawn_z = _cart_large_spawn_z
+    else:
+        spawn_z = (
+            _cart_large_spawn_z
+            + _cart_large_size[2] / 2.0
+            + size[2] / 2.0
+            + _CART_STACK_TOP_SPAWN_MARGIN_M
+        )
     DynamicCuboid(
-        prim_path=f"/World/{name}",
+        prim_path=f"/World/Box_{name}",
         name=name.lower(),
         position=np.array([
             cart_center_xy[0] + dx,
             cart_center_xy[1] + dy,
-            CART_BASKET_FLOOR_Z + CART_BOX_DROP_HEIGHT_ABOVE_FLOOR,
+            spawn_z,
         ]),
         scale=np.array(size),
         color=np.array([0.85, 0.55, 0.15]),
-        mass=0.3,
+        mass=mass_kg,
         physics_material=box_material,
     )
-print(f"[박스 배치] 카트 안에 {len(CART_BOX_SPECS)}개 낙하 예정: {[s[0] for s in CART_BOX_SPECS]}", flush=True)
+print(f"[박스 배치] 카트 안에 적층 구조 {len(CART_BOX_SPECS)}개 낙하 예정 "
+      f"(바닥={CART_STACK_BASE_NAME}, 그 위에 Medium+Small 나란히): "
+      f"{[s[0] for s in CART_BOX_SPECS]}", flush=True)
 
 STANDOFF_X = CHASSIS_HALF_WIDTH_EFFECTIVE + cart_half_x + STANDOFF_MARGIN
 print(f"[STANDOFF] {CHASSIS_HALF_WIDTH_EFFECTIVE:.3f}(섀시 반폭) + {cart_half_x:.3f}(카트 반폭) + "
@@ -853,8 +905,21 @@ snapshot(
 # 중앙(기준 위치)으로 돌아온 뒤 base_link를 딱 한 번만 측정해서 전체 누적
 # point cloud를 그 기준 프레임으로 한 번에 변환한다.
 CART_SCAN_STRAFE_Y_OFFSETS = [-0.28, -0.14, 0.0, 0.14, 0.28]
-CART_SCAN_ROI_MARGIN_M = 0.15
 CART_SCAN_ROI_MAX_HEIGHT_M = 0.40  # CART_BASKET_FLOOR_Z 위로 이만큼까지만(카트 손잡이/배경 배제)
+# 적층 시나리오 실측 확인(중요 버그): 기존 XY 크롭은 cart_min/max(카트 바깥쪽 bbox,
+# 철망 벽/테두리까지 포함)에 마진을 "바깥쪽으로" 더한 범위라 카트
+# 벽/테두리 자체가 통째로 point cloud에 들어왔다. 이 벽 평면(포인트 수천~9천개, 거의
+# 수직이라 up_alignment는 낮지만)이 RANSAC segment_plane()의 앞쪽 반복(가장 인라이어가
+# 많은 평면부터 순서대로 제거)을 먼저 차지해버려서, Medium/Small처럼 노출 면적이 작고
+# 옆에서(strafe 스캔) 봐서 옆면과 살짝 섞인 박스 윗면은 검출 시도마다 정상적으로
+# 분리되지 못했다(같은 물리적 위치에서도 시도마다 다른 조각이 나와 그룹핑 3회 미만으로
+# 노이즈 처리됨 - 실측: 12회 중 1~2회만 관측). 카트 중심 기준 실제 박스 적재 영역
+# (Large 최대 반폭 0.15m, Medium/Small 최대 오프셋+반폭 0.155m)보다 넉넉하되 카트
+# 벽(cart_half_x=0.300, cart_half_y=0.448)보다는 확실히 안쪽인 반경으로 크롭하면
+# 벽이 아예 안 들어와서 문제가 사라진다(오프라인 재현으로 확인: 5회 연속 시도 중
+# 4~5회 Medium/Small 모두 fill_ratio 0.95+ 로 안정적으로 검출).
+CART_SCAN_ROI_HALF_X_M = 0.22
+CART_SCAN_ROI_HALF_Y_M = 0.22
 
 OPTICAL_TO_USD_CAMERA_AXES = np.diag([1.0, -1.0, -1.0])
 
@@ -915,10 +980,10 @@ for i, y_offset in enumerate(CART_SCAN_STRAFE_Y_OFFSETS):
         continue
 
     keep = (
-        (pts_world_i[:, 0] >= cart_min[0] - CART_SCAN_ROI_MARGIN_M)
-        & (pts_world_i[:, 0] <= cart_max[0] + CART_SCAN_ROI_MARGIN_M)
-        & (pts_world_i[:, 1] >= cart_min[1] - CART_SCAN_ROI_MARGIN_M)
-        & (pts_world_i[:, 1] <= cart_max[1] + CART_SCAN_ROI_MARGIN_M)
+        (pts_world_i[:, 0] >= cart_center_xy[0] - CART_SCAN_ROI_HALF_X_M)
+        & (pts_world_i[:, 0] <= cart_center_xy[0] + CART_SCAN_ROI_HALF_X_M)
+        & (pts_world_i[:, 1] >= cart_center_xy[1] - CART_SCAN_ROI_HALF_Y_M)
+        & (pts_world_i[:, 1] <= cart_center_xy[1] + CART_SCAN_ROI_HALF_Y_M)
         # 실측 확인: CART_BASKET_FLOOR_Z(0.68)가 하드코딩된 추정값이라, 처리된
         # point cloud에 바스켓 철망 테두리만 잡히고 바닥/박스가 전혀 안 보였다 -
         # 진짜 바닥이 이 추정치보다 낮은 곳에 있을 가능성이 커서, 실제 위치를
