@@ -562,11 +562,13 @@ print(f"[STAGE 1.1 사전계산] ENTRY_HOLDING_Z={ENTRY_HOLDING_Z:.3f} "
 # 원리로 해결: 리프트로 마운트 자체를 목표 높이 가까이 올리면 팔은 작은 나머지 거리만
 # 커버하면 되어 자세가 컴팩트하게 유지된다). 이 시점(STAGE 3 마지막 PLACE 하강)에는 섀시가
 # 이미 차체 밑이 아니라 트렁크 입구/안쪽에 있으므로, under-car 캡(LIFT_MAX) 대신 트렁크
-# 천장 안전한계(SAFE_TRANSIT_Z)까지 리프트를 더 올려도 된다. release_z 바로 아래(0.05m
-# 남짓)까지만 마운트를 올려서 팔이 감당할 나머지 하강량을 최소화한다.
-PLACE_LIFT_MAX = min(place_release_z - 0.05, SAFE_TRANSIT_Z - 0.05)
+# 천장 안전한계(SAFE_TRANSIT_Z)까지 리프트를 더 올려도 된다.
+# 사용자 실측(재검토) - release_z-0.05(≈0.53) 기준으로 STAGE 3을 돌려보니 효과는 확인됐지만
+# 조금 더 올려도 여유가 있어 보였다 - 0.65로 상향(마운트가 release_z보다 살짝 높아져 팔이
+# 아주 약간만 아래로 향하면 되는 상태, 여전히 천장 안전한계 이내).
+PLACE_LIFT_MAX = min(0.65, SAFE_TRANSIT_Z - 0.05)
 print(f"[PLACE 하강용 리프트 상한] PLACE_LIFT_MAX={PLACE_LIFT_MAX:.3f} "
-      f"(release_z-0.05, 천장한계 {SAFE_TRANSIT_Z:.3f} 이내로 클램프)", flush=True)
+      f"(천장한계 {SAFE_TRANSIT_Z:.3f} 이내로 클램프)", flush=True)
 
 
 # ================= 씬 구성 =================
