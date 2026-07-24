@@ -1414,10 +1414,20 @@ def measure_carry_envelope():
 def evaluate_pose_clearance():
     """설계 문서 6.3 - 지금 자세가 문턱/천장 대비 얼마나 여유 있는지 실측해서 반환한다.
     ceiling_z_at/floor_z_at은 라이브 raycast라 x=3.125 같은 매직넘버 없이 그 시점 실제
-    형상을 그대로 반영한다."""
+    형상을 그대로 반영한다.
+
+    사용자 지적(STAGE 3 실측 재현으로 발견된 버그) - 원래 floor_z_at()을 env["rear_x"](박스
+    + 그리퍼 + link_6 + 전완 전체 포락선의 가장 뒤쪽)에 쐈는데, 전완(link_4/5)이 박스보다
+    훨씬 뒤(섀시/마운트 쪽)까지 뻗어있어 그 x가 아직 차량 진입 이전 영역(x<TRUNK_X_MIN)일
+    수 있다 - 그 위치에서 위로 쏜 raycast가 "바닥"이 아니라 열린 트렁크 리드의 밑면(약
+    1.4m)을 맞혀서 box_to_threshold가 -0.79m 같은 터무니없는 값이 나왔다(실측 확인). "문턱을
+    넘었는가"는 원래 박스 자체의 질문이므로, floor_z_at은 박스 자신의 rear_x(_get_box_x_edges)
+    로만 쏜다 - ceiling_z_at은 전체 포락선의 front_x를 그대로 쓴다(그리퍼/link_6가 실제로
+    가장 앞서/위로 나가는 부분이라 천장 스침 우려에는 전체 포락선이 맞다)."""
     env = measure_carry_envelope()
+    box_rear_x, _, _ = _get_box_x_edges()
     ceiling_here = ceiling_z_at(env["front_x"])
-    floor_here = floor_z_at(env["rear_x"])
+    floor_here = floor_z_at(box_rear_x)
     box_to_threshold = (env["bottom_z"] - floor_here) if floor_here is not None else None
     box_to_ceiling = (ceiling_here - env["top_z"]) if ceiling_here is not None else None
     candidates = [v for v in [box_to_threshold, box_to_ceiling] if v is not None]
@@ -1865,9 +1875,14 @@ if STAGE >= 3:
         y_broken = abs(float(box_center[1]) - float(tip_pos[1])) > STAGE3_Y_TOLERANCE
         detached = not m0609_robot.gripper.is_closed()
         if y_broken or detached:
+            print(f"  [DIAG _stage3_pose_broken] y_broken={y_broken} detached={detached} "
+                  f"box_y={box_center[1]:.4f} tip_y={tip_pos[1]:.4f}", flush=True)
             return True
-        clearance = evaluate_pose_clearance()["minimum_clearance"]
-        return clearance is not None and clearance < STAGE3_CEILING_ABORT_MARGIN
+        c = evaluate_pose_clearance()
+        broken = c["minimum_clearance"] is not None and c["minimum_clearance"] < STAGE3_CEILING_ABORT_MARGIN
+        if broken:
+            print(f"  [DIAG _stage3_pose_broken] clearance={c}", flush=True)
+        return broken
 
     def _stage3_max_speed():
         chassis_pos, _ = base_robot.get_world_pose()
@@ -1888,13 +1903,43 @@ if STAGE >= 3:
               f"박스 뒤={rear_x:.3f} 앞={front_x:.3f} 중심={np.round(box_center, 3)} "
               f"붙어있음={m0609_robot.gripper.is_closed()}", flush=True)
 
+    # 사용자 지적(라운드6 검증, 시행착오 끝에 확인된 근본 원인) - 원래 여기 target_y=ANCHOR_Y
+    # 였다가, "섀시도 Y를 분담해야 한다"고 고쳐 target_y=place_world_xy[1]로 바꿔봤지만
+    # 여전히 실패했다(17스텝, ee_err=0.56m) - 섀시 속도가 스무딩(SMOOTH_ALPHA)돼 있어서
+    # 초반 몇 스텝은 거의 안 움직이는데, ee_target_pos는 처음부터 곧장 최종 place_world_xy를
+    # 가리키므로 섀시가 움직이기도 전에 팔이 X+Y 대각선으로 큰 reach를 한 번에 풀려다 팔꿈치
+    # (전완, link_4/5)가 들려 내부천장(x>3.115)을 스쳤다(clearance≈0.00004m, 거의 접촉).
+    # 리프트를 먼저 올려보는 시도(PICK Phase A 원리)도 해봤지만, 그건 "위아래" 낙차를
+    # 감당하는 원리라 "옆으로" 휘두르는 이 동작엔 안 맞았다 - 마운트를 올리니 휘두름의 절대
+    # 높이만 더 올라가 오히려 더 빨리(6스텝) 붕괴했다.
+    # 근본 원인 - STAGE 2는 팔을 완전히 얼린 채 순수 X 이동만으로 493스텝 내내 전혀 문제
+    # 없었다(수평 이동 자체는 안전하다는 증거). 문제는 "Y로 크게 벌어진 채 X로도 동시에
+    # 전진"하는 대각선 reach였다. 해법 - Y 정렬과 X 전진을 분리한다: 아직 열린 리드 구간
+    # (천장 ~1.4m, 여유 큼)에 있을 때 먼저 Y만 맞추고(STAGE3a), 그 다음 이미 Y가 맞춰진
+    # 컴팩트한 자세로 내부천장 구간을 순수 X 전진(STAGE3b)으로 통과한다.
+    #
+    # ---- STAGE 3a: Y 정렬 먼저(아직 X는 그대로, 입구 근처의 넓은 천장 구간에서) ----
+    stage3a_x = float(stage3_pre_target_xy[0])
+    _, stage3a_ee, stage3a_ee_err, _, stage3a_aborted = drive_and_reach(
+        target_x=stage3a_x, target_y=place_world_xy[1],
+        ee_target_pos=(stage3a_x, place_world_xy[1], STAGE3_ENTRY_Z),
+        ee_orientation=DOWN_QUAT, hold_gripper_closed=True,
+        max_speed=0.08, abort_fn=_stage3_pose_broken, hard_stop_on_condition=True,
+        label="STAGE3a: Y 정렬(입구 근처, 넓은 구간에서 먼저)",
+    )
+    if stage3a_aborted or stage3a_ee_err > 0.03:
+        raise SystemExit(
+            f"[중단] STAGE 3a Y정렬 실패(자세붕괴={stage3a_aborted}, ee_err={stage3a_ee_err:.3f}m)"
+        )
+
+    # ---- STAGE 3b: 순수 X 전진(Y는 3a에서 이미 맞춰짐 - STAGE 2와 동일한 검증된 안전 패턴) ----
     _, stage3_ee_pos, stage3_ee_err, _, stage3_aborted = drive_and_reach(
-        target_x=stage3_target_x, target_y=ANCHOR_Y,
+        target_x=stage3_target_x, target_y=place_world_xy[1],
         ee_target_pos=(place_world_xy[0], place_world_xy[1], STAGE3_ENTRY_Z),
         ee_orientation=DOWN_QUAT, hold_gripper_closed=True,
         max_speed=0.10, max_speed_fn=_stage3_max_speed,
         abort_fn=_stage3_pose_broken, hard_stop_on_condition=True,
-        label="STAGE3: 정밀 접근(홀로노믹+팔 동시 조정, 저속)",
+        label="STAGE3b: 정밀 접근(Y 정렬 완료 후 순수 X 전진)",
         debug_interval=5, debug_fn=_stage3_debug,
     )
     # 사용자 지적(중대 버그) - 원래는 여기서 경고만 찍고 그대로 PLACE/후퇴까지 계속 진행했다.
