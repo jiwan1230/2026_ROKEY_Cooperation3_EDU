@@ -228,15 +228,18 @@ class IOSDropdown(tk.Canvas):
     같은 방식으로 알약형 버튼을 직접 그리고, 목록은 테두리 없는 Toplevel 팝업으로
     띄워서 색상·폰트·모서리 반경까지 전부 Palette/Font를 그대로 따르게 했다."""
 
+    _ROW_HEIGHT = 34  # 팝업 목록 한 줄의 대략적인 픽셀 높이 (Label padx/pady 8 기준)
+
     def __init__(self, parent, values, variable, width=220, height=36, font=None,
-                 on_select=None, **kwargs):
+                 on_select=None, max_visible_rows=6, **kwargs):
         super().__init__(parent, width=width, height=height, highlightthickness=0,
                           bg=parent["bg"], **kwargs)
-        self._values = list(values)
+        self._values = self._normalize(values)
         self._var = variable
         self._dd_w, self._dd_h = width, height
         self._font = font or Font.body
         self._on_select = on_select
+        self._max_visible_rows = max_visible_rows  # 이보다 항목이 많으면 스크롤 목록으로 전환
         self._enabled = True
         self._popup = None
         self.bind("<Button-1>", self._on_click)
@@ -244,12 +247,21 @@ class IOSDropdown(tk.Canvas):
         self._var.trace_add("write", lambda *_: self._draw())
         self._draw()
 
+    @staticmethod
+    def _normalize(values):
+        """값 목록을 (표시 라벨, 실제 값) 튜플 리스트로 통일한다 - 단순 문자열
+        목록(트렁크맵/프리셋)과 (라벨, 값) 목록(예: 박스 선택에서 "1. Box3"처럼
+        적재 순서 번호는 라벨에만 보여주고 값은 box_id로 유지)을 둘 다 지원."""
+        return [v if isinstance(v, tuple) else (v, v) for v in values]
+
     def _draw(self):
         self.delete("all")
         fill = Palette.segment_bg if self._enabled else Palette.canvas
         self.create_polygon(_rounded_rect_points(1, 1, self._dd_w - 1, self._dd_h - 1, 10),
                              smooth=True, fill=fill, outline=Palette.border)
-        text = self._var.get() or "선택..."
+        current = self._var.get()
+        current_label = next((label for label, value in self._values if value == current), current)
+        text = current_label or "선택..."
         text_color = Palette.text_primary if self._enabled else Palette.text_secondary
         self.create_text(14, self._dd_h / 2, text=text, fill=text_color,
                           font=self._font, anchor="w", width=self._dd_w - 40)
@@ -269,16 +281,49 @@ class IOSDropdown(tk.Canvas):
         self._popup.overrideredirect(True)
         self._popup.attributes("-topmost", True)
         self._popup.configure(bg=Palette.border)
-        x, y = self.winfo_rootx(), self.winfo_rooty() + self._dd_h + 4
+
+        row_width_chars = max((len(label) for label, _ in self._values), default=12) + 2
+        canvas_width = max(self._dd_w, row_width_chars * 8)
+        visible_rows = min(len(self._values), self._max_visible_rows)
+        popup_h = visible_rows * self._ROW_HEIGHT + 2
+
+        # 화면 아래로 넘치면(예: 창 아래쪽에 있는 드롭다운) 버튼 위쪽에 띄운다 -
+        # 실제로 발견된 버그: 항상 아래쪽에만 띄워서 항목이 많으면 화면 밖으로
+        # 잘려 나갔음.
+        screen_h = self.winfo_screenheight()
+        x = self.winfo_rootx()
+        y_below = self.winfo_rooty() + self._dd_h + 4
+        if y_below + popup_h > screen_h and self.winfo_rooty() - popup_h - 4 >= 0:
+            y = self.winfo_rooty() - popup_h - 4  # 버튼 위쪽에 띄움
+        else:
+            y = y_below
         self._popup.geometry(f"+{x}+{y}")
 
-        list_frame = tk.Frame(self._popup, bg=Palette.surface)
-        list_frame.pack(padx=1, pady=1)
-        row_width = max((len(v) for v in self._values), default=12) + 2
-        for value in self._values:
-            row = tk.Label(list_frame, text=value, font=self._font, anchor="w",
+        outer = tk.Frame(self._popup, bg=Palette.surface)
+        outer.pack(padx=1, pady=1)
+
+        needs_scroll = len(self._values) > self._max_visible_rows
+        if needs_scroll:
+            canvas = tk.Canvas(outer, width=canvas_width, height=popup_h,
+                                bg=Palette.surface, highlightthickness=0)
+            scrollbar = tk.Scrollbar(outer, orient="vertical", command=canvas.yview)
+            canvas.configure(yscrollcommand=scrollbar.set)
+            canvas.pack(side="left", fill="both", expand=True)
+            scrollbar.pack(side="right", fill="y")
+            list_frame = tk.Frame(canvas, bg=Palette.surface)
+            canvas.create_window((0, 0), window=list_frame, anchor="nw", width=canvas_width)
+            list_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+            canvas.bind("<Button-4>", lambda e: canvas.yview_scroll(-1, "units"))
+            canvas.bind("<Button-5>", lambda e: canvas.yview_scroll(1, "units"))
+            canvas.bind("<MouseWheel>", lambda e: canvas.yview_scroll(int(-e.delta / 120), "units"))
+        else:
+            list_frame = tk.Frame(outer, bg=Palette.surface)
+            list_frame.pack()
+
+        for label, value in self._values:
+            row = tk.Label(list_frame, text=label, font=self._font, anchor="w",
                             bg=Palette.surface, fg=Palette.text_primary,
-                            padx=14, pady=8, width=row_width, cursor="hand2")
+                            padx=14, pady=8, width=row_width_chars, cursor="hand2")
             row.pack(fill="x")
             row.bind("<Enter>", lambda e, r=row: r.configure(bg=Palette.segment_bg))
             row.bind("<Leave>", lambda e, r=row: r.configure(bg=Palette.surface))
@@ -307,8 +352,9 @@ class IOSDropdown(tk.Canvas):
     def set_values(self, values):
         """목록을 나중에(예: 계획 계산 후 박스 ID 목록으로) 바꿔 끼울 수 있게 - 생성
         시점엔 값을 몰라도 되는 드롭다운(예: 박스 상세정보 선택)에 씀."""
-        self._values = list(values)
+        self._values = self._normalize(values)
         self._close_popup()
+        self._draw()  # 선택된 값의 라벨이 바뀌었을 수 있어 다시 그림
 
 
 class Card(tk.Frame):
@@ -840,9 +886,18 @@ class PlannerGUI(tk.Tk):
         self.summary_vars["calc_time"].set(f"{calc_time_sec * 1000:.0f}ms")
         self.summary_vars["avg_score"].set(f"{avg_score:.3f}")
 
-        # ---- 박스 선택 드롭다운 갱신 ----
-        self.box_select_dropdown.set_values([p.box_id for p in plans])
-        self.box_select_var.set(plans[0].box_id if plans else "")
+        # ---- 박스 선택 드롭다운 갱신 - p.order로 명시적으로 정렬하고, 라벨에
+        # 순번을 보여줘서 "적재 순서가 맞는지" 눈으로 바로 확인할 수 있게 한다.
+        # ⚠️ p.order 원본값이 아니라 "카트 박스 중 몇 번째냐"로 1부터 다시 매긴
+        # 순번을 보여준다 - p.order는 트렁크에 이미 있는 장애물까지 포함한
+        # 전역 순번이라(예: 장애물이 2개면 첫 카트 박스가 order=3), 그대로
+        # 보여주면 "왜 1이 아니라 3부터 시작하지?"처럼 오히려 헷갈린다. Task
+        # JSON(_on_approve)에는 원본 p.order를 그대로 쓰므로 여기 표시만 다르다.
+        plans_by_order = sorted(plans, key=lambda p: p.order)
+        self.box_select_dropdown.set_values(
+            [(f"{i}. {p.box_id}", p.box_id) for i, p in enumerate(plans_by_order, start=1)]
+        )
+        self.box_select_var.set(plans_by_order[0].box_id if plans_by_order else "")
         self._on_box_selected()
 
         log_lines = [f"[{run_name}] mode={mode}, margin={effective_margin:.2f}m, "
@@ -1058,15 +1113,20 @@ class PlannerGUI(tk.Tk):
 
     def _on_box_selected(self, *_args):
         box_id = self.box_select_var.get()
-        plan = next((p for p in (self._last_plans or []) if p.box_id == box_id), None)
+        plans_by_order = sorted(self._last_plans or [], key=lambda p: p.order)
+        cart_index = next((i for i, p in enumerate(plans_by_order, start=1) if p.box_id == box_id), None)
+        plan = next((p for p in plans_by_order if p.box_id == box_id), None)
         if plan is None:
             self.box_detail_var.set("계획 계산 후 박스를 선택하면 상세정보가 표시됩니다")
             return
         reason = (f"접촉면 {plan.touches}/6개, "
                   f"{'90도 회전됨' if plan.rotated else '정자세'}, "
                   f"점수 {plan.score:.3f}(낮을수록 좋은 자리)")
+        # cart_index: 드롭다운 라벨과 같은 "카트 박스 중 몇 번째" 기준(1부터) - Task
+        # JSON에 실제로 나가는 순번(plan.order)은 트렁크 안 장애물까지 포함한 전역
+        # 값이라 다를 수 있어서 괄호로 같이 보여준다(둘이 왜 다른지 헷갈리지 않게).
         self.box_detail_var.set(
-            f"{plan.box_id} · 적재순서 {plan.order} · "
+            f"{plan.box_id} · 적재순서 {cart_index}(전체 순번 {plan.order}) · "
             f"Target=({plan.position[0]:.2f}, {plan.position[1]:.2f}, {plan.position[2]:.2f})m · "
             f"Yaw={plan.target_yaw:.2f}rad\n선정 사유: {reason}"
         )
