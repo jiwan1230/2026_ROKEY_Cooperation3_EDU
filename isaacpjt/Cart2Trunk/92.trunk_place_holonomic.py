@@ -76,23 +76,32 @@ CAR_USD = str(_THIS_DIR / "assets/Lexus_IS300_Trunk_Open_No_More_Hell_Room.usdz"
 CAR_POS = (5.0, 0.0, 0.0)
 CAR_EXTRA_SCALE = 0.53
 CAR_ROT_Z = 0.0
-TRUNK_X_MIN, TRUNK_X_MAX = 3.11, 3.68
-TRUNK_Y_MIN, TRUNK_Y_MAX = -0.56, 0.56
-TRUNK_FLOOR_Z = 0.44
-TRUNK_WALL_TOP = 1.28
+# 사용자 결정 - 트렁크 입구~천장 실제 여유가 4.3cm뿐이라 차량 스케일을 0.50->0.53으로 키움
+# (89.py 재스캔 -> 90.py 재추출로 나온 trunk_map.json 실측 AABB를 world로 재투영한 값).
+# 아래 4개는 지금까지처럼 여전히 "설계용" 근사 상수이고, 실제 판정 기준은 trunk_map.json/
+# trunk_pointcloud_meta.json에서 동적으로 계산되는 CEILING_WORLD_Z 등을 우선한다.
+TRUNK_X_MIN, TRUNK_X_MAX = 2.945, 3.702
+TRUNK_Y_MIN, TRUNK_Y_MAX = -0.663, 0.664
+TRUNK_FLOOR_Z = 0.459
+TRUNK_WALL_TOP = 1.010
 SDF_RESOLUTION = 256
 ANCHOR_Y = 0.0
 
 # 사용자 지적 - TRUNK_X_MIN 하나를 "적재 공간 시작점"/"실제 차량 개구부 평면"/"박스 통과
 # 판정 평면" 세 용도로 동시에 쓰면 안 된다(차량 형상상 몇 cm씩 차이 날 수 있음). 실측 확인됨:
-# TRUNK_X_MIN(=3.11)은 8.rescale_and_rebuild.py가 인용한 (지금은 소실된) rescale_probe.py의
-# 레이캐스트 결과였는데, 같은 프로브가 낸 floor_z=1.03도 이미 다른 스크립트(12.trunk_scan_
-# hidden_gripper.py)에서 "사실 입구 쪽 얕은 턱이었다, 진짜 바닥은 물리 낙하 테스트로 0.43~
-# 0.44에서 찾음"이라고 정정된 전례가 있다 - x=3.11도 레이캐스트/포인트클라우드가 처음 표면을
-# 감지한 지점(안쪽 턱/선반)이었을 뿐, 진짜 개구부 평면이 아니었다(이 프로젝트 전체에서 floor_z
-# 만 정정되고 x_min은 92번 STAGE 2 이전까지 한 번도 재검증 없이 10~92번 스크립트에 복사돼
-# 왔음). STAGE 2 마커 평면(EntrancePlane=초록, SuccessPlane=노랑) 스크린샷으로 대조한 결과
-# -0.15m 보정 시 성공 확인됨.
+# 예전 TRUNK_X_MIN(=3.11, 0.50 스케일 기준)은 8.rescale_and_rebuild.py가 인용한 (지금은
+# 소실된) rescale_probe.py의 레이캐스트 결과였는데, 같은 프로브가 낸 floor_z=1.03도 이미 다른
+# 스크립트(12.trunk_scan_hidden_gripper.py)에서 "사실 입구 쪽 얕은 턱이었다, 진짜 바닥은 물리
+# 낙하 테스트로 0.43~0.44에서 찾음"이라고 정정된 전례가 있다 - x=3.11도 레이캐스트/포인트
+# 클라우드가 처음 표면을 감지한 지점(안쪽 턱/선반)이었을 뿐, 진짜 개구부 평면이 아니었다.
+# STAGE 2 마커 평면(EntrancePlane=초록, SuccessPlane=노랑) 스크린샷으로 대조한 결과 옛
+# TRUNK_X_MIN 기준 -0.15m 보정 시 성공 확인됨.
+#
+# 차량 스케일 변경(0.50->0.53) 이후 - 위 TRUNK_X_MIN 자체는 새로 재측정한 값(2.945)으로
+# 갱신했지만, "-0.15"라는 보정폭은 옛 스케일/기하에서 시각적으로 튜닝된 경험값이라 스케일이
+# 바뀐 지금 그대로 맞는다는 보장이 없다. 일단 같은 보정폭을 그대로 적용해 시작점으로 삼되,
+# STAGE=2를 돌려 EntrancePlane/SuccessPlane 마커가 실제 입구와 맞는지 스크린샷으로 반드시
+# 재확인하고 필요하면 다시 튜닝할 것.
 TRUNK_ENTRANCE_X = TRUNK_X_MIN - 0.15
 
 # ---------------- 82~91번과 동일 홀로노믹 베이스 구성 ----------------
@@ -1105,6 +1114,65 @@ gripper.close()
 step_hold(10)
 print(f"[시험용 박스 부착] grasped={gripper.is_closed()}", flush=True)
 
+# 사용자 지적 - 93번 진단은 "박스 자체의 수직 두께"만 필요공간으로 계산했는데, 실제로 입구를
+# 통과해야 하는 건 박스 혼자가 아니라 "박스를 아래에 매달고 있는 그리퍼 + 그 그리퍼가 붙은
+# link_6(팔 최종 세그먼트)"까지 포함한 강체 전체다(그림 참고 - link_6가 박스 바로 위에서
+# 수직으로 튀어나와 있음). 이 전체 스택의 z 길이(박스 바닥 ~ link_6 최상단)를 실측한다.
+#
+# 시행착오 - (1) 메시 포인트를 그냥 Usd.PrimRange로 순회했더니 link_6가 None이었다(link_6
+# 시각 메시가 instanceable 참조라서 기본 순회가 안으로 안 들어감 - 인스턴스 프록시 predicate
+# 필요). (2) UsdGeom.BBoxCache로 바꿨더니 이번엔 test_box 높이가 0.0112m로 나왔는데 이건
+# 정확히 TEST_BOX_SIZE[2]^2(0.106^2=0.01124)과 일치한다 - 예전 91/92번에서 겪었던 그
+# "BBoxCache가 치수를 제곱해서 반환하는" 버그가 여기서도 똑같이 재현된 것(DynamicCuboid의
+# scale 오퍼레이터와 BBoxCache가 서로 스케일을 이중 적용하는 것으로 추정, 근본 원인 미해결).
+# 최종: 메시 포인트 직접 변환 방식을 유지하되 Usd.TraverseInstanceProxies()로 인스턴스 안까지
+# 들어가도록 고쳤다. 박스 자체는 이미 정확한 치수(TEST_BOX_SIZE)와 실측 world pose를 알고
+# 있으므로 bbox 계산 없이 그대로 쓴다(불필요하게 버그가 있는 API에 또 의존할 이유가 없음).
+PROBE_ARM_ENVELOPE = os.environ.get("PROBE_ARM_ENVELOPE") == "1"
+if PROBE_ARM_ENVELOPE:
+    def _mesh_world_z_range(root_prim_path):
+        root_prim = stage.GetPrimAtPath(root_prim_path)
+        z_min, z_max = None, None
+        for prim in Usd.PrimRange(root_prim, Usd.TraverseInstanceProxies()):
+            if prim.GetTypeName() != "Mesh":
+                continue
+            mesh = UsdGeom.Mesh(prim)
+            pts = mesh.GetPointsAttr().Get()
+            if not pts:
+                continue
+            mat = UsdGeom.Xformable(prim).ComputeLocalToWorldTransform(Usd.TimeCode.Default())
+            for p in pts:
+                wp = mat.Transform(p)
+                z = float(wp[2])
+                z_min = z if z_min is None else min(z_min, z)
+                z_max = z if z_max is None else max(z_max, z)
+        return z_min, z_max
+
+    def _probe_arm_envelope(label):
+        link6_zmin, link6_zmax = _mesh_world_z_range(ee_path)
+        gripper_zmin, gripper_zmax = _mesh_world_z_range(gripper_body_path)
+        box_center_z = float(test_box.get_world_pose()[0][2])
+        box_bottom_z = box_center_z - TEST_BOX_SIZE[2] / 2.0
+        box_top_z = box_center_z + TEST_BOX_SIZE[2] / 2.0
+        _candidates = [v for v in [link6_zmax, gripper_zmax] if v is not None]
+        print(f"\n[팔 수직 포락선 실측: {label}] link_6 z=[{link6_zmin}, {link6_zmax}] "
+              f"gripper_body z=[{gripper_zmin}, {gripper_zmax}] "
+              f"박스 top={box_top_z:.4f} bottom={box_bottom_z:.4f}", flush=True)
+        if not _candidates:
+            print("[실패] link_6/gripper_body 둘 다 메시를 못 찾았습니다 - 프림 경로를 재확인하세요.", flush=True)
+            return None
+        arm_top_z = max(_candidates)
+        print(f"[결론: {label}] 박스 바닥({box_bottom_z:.4f}) ~ 팔 최상단({arm_top_z:.4f}) "
+              f"전체 수직 길이 = {arm_top_z - box_bottom_z:.4f}m "
+              f"(박스만의 두께는 {TEST_BOX_SIZE[2]:.4f}m - 차이 {arm_top_z - box_bottom_z - TEST_BOX_SIZE[2]:.4f}m는 "
+              "93번 진단이 빠뜨렸던, link_6/그리퍼가 박스 위로 튀어나온 길이)", flush=True)
+        if CEILING_WORLD_Z:
+            print(f"[천장 대비] CEILING_WORLD_Z={CEILING_WORLD_Z:.4f} - 팔 최상단({arm_top_z:.4f}) "
+                  f"= 여유 {CEILING_WORLD_Z - arm_top_z:.4f}m", flush=True)
+        return box_bottom_z, arm_top_z
+
+    _probe_arm_envelope("STAGE1(HOLDING_Z)")
+
 chassis_pos0, _ = base_robot.get_world_pose()
 snapshot(eye=[chassis_pos0[0] - 2.2, chassis_pos0[1] - 3.2, chassis_pos0[2] + 1.6],
          target=[(chassis_pos0[0] + CAR_POS[0]) / 2, 0.0, 1.0], fname="_trunkplace_00_start.png")
@@ -1122,6 +1190,9 @@ if STAGE >= 1.1:
     entry_pos = (float(_init_ee_pos[0]), float(_init_ee_pos[1]), ENTRY_HOLDING_Z)
     move_link6(entry_pos, steps=200, hold_gripper_closed=True, orientation=DOWN_QUAT,
                label="STAGE1.1: 입구 턱 클리어 높이로 상승")
+
+    if PROBE_ARM_ENVELOPE:
+        _probe_arm_envelope("STAGE1.1(ENTRY_HOLDING_Z)")
 
     chassis_pos0, _ = base_robot.get_world_pose()
     snapshot(eye=[chassis_pos0[0] - 2.0, chassis_pos0[1] - 2.8, chassis_pos0[2] + 1.4],

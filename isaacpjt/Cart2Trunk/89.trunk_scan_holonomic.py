@@ -80,12 +80,16 @@ from m0609_rmpflow_controller import RMPFlowController  # noqa: E402
 # ---------------- 12.py와 완전히 동일 - 차량/트렁크 실측 상수 ----------------
 CAR_USD = str(_THIS_DIR / "assets/Lexus_IS300_Trunk_Open_No_More_Hell_Room.usdz")
 CAR_POS = (5.0, 0.0, 0.0)
-CAR_EXTRA_SCALE = 0.50
+CAR_EXTRA_SCALE = 0.53  # 사용자 결정 - 트렁크 입구~천장 실제 여유(4.3cm)가 너무 빠듯해서 확대
 CAR_ROT_Z = 0.0
-TRUNK_X_MIN, TRUNK_X_MAX = 3.11, 3.68
-TRUNK_Y_MIN, TRUNK_Y_MAX = -0.56, 0.56
-TRUNK_FLOOR_Z = 0.44
-TRUNK_WALL_TOP = 1.28
+# 0.53 스케일로 재스캔 후 90.export_trunk_map_holonomic.py가 실측한 AABB를 world로 재투영한
+# 값(92.py와 동일) - 이 스크립트에서는 그저 로봇 standoff/스윕 웨이포인트 계산용 근사치일 뿐,
+# 실제 재스캔 결과 자체가 이 값의 최신 출처다(재귀적이지만, 다음 재스캔부터는 이 값으로
+# standoff를 잡는다).
+TRUNK_X_MIN, TRUNK_X_MAX = 2.945, 3.702
+TRUNK_Y_MIN, TRUNK_Y_MAX = -0.663, 0.664
+TRUNK_FLOOR_Z = 0.459
+TRUNK_WALL_TOP = 1.010
 SDF_RESOLUTION = 256
 
 # 12.py와 동일한 앵커/스윕 기하 - 차량 모델 실측값 기준이라 로봇이 바뀌어도 그대로 재사용.
