@@ -76,7 +76,14 @@ def _run_strategy(order, trunk, rescanned_placed_boxes, score_fn, margin, allow_
     """정해진 순서(order)로 재스캔 상태를 새로 구성하고 하나씩 배치 시도하는 공통 루프."""
     state = rebuild_state_from_rescan(rescanned_placed_boxes)
     plans, unloadable = [], []
-    order_counter = len(rescanned_placed_boxes) + 1  # 순번은 기존에 놓인 개수 다음부터 이어감
+    # 순번은 "실제로 이미 놓인 카트 박스" 개수 다음부터 이어간다 - 장애물
+    # (휠하우스 등, is_obstacle=True)은 로봇이 실은 게 아니라 원래 트렁크에
+    # 있던 고정 구조물이라 순번에서 빼야 한다. 버그로 발견됨: 이걸 안 뺐더니
+    # (지금 파이프라인에서 rescanned_placed_boxes가 사실상 항상 장애물뿐이라)
+    # 첫 카트 박스가 order=1이 아니라 order=(장애물 개수+1)로 나왔었다 - Task
+    # JSON의 sequence 필드에도 그대로 나가는 값이라 MSI2에 잘못 전달될 뻔함.
+    already_placed_cart_boxes = sum(1 for pb in rescanned_placed_boxes if not pb.box.is_obstacle)
+    order_counter = already_placed_cart_boxes + 1
 
     for box in order:
         plan = place_one_box(box, trunk, state, order_counter, score_fn=score_fn, margin=margin,

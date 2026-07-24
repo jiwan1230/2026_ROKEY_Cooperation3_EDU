@@ -888,15 +888,11 @@ class PlannerGUI(tk.Tk):
 
         # ---- 박스 선택 드롭다운 갱신 - p.order로 명시적으로 정렬하고, 라벨에
         # 순번을 보여줘서 "적재 순서가 맞는지" 눈으로 바로 확인할 수 있게 한다.
-        # ⚠️ p.order 원본값이 아니라 "카트 박스 중 몇 번째냐"로 1부터 다시 매긴
-        # 순번을 보여준다 - p.order는 트렁크에 이미 있는 장애물까지 포함한
-        # 전역 순번이라(예: 장애물이 2개면 첫 카트 박스가 order=3), 그대로
-        # 보여주면 "왜 1이 아니라 3부터 시작하지?"처럼 오히려 헷갈린다. Task
-        # JSON(_on_approve)에는 원본 p.order를 그대로 쓰므로 여기 표시만 다르다.
+        # p.order는 실제로 이미 놓인 카트 박스 개수 다음부터 매겨지고(09_rescan_
+        # replan._run_strategy) 트렁크 장애물은 순번에서 빠지므로, 첫 카트
+        # 박스는 항상 order=1부터 시작한다 - 그대로 보여줘도 헷갈리지 않음.
         plans_by_order = sorted(plans, key=lambda p: p.order)
-        self.box_select_dropdown.set_values(
-            [(f"{i}. {p.box_id}", p.box_id) for i, p in enumerate(plans_by_order, start=1)]
-        )
+        self.box_select_dropdown.set_values([(f"{p.order}. {p.box_id}", p.box_id) for p in plans_by_order])
         self.box_select_var.set(plans_by_order[0].box_id if plans_by_order else "")
         self._on_box_selected()
 
@@ -1113,20 +1109,15 @@ class PlannerGUI(tk.Tk):
 
     def _on_box_selected(self, *_args):
         box_id = self.box_select_var.get()
-        plans_by_order = sorted(self._last_plans or [], key=lambda p: p.order)
-        cart_index = next((i for i, p in enumerate(plans_by_order, start=1) if p.box_id == box_id), None)
-        plan = next((p for p in plans_by_order if p.box_id == box_id), None)
+        plan = next((p for p in (self._last_plans or []) if p.box_id == box_id), None)
         if plan is None:
             self.box_detail_var.set("계획 계산 후 박스를 선택하면 상세정보가 표시됩니다")
             return
         reason = (f"접촉면 {plan.touches}/6개, "
                   f"{'90도 회전됨' if plan.rotated else '정자세'}, "
                   f"점수 {plan.score:.3f}(낮을수록 좋은 자리)")
-        # cart_index: 드롭다운 라벨과 같은 "카트 박스 중 몇 번째" 기준(1부터) - Task
-        # JSON에 실제로 나가는 순번(plan.order)은 트렁크 안 장애물까지 포함한 전역
-        # 값이라 다를 수 있어서 괄호로 같이 보여준다(둘이 왜 다른지 헷갈리지 않게).
         self.box_detail_var.set(
-            f"{plan.box_id} · 적재순서 {cart_index}(전체 순번 {plan.order}) · "
+            f"{plan.box_id} · 적재순서 {plan.order} · "
             f"Target=({plan.position[0]:.2f}, {plan.position[1]:.2f}, {plan.position[2]:.2f})m · "
             f"Yaw={plan.target_yaw:.2f}rad\n선정 사유: {reason}"
         )
