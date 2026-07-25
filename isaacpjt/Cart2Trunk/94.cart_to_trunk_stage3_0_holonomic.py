@@ -1645,7 +1645,7 @@ def drive_and_reach(target_x, target_y, ee_target_pos, ee_orientation=DOWN_QUAT,
                      tolerance_xy=0.03, max_speed=0.4, kp_xy=1.8, max_steps=3000,
                      hold_gripper_closed=True, label="",
                      condition_fn=None, abort_fn=None, hard_stop_on_condition=False, max_speed_fn=None,
-                     debug_interval=0, debug_fn=None):
+                     debug_interval=0, debug_fn=None, ee_ramp_steps=300):
     """홀로노믹 베이스 전진과 매니퓰레이터 목표 추종을 같은 스텝에서 동시에 진행한다(사용자
     설계). 원래 drive_to()는 주행 중 step_hold(1)만 불러서 팔에 아무 명령도 안 보냈다 - 리프트
     텔레포트(set_lift_height)가 매 프레임 팔 전체를 섀시 기준으로 재배치하므로, 직전에
@@ -1669,11 +1669,23 @@ def drive_and_reach(target_x, target_y, ee_target_pos, ee_orientation=DOWN_QUAT,
     목표에 딱 붙여놨는데도 섀시가 (팔보다 훨씬 느리게 움직여서) 자기 목표에 도달할 때까지
     한참을 더 크리핑했다("타겟에 다 왔는데도 섀시가 더 움직인다"는 관찰과 일치). drive_until()
     처럼 condition_fn(예: 박스가 실제로 목표에 도달했는지)을 추가해서, 섀시가 자기 목표에
-    못 미쳤어도 실제 목표(박스 위치)가 달성됐으면 조기 정지할 수 있게 한다."""
+    못 미쳤어도 실제 목표(박스 위치)가 달성됐으면 조기 정지할 수 있게 한다.
+
+    사용자 실측 확인(2차, 카트 박스 2개 통합 검증 중 STAGE 3.3에서 재현) - ee_target_pos를
+    step 1부터 고정된 "최종" 목표로 그대로 줬더니, 섀시는 kp_xy*오차를 max_speed(0.06)로
+    클리핑해서 천천히 따라가는데 RMPflow는 그 큰 오차(Y로 약 0.29m)를 한 번에 풀려다
+    중간에 자세가 튀었다(박스 Y가 -0.15 -> +0.10으로 목표(-0.30)의 반대쪽까지 오버슈트
+    - 이 프로젝트에서 reach_with_lift를 고칠 때 이미 확인된 "큰 목표를 한 번에 주면
+    RMPflow가 이상한 해로 튄다"는 것과 동일한 패턴). reach_with_lift와 똑같은 해법(ee
+    목표도 시작점에서 최종 목표까지 매 스텝 작은 걸음으로 선형 보간)을 여기에도 적용한다 -
+    섀시 이동 속도와 무관하게(섀시가 느려도) 팔이 한 번에 감당해야 하는 오차 자체가 항상
+    작게 유지된다. ee_ramp_steps 이후로는 보간이 끝나 기존과 동일하게 고정 목표가 된다."""
     ee_target_pos = np.array(ee_target_pos, dtype=float)
     start_pos, start_quat = base_robot.get_world_pose()
     tx = target_x if target_x is not None else float(start_pos[0])
     ty = target_y if target_y is not None else float(start_pos[1])
+    start_ee_pos, _ = m0609_robot.end_effector.get_world_pose()
+    start_ee_pos = np.array(start_ee_pos, dtype=float)
     print(f"\n[주행+추종 시작]{' ' + label if label else ''} 섀시목표=({tx:.3f},{ty:.3f}) "
           f"팔목표={np.round(ee_target_pos, 3)}", flush=True)
 
@@ -1717,10 +1729,14 @@ def drive_and_reach(target_x, target_y, ee_target_pos, ee_orientation=DOWN_QUAT,
         _smooth_state["wz"] *= (1 - SMOOTH_ALPHA)  # 회전 없음 - yaw는 그대로 유지
         base_robot.apply_action(holo_forward(_smooth_state["vx"], _smooth_state["vy"], _smooth_state["wz"]))
 
-        # 섀시 주행과 완전히 같은 프레임에서 팔도 매 스텝 목표를 추종한다.
+        # 섀시 주행과 완전히 같은 프레임에서 팔도 매 스텝 목표를 추종한다 - ee 목표는
+        # 시작점에서 최종 목표까지 ee_ramp_steps에 걸쳐 선형 보간(reach_with_lift와 동일
+        # 원리) - RMPflow가 한 번에 감당해야 할 오차를 항상 작게 유지한다.
+        ee_alpha = min(1.0, step / ee_ramp_steps)
+        ee_pt = start_ee_pos + (ee_target_pos - start_ee_pos) * ee_alpha
         sync_rmp_base()
         actions = controller.forward(
-            target_end_effector_position=ee_target_pos,
+            target_end_effector_position=ee_pt,
             target_end_effector_orientation=ee_orientation,
         )
         m0609_robot.apply_action(actions)
