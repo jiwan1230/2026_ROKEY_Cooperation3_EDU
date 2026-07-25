@@ -3666,10 +3666,39 @@ for _box_num, (picked_prim_path, picked_placement) in enumerate(pick_order):
 
         STAGE4_CEILING_MARGIN = STAGE3_1_CEILING_MARGIN
 
+        # 사용자 GUI 관찰(스크린샷) - STAGE4-3 종료 시점(섀시는 이미 BASE_START_XY까지
+        # 멀리 후퇴했는데 팔은 아직 STAGE3.2.0의 "쭉 편" 자세 그대로라 트렁크 안쪽까지
+        # 길게 뻗어 있다) 자세를 보고 "이러면 계속 부딪힌다"고 지적함 - 맞다. STAGE4의
+        # 나머지 단계(4-1/4-2/4-4/4-5)는 지금까지 천장 여유(_stage4_ceiling_ok)만
+        # 감시했는데, 이 자세에서 팔을 다시 접어들이는 동안 link_2(상완)가 좌우로도
+        # 트렁크 입구/내벽에 부딪힐 수 있다(STAGE3.3/3.4에서 이미 확인된 것과 동일한
+        # 원리 - 박스는 이제 없지만 link_2 자체의 굽음 방향은 그대로다). 같은 방식의
+        # 좌우 실측 체크를 여기에도 추가한다 - side_dir는 이 박스의 최종 배치가
+        # ANCHOR_Y의 어느 쪽이었는지로 고정(위 STAGE3.4의 _stage3_4_side_dir와 동일
+        # 계산, 박스를 놓은 뒤에도 팔이 굽은 방향 자체는 안 바뀌므로 그대로 재사용 가능).
+        def _stage4_lateral_ok():
+            _link2_min, _link2_max = _mesh_world_aabb(_LINK2_PATH)
+            if _link2_max[1] is None:
+                return True
+            _link2_leading_y = _link2_max[1] if _stage3_4_side_dir > 0 else _link2_min[1]
+            _link2_x = (float(_link2_min[0]) + float(_link2_max[0])) / 2.0
+            _link2_z = (float(_link2_min[2]) + float(_link2_max[2])) / 2.0
+            _link2_wall_y = interior_side_wall_y_at(_link2_x, _link2_z, _stage3_4_side_dir)
+            if _link2_wall_y is None:
+                return True
+            _link2_margin_now = _stage3_4_side_dir * (_link2_wall_y - float(_link2_leading_y))
+            if _link2_margin_now < STAGE3_3_SIDE_MARGIN:
+                print(f"  [DIAG STAGE4] link_2 좌우여유={_link2_margin_now:.4f} < 마진"
+                      f"(방향={_stage3_4_side_dir:+.0f}) - 중단", flush=True)
+                return False
+            return True
+
         def _stage4_ceiling_ok(counter, interval=10):
             counter["n"] += 1
             if counter["n"] % interval != 0:
                 return True
+            if not _stage4_lateral_ok():
+                return False
             front_x = _link5_front_x()
             ceiling_here = ceiling_z_at(front_x)
             if ceiling_here is None:
@@ -3689,7 +3718,7 @@ for _box_num, (picked_prim_path, picked_placement) in enumerate(pick_order):
             abort_fn=_stage4_1_broken, hard_stop_on_condition=True,
         )
         if stage4_1_aborted:
-            pause_for_inspection("[중단] STAGE4-1 도중 천장 클리어런스 부족이 감지돼 즉시 중단했습니다.")
+            pause_for_inspection("[중단] STAGE4-1 도중 천장 클리어런스 또는 link_2 좌우여유 부족이 감지돼 즉시 중단했습니다.")
         if stage4_1_err > 0.05:
             pause_for_inspection(f"[중단] STAGE4-1 - 목표 높이로 충분히 복귀하지 못했습니다(err={stage4_1_err:.3f}m).")
         print("[성공] STAGE4-1 - 3.3 종료 높이로 복귀 완료.", flush=True)
@@ -3715,7 +3744,7 @@ for _box_num, (picked_prim_path, picked_placement) in enumerate(pick_order):
             condition_fn=_stage4_2_reached, abort_fn=_stage4_2_broken, hard_stop_on_condition=True,
         )
         if stage4_2_aborted:
-            pause_for_inspection("[중단] STAGE4-2 도중 천장 클리어런스 부족이 감지돼 즉시 중단했습니다.")
+            pause_for_inspection("[중단] STAGE4-2 도중 천장 클리어런스 또는 link_2 좌우여유 부족이 감지돼 즉시 중단했습니다.")
         if stage4_2_ee_err > 0.05:
             pause_for_inspection(f"[중단] STAGE4-2 - 목표 지점으로 충분히 복귀하지 못했습니다(err={stage4_2_ee_err:.3f}m).")
         print("[성공] STAGE4-2 - 3.2.1 종료 지점(섀시/팔)으로 복귀 완료.", flush=True)
@@ -3760,7 +3789,7 @@ for _box_num, (picked_prim_path, picked_placement) in enumerate(pick_order):
             label="STAGE4-4(3.2.0 역): ee 고정, 섀시 전진+리프트 하강으로 3.1 종료 지점 복귀",
         )
         if stage4_4_aborted:
-            pause_for_inspection("[중단] STAGE4-4 도중 천장 클리어런스 부족이 감지돼 즉시 중단했습니다.")
+            pause_for_inspection("[중단] STAGE4-4 도중 천장 클리어런스 또는 link_2 좌우여유 부족이 감지돼 즉시 중단했습니다.")
         if stage4_4_ee_err > 0.05:
             pause_for_inspection(f"[중단] STAGE4-4 - ee가 고정 목표에서 너무 벗어났습니다(err={stage4_4_ee_err:.3f}m).")
         print("[성공] STAGE4-4 - 3.1 종료 지점(섀시/리프트)으로 복귀 완료.", flush=True)
@@ -3778,7 +3807,7 @@ for _box_num, (picked_prim_path, picked_placement) in enumerate(pick_order):
             abort_fn=_stage4_5_broken, hard_stop_on_condition=True,
         )
         if stage4_5_aborted:
-            pause_for_inspection("[중단] STAGE4-5 도중 천장 클리어런스 부족이 감지돼 즉시 중단했습니다.")
+            pause_for_inspection("[중단] STAGE4-5 도중 천장 클리어런스 또는 link_2 좌우여유 부족이 감지돼 즉시 중단했습니다.")
         if stage4_5_err > 0.05:
             pause_for_inspection(f"[중단] STAGE4-5 - 목표 높이로 충분히 복귀하지 못했습니다(err={stage4_5_err:.3f}m).")
         print("[성공] STAGE4-5 - 3.0 종료 높이(팔/리프트)로 복귀 완료.", flush=True)
