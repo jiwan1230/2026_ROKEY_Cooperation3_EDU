@@ -2606,6 +2606,79 @@ if STAGE >= 3.3:
         print("\n[STAGE 3.3 완료] 노랑/자홍 마커로 박스 X/Y가 목표에 얼마나 가까워졌는지 확인하세요. "
               "STAGE 3.4 이상(최종 하강/배치)은 아직 구현 전입니다.\n", flush=True)
 
+if STAGE >= 3.4:
+    # ================= STAGE 3.4: 최종 하강 + 릴리즈 (X/Y는 3.3이 이미 맞춤, Z만 목표 release 높이로) =================
+    # 사용자 설계(STAGE 3 재설계 8차, 마무리) - 3.3까지 박스를 목표 (X,Y) 바로 위, 천장에
+    # 붙인 컴팩트한 자세로 가져왔다. 이제 그 자리에서 그대로 수직으로 내려서 실제 배치
+    # 높이(place_release_z, RELEASE_CLEARANCE_ABOVE_FLOOR만큼 바닥 위)까지 낮춘 뒤 그리퍼를
+    # 열어 내려놓는다 - X/Y는 전혀 안 바꾸고 Z만 움직이므로, STAGE 2/3 내내 문제였던
+    # "옆으로 밀고 들어가며 충돌"류의 위험이 이 단계엔 없다(순수 수직 하강).
+    # 다른 단계들과 달리 바닥 클리어런스를 "이 밑으로 떨어지면 중단"용 abort로 쓰지 않는다 -
+    # 여기서는 바닥에 딱 붙는(RELEASE_CLEARANCE_ABOVE_FLOOR만) 게 목표 그 자체이기 때문.
+    _ee_now_3_4, _ = m0609_robot.end_effector.get_world_pose()
+    _stage3_4_target_ee = (float(_ee_now_3_4[0]), float(_ee_now_3_4[1]), place_release_z)
+    print(f"[STAGE3.4 목표] 현재ee={np.round(_ee_now_3_4, 3)} 목표ee={np.round(_stage3_4_target_ee, 3)} "
+          f"(release_z={place_release_z:.3f})", flush=True)
+
+    def _stage3_4_broken():
+        detached = not m0609_robot.gripper.is_closed()
+        if detached:
+            print("  [DIAG STAGE3.4] detached=True", flush=True)
+        return detached
+
+    def _stage3_4_debug(step):
+        ee_pos, _ = m0609_robot.end_effector.get_world_pose()
+        print(f"  [DEBUG STAGE3.4 step={step}] ee=({ee_pos[0]:.3f},{ee_pos[1]:.3f},{ee_pos[2]:.3f}) "
+              f"목표z={place_release_z:.3f}", flush=True)
+
+    _stage3_4_ee_final, _stage3_4_ee_err, _stage3_4_aborted = reach_with_lift(
+        _stage3_4_target_ee, lift_state["h"], steps=250,
+        hold_gripper_closed=True, label="STAGE3.4: 목표 (X,Y) 위에서 release 높이로 수직 하강",
+        abort_fn=_stage3_4_broken, hard_stop_on_condition=True,
+        debug_interval=10, debug_fn=_stage3_4_debug,
+    )
+    if _stage3_4_aborted:
+        pause_for_inspection("[중단] STAGE 3.4 도중 흡착이 풀렸습니다 - 하강 중 충돌 의심.")
+    if _stage3_4_ee_err > 0.05:
+        pause_for_inspection(
+            f"[중단] STAGE 3.4 - 목표 하강 높이에 충분히 도달하지 못했습니다(err={_stage3_4_ee_err:.3f}m)."
+        )
+    print("[성공] STAGE 3.4 - release 높이까지 하강 완료.", flush=True)
+
+    chassis_pos0, _ = base_robot.get_world_pose()
+    snapshot(eye=[chassis_pos0[0] - 0.8, chassis_pos0[1] - 1.6, chassis_pos0[2] + 0.9],
+             target=[place_world_xy[0], place_world_xy[1], TRUNK_FLOOR_Z],
+             fname="_trunkplace_03_4_descended.png")
+
+    # ---- 릴리즈 ----
+    gripper.open()
+    box_rigid_prim = SingleRigidPrim("/World/TestCarryBox")
+    box_rigid_prim.initialize(physics_sim_view=world.physics_sim_view)
+    box_rigid_prim.set_linear_velocity(np.array([0.0, 0.0, -0.3]))
+    step_hold(60)
+
+    final_box_pos = get_world_pos(stage.GetPrimAtPath("/World/TestCarryBox"))
+    err_xy = float(np.linalg.norm(final_box_pos[:2] - np.array(place_world_xy)))
+    print(f"\n[완료] 최종 박스 world 위치={np.round(final_box_pos, 3)} 목표 xy={np.round(place_world_xy, 3)} "
+          f"xy 오차={err_xy:.4f}m", flush=True)
+
+    snapshot(eye=[chassis_pos0[0] - 0.8, chassis_pos0[1] - 1.6, chassis_pos0[2] + 0.9],
+             target=[place_world_xy[0], place_world_xy[1], TRUNK_FLOOR_Z],
+             fname="_trunkplace_03_4_placed.png")
+
+    result = {
+        "place_world_xy": list(place_world_xy),
+        "target_release_z": place_release_z,
+        "final_box_pos": final_box_pos.tolist(),
+        "xy_error_m": err_xy,
+    }
+    (OUT_DIR / "_trunkplace_result.json").write_text(json.dumps(result, indent=2))
+    print(f"[저장 완료] {OUT_DIR / '_trunkplace_result.json'}", flush=True)
+
+    if STAGE < 4:
+        print("\n[STAGE 3.4 완료] 박스를 최종 배치했습니다 - PLACE까지 완료. STAGE=4로 다시 실행하면 "
+              "STAGE 1 상태로 후퇴하는 것까지 진행합니다.\n", flush=True)
+
 if STAGE >= 4:
     # ================= STAGE 4: 후퇴 (STAGE 3 -> ... -> STAGE 1 상태로 역순 복귀) =================
     # 사용자 설계(재검토) - 지금까지 밟은 전진 시퀀스를 그대로 거꾸로 밟는다:
