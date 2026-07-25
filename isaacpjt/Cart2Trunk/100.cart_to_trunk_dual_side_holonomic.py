@@ -3178,7 +3178,24 @@ for _box_num, (picked_prim_path, picked_placement) in enumerate(pick_order):
         # 트렁크 입구 프레임에 부딪혀 IK가 발산한 실측 확인 이후).
         # 사용자 지시 - STAGE 3.1용 마커는 이제 다 썼으니 숨긴다.
         _hide_markers(["CeilingHeightMarker", "Stage3_1TargetMarker", "LiveLink5TopMarker"])
-        STAGE3_2_0_FLAT_JOINT_TOLERANCE = 0.15  # rad(~8.6도) - joint_2/joint_3가 이 안이면 "폈다"로 본다.
+        # 사용자 실측 확인(2번째 박스, STAGE4-4에서 ee가 고정 목표에서 0.277m 벗어남,
+        # 자세붕괴=False - 즉 조용히 딴 곳으로 수렴한 것) - 원인: joint_3(어깨~팔꿈치를
+        # 잇는 축)이 0에 너무 가깝게(구 tolerance=0.15rad≈8.6도, 실측 정지값 -0.121rad
+        # ≈6.9도) 펴진 채로 STAGE3.2.0을 마쳤다. joint_3=0 근방은 팔꿈치가 "쭉 편" 특이
+        # 자세라 elbow-up/elbow-down 두 solution branch가 사실상 붙어있는 경계다 - RMPflow는
+        # 전역 IK가 아니라 반응형(reactive) 솔버라 이 경계를 매끄럽게 못 건너간다는 걸
+        # 이 프로젝트에서 반복 확인했다(솔루션 스페이스 관련 이전 커밋들 참고). STAGE4-4가
+        # 이 자세를 거꾸로 되짚어 다시 굽히는 과정에서 반대쪽 branch로 넘어가버려, 접히는
+        # 방향이 원래와 달라진 팔이 트렁크와 부딪혔다(사용자 진단 - "관절이 아래로 꺾이면서
+        # 다른 솔루션 스페이스로 접힘").
+        # 고침 - tolerance를 0.35rad(~20도)로 넉넉히 키운다. STAGE3.2.0의 "펴기" 정지
+        # 조건(_stage3_2_0_joint_flat)이 이 값을 그대로 쓰므로, 이제 joint_3이 0에서
+        # 최소 20도는 떨어진 채로(원래 접힌 각도 -90~100도 근처에서 시작해 20도까지만
+        # 펴짐 - 여전히 대부분의 "쭉 펴기" 효과는 유지) 멈춘다 - STAGE4-4가 되짚어갈 때도
+        # 이 여유 안에서만 움직이므로 경계를 건널 일이 없다. STAGE3.2.1 이후 단계는 전부
+        # STAGE3.2.0이 실제로 남긴 자세를 매 스텝 실측해서 계산하므로(하드코딩 없음)
+        # 이 값이 바뀌어도 별도 수정 없이 그대로 적응한다.
+        STAGE3_2_0_FLAT_JOINT_TOLERANCE = 0.35  # rad(~20.1도) - joint_3이 이 안이면 "폈다"로 본다.
         STAGE3_2_0_RETREAT_X = BASE_START_XY[0]  # 안전 상한 - 최초 대기 위치까지만 후진 허용.
         # 사용자 설계(5차, PLACE_LIFT_MAX 정의부 주석 참고) - "팔이 큰 낙차+수평 reach를
         # 동시에 감당하는 자세에서 팔꿈치/팔뚝이 트렁크 입구 프레임을 스친다"는 문제를
