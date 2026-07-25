@@ -839,6 +839,37 @@ def vehicle_rear_surface_x_at(y=0.0, z=0.3):
     return _raycast_x(x_start=0.0, y=y, z=z, direction_x=1.0)
 
 
+def _raycast_y(x, y_start, z, direction_y, max_dist=4.0):
+    """_raycast_x와 완전히 같은 원리의 Y축(좌우) 버전. 사용자 실측 확인("왼쪽 휠하우스는
+    적용 안 된 것 같다 - 안 멈추는데?") - trunk_map.json은 y_min/y_max가 있는 단일 flat
+    AABB일 뿐이라 휠하우스처럼 안쪽으로 튀어나온 좌우 비대칭 구조물은 전혀 반영하지
+    못한다(실측 확인 - trunk_map.json에 그런 세부 형상 데이터 자체가 없음). 지금까지
+    ceiling_z_at/floor_z_at(위/아래), vehicle_rear_surface_x_at(앞/뒤)만 있고 좌우
+    방향 raycast가 아예 없었다 - STAGE 3.3이 Y로 스윕할 때 한쪽은 우연히 천장 클리어런스
+    체크에 걸렸지만(로그상 "오른쪽은 적용된 것처럼" 보인 이유), 반대쪽은 아무 체크도
+    없어 그냥 통과해버린 것이다."""
+    closest = {"dist": None, "y": None}
+
+    def _report(hit):
+        path = hit.rigid_body or hit.collision
+        if path and path.startswith(_RAYCAST_VEHICLE_PREFIX):
+            if closest["dist"] is None or hit.distance < closest["dist"]:
+                closest["dist"] = hit.distance
+                closest["y"] = float(hit.position[1])
+        return True
+
+    get_physx_scene_query_interface().raycast_all(
+        Gf.Vec3f(float(x), float(y_start), float(z)), Gf.Vec3f(0.0, float(direction_y), 0.0), max_dist, _report)
+    return closest["y"]
+
+
+def interior_side_wall_y_at(x, z, direction_y):
+    """트렁크 내부에서 direction_y 방향(+1=왼쪽/-1=오른쪽)으로 쏴서 처음 맞는 표면
+    (휠하우스 돌출/내벽)의 y - 실시간 raycast라 trunk_map.json에 없는 좌우 비대칭 형상도
+    그 시점 실제 차체 콜리전 그대로 반영한다."""
+    return _raycast_y(x, y_start=0.0, z=z, direction_y=direction_y)
+
+
 def detect_internal_ceiling_start_x(y=0.0, x_lo=None, x_hi=None, step=0.02, drop_threshold=0.10):
     """TRUNK_ENTRANCE_X부터 TRUNK_X_MAX까지 ceiling_z_at()을 스캔해서 급격한 하강(열린
     트렁크 리드 밑면 -> 고정 내부 지붕으로의 전환)을 자동 검출한다 - x=3.125라는 매직넘버를
@@ -3043,6 +3074,7 @@ for _box_num, (picked_prim_path, picked_placement) in enumerate(pick_order):
         STAGE3_3_TARGET_X = place_world_xy[0]
         STAGE3_3_CEILING_MARGIN = STAGE3_1_CEILING_MARGIN
         STAGE3_3_FLOOR_MARGIN = STAGE3_1_FLOOR_MARGIN
+        STAGE3_3_SIDE_MARGIN = 0.02  # 사용자 지시 - 좌우(휠하우스/내벽) 실시간 raycast 여유.
 
         _stage3_3_chassis0, _ = base_robot.get_world_pose()
         _, _, _stage3_3_box_center0 = _get_box_x_edges()
@@ -3100,13 +3132,28 @@ for _box_num, (picked_prim_path, picked_placement) in enumerate(pick_order):
             if _stage3_3_clearance_counter["n"] % 10 != 0:
                 return False
             ceiling_here = ceiling_z_at(box_front_x)
-            if ceiling_here is None:
-                return False
-            env_top = _link5_top_z()
-            ceiling_margin_now = ceiling_here - env_top
-            if ceiling_margin_now < STAGE3_3_CEILING_MARGIN:
-                print(f"  [DIAG STAGE3.3] 천장여유={ceiling_margin_now:.4f} < 마진 - 중단", flush=True)
-                return True
+            if ceiling_here is not None:
+                env_top = _link5_top_z()
+                ceiling_margin_now = ceiling_here - env_top
+                if ceiling_margin_now < STAGE3_3_CEILING_MARGIN:
+                    print(f"  [DIAG STAGE3.3] 천장여유={ceiling_margin_now:.4f} < 마진 - 중단", flush=True)
+                    return True
+            # 사용자 실측 확인("왼쪽 휠하우스는 적용 안 된 것 같다 - 안 멈추는데?") - 지금까지
+            # 위/아래(천장/바닥) 클리어런스만 봤고 좌우(휠하우스/내벽) 방향은 아무도 확인하지
+            # 않았다 - trunk_map.json은 좌우 비대칭 돌출을 담을 수 없는 단일 flat AABB라
+            # 이 정보 자체가 없다(위 interior_side_wall_y_at 정의부 참고). Y로 다가가는
+            # 방향으로 실시간 raycast를 쏴서 박스 앞쪽(진행 방향) 모서리가 실제 벽/휠하우스를
+            # 넘지 않는지 확인한다.
+            _side_dir = 1.0 if STAGE3_3_TARGET_Y >= float(box_center[1]) else -1.0
+            _side_wall_y = interior_side_wall_y_at(float(box_center[0]), float(box_center[2]), _side_dir)
+            if _side_wall_y is not None:
+                _box_half_y = float(TEST_BOX_SIZE[1]) / 2.0
+                _box_leading_edge_y = float(box_center[1]) + _side_dir * _box_half_y
+                _side_margin_now = _side_dir * (_side_wall_y - _box_leading_edge_y)
+                if _side_margin_now < STAGE3_3_SIDE_MARGIN:
+                    print(f"  [DIAG STAGE3.3] 좌우여유={_side_margin_now:.4f} < 마진(방향={_side_dir:+.0f}) - "
+                          f"중단", flush=True)
+                    return True
             return False
 
         def _stage3_3_debug(step):
