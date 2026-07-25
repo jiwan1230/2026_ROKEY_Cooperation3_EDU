@@ -1397,7 +1397,7 @@ def retreat_and_raise(target_chassis_x, target_lift_h, ee_target_pos, ee_orienta
 def drive_and_reach(target_x, target_y, ee_target_pos, ee_orientation=DOWN_QUAT,
                      tolerance_xy=0.03, max_speed=0.4, kp_xy=1.8, max_steps=3000,
                      hold_gripper_closed=True, label="",
-                     abort_fn=None, hard_stop_on_condition=False, max_speed_fn=None,
+                     condition_fn=None, abort_fn=None, hard_stop_on_condition=False, max_speed_fn=None,
                      debug_interval=0, debug_fn=None):
     """홀로노믹 베이스 전진과 매니퓰레이터 목표 추종을 같은 스텝에서 동시에 진행한다(사용자
     설계). 원래 drive_to()는 주행 중 step_hold(1)만 불러서 팔에 아무 명령도 안 보냈다 - 리프트
@@ -1415,7 +1415,14 @@ def drive_and_reach(target_x, target_y, ee_target_pos, ee_orientation=DOWN_QUAT,
     "얼어붙은" 게 아니라 능동적으로 추종하므로 drive_until의 "기준 오프셋 대비 편차" 감지는
     그대로 못 쓰지만(추종 중엔 원래도 오차가 있으므로), abort_fn/hard_stop_on_condition/
     max_speed_fn을 동일한 인터페이스로 지원해서 호출부가 이 상황에 맞는 감지 로직(예: 박스
-    Y 이탈, 그리퍼 이탈)을 넣을 수 있게 한다."""
+    Y 이탈, 그리퍼 이탈)을 넣을 수 있게 한다.
+
+    사용자 실측 확인(STAGE 3.3) - 정지 조건이 "섀시가 자기 목표에 도달했는가"뿐이었다.
+    섀시-박스 오프셋을 기준으로 섀시 목표를 잡다 보니, 팔이 능동 추종으로 박스를 이미
+    목표에 딱 붙여놨는데도 섀시가 (팔보다 훨씬 느리게 움직여서) 자기 목표에 도달할 때까지
+    한참을 더 크리핑했다("타겟에 다 왔는데도 섀시가 더 움직인다"는 관찰과 일치). drive_until()
+    처럼 condition_fn(예: 박스가 실제로 목표에 도달했는지)을 추가해서, 섀시가 자기 목표에
+    못 미쳤어도 실제 목표(박스 위치)가 달성됐으면 조기 정지할 수 있게 한다."""
     ee_target_pos = np.array(ee_target_pos, dtype=float)
     start_pos, start_quat = base_robot.get_world_pose()
     tx = target_x if target_x is not None else float(start_pos[0])
@@ -1427,12 +1434,22 @@ def drive_and_reach(target_x, target_y, ee_target_pos, ee_orientation=DOWN_QUAT,
     last_check_pos = np.array([float(start_pos[0]), float(start_pos[1])])
     stalled = False
     aborted = False
+    condition_met = False
+    freeze_q = None
     step = 0
     for step in range(1, max_steps + 1):
         if debug_interval and debug_fn is not None and step % debug_interval == 0:
             debug_fn(step)
+        if condition_fn is not None and condition_fn():
+            condition_met = True
+            print(f"  [조건 충족] {step}스텝에서 condition_fn() True - 섀시 목표 미달이어도 조기 정지",
+                  flush=True)
+            if debug_fn is not None:
+                debug_fn(step)
+            break
         if abort_fn is not None and abort_fn():
             aborted = True
+            freeze_q = np.asarray(m0609_robot.get_joint_positions(), dtype=float).copy()
             print(f"  [자세 붕괴 감지] {step}스텝에서 abort_fn() True - 주행 즉시 중단(실패)", flush=True)
             if debug_fn is not None:
                 debug_fn(step)
@@ -1477,20 +1494,17 @@ def drive_and_reach(target_x, target_y, ee_target_pos, ee_orientation=DOWN_QUAT,
             last_check_pos = cur
 
     if hard_stop_on_condition and aborted:
-        # 이미 자세 붕괴(충돌 의심)가 감지된 상황 - 관성으로 더 밀고 들어가지 않도록 부드러운
-        # 감속 대신 그 자리에서 즉시 속도를 0으로 만든다. 팔은 계속 ee_target_pos를 추종시켜서
-        # (충돌 지점에서 그냥 buzz하지 않고) RMPflow가 알아서 안전한 쪽으로 풀게 둔다.
+        # 사용자 지적(STAGE 3.2 Phase B 실측, reach_with_lift에서 먼저 발견/수정) - 이미
+        # 자세 붕괴(충돌 의심)가 감지된 상황에서도 계속 ee_target_pos를 추종시키면, 이미
+        # 위험하다고 판정된 목표를 향해 계속 풀려다 상황이 더 나빠질 수 있다(STAGE 2/Tilt
+        # Phase3의 "얼려서 정지" 패턴과 반대). 감지 시점의 관절값을 그대로 얼려서 유지한다.
         _smooth_state["vx"] = 0.0
         _smooth_state["vy"] = 0.0
         _smooth_state["wz"] = 0.0
         zero_action = holo_forward(0.0, 0.0, 0.0)
         for _ in range(8):
             base_robot.apply_action(zero_action)
-            sync_rmp_base()
-            actions = controller.forward(
-                target_end_effector_position=ee_target_pos, target_end_effector_orientation=ee_orientation,
-            )
-            m0609_robot.apply_action(actions)
+            m0609_robot.apply_action(ArticulationAction(joint_positions=freeze_q))
             if hold_gripper_closed:
                 m0609_robot.gripper.close()
             set_lift_height(lift_state["h"])
@@ -1514,7 +1528,7 @@ def drive_and_reach(target_x, target_y, ee_target_pos, ee_orientation=DOWN_QUAT,
     ee_err = float(np.linalg.norm(np.array(ee_pos) - ee_target_pos))
     print(f"[주행+추종 완료]{' ' + label if label else ''} {step}스텝, 섀시=({float(final_pos[0]):.3f},"
           f"{float(final_pos[1]):.3f}) 팔ee={np.round(ee_pos, 3)} ee_err={ee_err:.4f}m "
-          f"자세붕괴={aborted} 정체={stalled}", flush=True)
+          f"조건충족={condition_met} 자세붕괴={aborted} 정체={stalled}", flush=True)
     return final_pos, ee_pos, ee_err, not stalled, aborted
 
 
@@ -2457,27 +2471,52 @@ if STAGE >= 3.2:
               "이상(Y 정렬/최종 배치)은 아직 구현 전입니다.\n", flush=True)
 
 if STAGE >= 3.3:
-    # ================= STAGE 3.3: 매니퓰레이터로 Y 정렬(X/Z는 3.2.1/3.2.0이 이미 확보) =================
-    # 사용자 설계(STAGE 3 재설계 7차) - X는 홀로노믹 베이스(3.2.1)로, Z는 리프트+팔 접기
-    # (3.1/3.2.0)로 이미 확보했다. 남은 Y 정렬은 사용자 결정대로 매니퓰레이터가 담당한다
-    # ("베이스의 좌우 이동으로도 할 수 있지만 매니퓰레이터가 어느 정도 커버 가능하다"고
-    # 보고 일부러 남겨뒀던 부분). 섀시/리프트는 전혀 안 움직이고, 팔만 능동적으로 목표
-    # ee 위치(X/Z는 지금 값 그대로, Y만 목표로)를 추종한다 - reach_with_lift()를 그대로
-    # 재사용한다(target_lift_h=현재값을 그대로 줘서 리프트 보간이 사실상 no-op이 되고,
-    # ee 목표의 X/Z도 현재값을 그대로 줘서 Y만 부드럽게 보간되는 효과).
+    # ================= STAGE 3.3: 홀로노믹 베이스 X/Y 동시 이동 + 매니퓰레이터 능동 추종으로 정렬 =================
+    # 사용자 지적(중요) - 섀시/리프트를 완전히 고정한 채 팔만으로 Y를 수십cm 옮기려던 최초
+    # 설계는 기구학적으로 무리였다: 팔의 도달 가능 영역은 어깨 관절을 중심으로 한 구(sphere)
+    # 형태다. 3.2.0에서 이미 거의 다 편(최대 reach에 가까운) 자세로 X/Z를 고정해뒀는데, 그
+    # 상태에서 Y만 옆으로 훑으면 "어깨-목표 거리"가 금방 그 구의 반지름(최대 reach)을
+    # 넘어버린다 - 섀시가 가만히 있으면 물리적으로 불가능한 요구가 될 수 있다는 지적.
+    # 고침(1차): Y는 홀로노믹 베이스도 같이 움직이게 함 - 실측 확인 결과 잘 동작함.
+    # 고침(2차, 사용자 추가 지적) - "섀시도 X로 좀 더 들어가줘야 할 것 같다": 3.2.1의 접근
+    # 한계(vehicle_rear_surface_x_at)는 Y=ANCHOR_Y(중앙)에서만 잰 값인데, 목표 Y는 중앙에서
+    # 벗어난 위치라 그 Y에서 차체 표면을 다시 재면 다른(대개 더 여유 있는) 한계가 나올 수
+    # 있다 - 실측해서 반영한다. 섀시 X도 이 새 한계 안에서 목표 X까지 최대한 더 들어가게
+    # 하고, 팔은 X/Y 모두의 최종 목표를 능동 추종한다(drive_and_reach가 X/Y를 동시에 다룸).
     STAGE3_3_TARGET_Y = place_world_xy[1]
+    STAGE3_3_TARGET_X = place_world_xy[0]
     STAGE3_3_CEILING_MARGIN = STAGE3_1_CEILING_MARGIN
     STAGE3_3_FLOOR_MARGIN = STAGE3_1_FLOOR_MARGIN
-    STAGE3_3_X_DRIFT_TOLERANCE = 0.03  # X는 3.2.1이 이미 맞춰놨으니 이 이상 벗어나면 충돌 의심
 
+    _stage3_3_chassis0, _ = base_robot.get_world_pose()
     _, _, _stage3_3_box_center0 = _get_box_x_edges()
     _ee_now_3_3, _ = m0609_robot.end_effector.get_world_pose()
-    _stage3_3_box_y_offset = float(_stage3_3_box_center0[1]) - float(_ee_now_3_3[1])
-    _stage3_3_target_ee_y = STAGE3_3_TARGET_Y - _stage3_3_box_y_offset
-    _stage3_3_target_ee = (float(_ee_now_3_3[0]), _stage3_3_target_ee_y, float(_ee_now_3_3[2]))
-    _stage3_3_locked_x = float(_stage3_3_box_center0[0])
-    print(f"[STAGE3.3 목표] 현재박스Y={float(_stage3_3_box_center0[1]):.3f} 목표Y={STAGE3_3_TARGET_Y:.3f} "
-          f"ee목표={np.round(_stage3_3_target_ee, 3)} (X/Z 고정)", flush=True)
+
+    # 목표 Y에서 차체 표면을 재실측 - 중앙(3.2.1)보다 더 여유 있을 수 있다.
+    _stage3_3_surface_xs = [vehicle_rear_surface_x_at(STAGE3_3_TARGET_Y, z) for z in STAGE3_2_1_SURFACE_SCAN_ZS]
+    _stage3_3_surface_xs = [x for x in _stage3_3_surface_xs if x is not None]
+    _stage3_3_surface_x = min(_stage3_3_surface_xs) if _stage3_3_surface_xs else _stage3_2_1_surface_x
+    _stage3_3_approach_limit_x = _stage3_3_surface_x - STAGE3_2_1_APPROACH_SAFETY_MARGIN
+
+    # ee 목표 - 그리퍼(ee)와 박스 중심 사이의 실측 오프셋(보통 작음, 흡착 위치 차이)을 반영.
+    _stage3_3_ee_box_x_offset = float(_stage3_3_box_center0[0]) - float(_ee_now_3_3[0])
+    _stage3_3_ee_box_y_offset = float(_stage3_3_box_center0[1]) - float(_ee_now_3_3[1])
+    _stage3_3_target_ee = (
+        STAGE3_3_TARGET_X - _stage3_3_ee_box_x_offset,
+        STAGE3_3_TARGET_Y - _stage3_3_ee_box_y_offset,
+        float(_ee_now_3_3[2]),
+    )
+    # 섀시 목표 - 3.2.1과 동일한 원리(섀시-박스 오프셋 기준). X는 새로 잰 접근 한계로 클램프.
+    _stage3_3_chassis_box_x_offset = float(_stage3_3_box_center0[0]) - float(_stage3_3_chassis0[0])
+    _stage3_3_chassis_box_y_offset = float(_stage3_3_box_center0[1]) - float(_stage3_3_chassis0[1])
+    _stage3_3_naive_chassis_x = STAGE3_3_TARGET_X - _stage3_3_chassis_box_x_offset
+    _stage3_3_chassis_target_x = min(_stage3_3_naive_chassis_x, _stage3_3_approach_limit_x - LIFT_COLUMN_RADIUS)
+    _stage3_3_chassis_target_y = STAGE3_3_TARGET_Y - _stage3_3_chassis_box_y_offset
+    print(f"[STAGE3.3 목표] 현재박스=({float(_stage3_3_box_center0[0]):.3f},{float(_stage3_3_box_center0[1]):.3f}) "
+          f"목표=({STAGE3_3_TARGET_X:.3f},{STAGE3_3_TARGET_Y:.3f}) "
+          f"목표Y에서 차체표면={_stage3_3_surface_x:.3f} 접근한계={_stage3_3_approach_limit_x:.3f} "
+          f"섀시목표=({_stage3_3_chassis_target_x:.3f},{_stage3_3_chassis_target_y:.3f}) "
+          f"ee목표={np.round(_stage3_3_target_ee, 3)}", flush=True)
 
     def _add_y_marker(name, y, color, half_x=0.45, half_y_thickness=0.003, half_z=0.15):
         marker = UsdGeom.Cube.Define(stage, f"/World/{name}")
@@ -2485,11 +2524,13 @@ if STAGE >= 3.3:
         marker.CreateDisplayColorAttr([Gf.Vec3f(*color)])
         xform = UsdGeom.Xformable(marker)
         xform.ClearXformOpOrder()
-        xform.AddTranslateOp().Set(Gf.Vec3d(_stage3_3_locked_x, y, 0.86))
+        xform.AddTranslateOp().Set(Gf.Vec3d(STAGE3_3_TARGET_X, y, 0.86))
         xform.AddScaleOp().Set(Gf.Vec3f(half_x, half_y_thickness, half_z))
 
     # 노랑=목표 Y, 자홍=지금 박스 Y(움직이는 동안 계속 갱신) - STAGE 3.0/3.2.1과 같은 색 관례.
+    # X도 이제 같이 움직이므로 X/Y 마커를 목표 X(고정 아님, 최종 목표 지점) 기준으로 그린다.
     _add_y_marker("Stage3_3TargetPlane", STAGE3_3_TARGET_Y, (1.0, 1.0, 0.0))
+    _add_x_marker("Stage3_3TargetXPlane", STAGE3_3_TARGET_X, (1.0, 1.0, 0.0))
     _add_y_marker("LiveBoxYMarker", float(_stage3_3_box_center0[1]), (1.0, 0.0, 1.0))
 
     _stage3_3_clearance_counter = {"n": 0}
@@ -2500,10 +2541,6 @@ if STAGE >= 3.3:
             print("  [DIAG STAGE3.3] detached=True", flush=True)
             return True
         _, box_front_x, box_center = _get_box_x_edges()
-        x_drift = abs(float(box_center[0]) - _stage3_3_locked_x)
-        if x_drift > STAGE3_3_X_DRIFT_TOLERANCE:
-            print(f"  [DIAG STAGE3.3] x_drift={x_drift:.4f} > 마진 - 중단(충돌 의심)", flush=True)
-            return True
         floor_clear = _box_floor_clearance()
         if floor_clear is not None and floor_clear < STAGE3_3_FLOOR_MARGIN:
             print(f"  [DIAG STAGE3.3] 바닥여유={floor_clear:.4f} < 마진 - 중단", flush=True)
@@ -2522,14 +2559,30 @@ if STAGE >= 3.3:
         return False
 
     def _stage3_3_debug(step):
+        chassis_pos, _ = base_robot.get_world_pose()
         _, _, box_center = _get_box_x_edges()
-        print(f"  [DEBUG STAGE3.3 step={step}] 박스Y={box_center[1]:.3f} 목표={STAGE3_3_TARGET_Y:.3f} "
-              f"박스X={box_center[0]:.3f}(고정={_stage3_3_locked_x:.3f})", flush=True)
+        print(f"  [DEBUG STAGE3.3 step={step}] 섀시=({float(chassis_pos[0]):.3f},{float(chassis_pos[1]):.3f}) "
+              f"박스=({box_center[0]:.3f},{box_center[1]:.3f}) 목표=({STAGE3_3_TARGET_X:.3f},{STAGE3_3_TARGET_Y:.3f})",
+              flush=True)
         _add_y_marker("LiveBoxYMarker", box_center[1], (1.0, 0.0, 1.0))
 
-    _stage3_3_ee_final, _stage3_3_ee_err, _stage3_3_aborted = reach_with_lift(
-        _stage3_3_target_ee, lift_state["h"], steps=250,
-        hold_gripper_closed=True, label="STAGE3.3: 매니퓰레이터로 Y 정렬(X/Z 고정)",
+    # 사용자 실측 확인 - drive_and_reach()의 정지 조건이 "섀시가 자기 목표에 도달했는가"뿐이라,
+    # 섀시-박스 오프셋 기준으로 잡은 섀시 목표에 섀시가 (팔보다 훨씬 느리게) 도달할 때까지
+    # 팔이 이미 박스를 목표에 붙여놓고도 계속 기다렸다("타겟에 다 왔는데도 섀시가 더
+    # 움직인다"). 박스 자체가 목표에 충분히 가까우면 섀시 목표 미달이어도 조기 정지한다.
+    STAGE3_3_BOX_TOLERANCE = 0.01
+
+    def _stage3_3_box_reached():
+        _, _, box_center = _get_box_x_edges()
+        return (abs(float(box_center[0]) - STAGE3_3_TARGET_X) < STAGE3_3_BOX_TOLERANCE
+                and abs(float(box_center[1]) - STAGE3_3_TARGET_Y) < STAGE3_3_BOX_TOLERANCE)
+
+    _, _stage3_3_ee_final, _stage3_3_ee_err, _stage3_3_progressed, _stage3_3_aborted = drive_and_reach(
+        target_x=_stage3_3_chassis_target_x, target_y=_stage3_3_chassis_target_y,
+        ee_target_pos=_stage3_3_target_ee, ee_orientation=DOWN_QUAT, hold_gripper_closed=True,
+        max_speed=0.06, tolerance_xy=0.005,
+        label="STAGE3.3: 섀시+팔 동시 X/Y 정렬",
+        condition_fn=_stage3_3_box_reached,
         abort_fn=_stage3_3_broken, hard_stop_on_condition=True,
         debug_interval=10, debug_fn=_stage3_3_debug,
     )
@@ -2540,17 +2593,17 @@ if STAGE >= 3.3:
             f"[중단] STAGE 3.3 - 목표에 충분히 도달하지 못했습니다(err={_stage3_3_ee_err:.3f}m)."
         )
     _, _, _stage3_3_final_box_center = _get_box_x_edges()
-    print(f"[STAGE3.3 종료] 박스Y={_stage3_3_final_box_center[1]:.3f} 목표={STAGE3_3_TARGET_Y:.3f} "
-          f"박스X={_stage3_3_final_box_center[0]:.3f}(고정 목표={_stage3_3_locked_x:.3f})", flush=True)
-    _log_clearance("STAGE3.3 종료(Y 정렬 후)")
+    print(f"[STAGE3.3 종료] 박스=({_stage3_3_final_box_center[0]:.3f},{_stage3_3_final_box_center[1]:.3f}) "
+          f"목표=({STAGE3_3_TARGET_X:.3f},{STAGE3_3_TARGET_Y:.3f})", flush=True)
+    _log_clearance("STAGE3.3 종료(X/Y 정렬 후)")
 
     chassis_pos0, _ = base_robot.get_world_pose()
     snapshot(eye=[chassis_pos0[0] - 0.8, chassis_pos0[1] - 1.6, chassis_pos0[2] + 0.9],
-             target=[_stage3_3_locked_x, STAGE3_3_TARGET_Y, TRUNK_FLOOR_Z + 0.3],
+             target=[STAGE3_3_TARGET_X, STAGE3_3_TARGET_Y, TRUNK_FLOOR_Z + 0.3],
              fname="_trunkplace_03_3_align_y.png")
 
     if STAGE < 3.4:
-        print("\n[STAGE 3.3 완료] 노랑/자홍 마커로 박스 Y가 목표에 얼마나 가까워졌는지 확인하세요. "
+        print("\n[STAGE 3.3 완료] 노랑/자홍 마커로 박스 X/Y가 목표에 얼마나 가까워졌는지 확인하세요. "
               "STAGE 3.4 이상(최종 하강/배치)은 아직 구현 전입니다.\n", flush=True)
 
 if STAGE >= 4:
