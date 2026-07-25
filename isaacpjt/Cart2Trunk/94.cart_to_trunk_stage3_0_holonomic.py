@@ -636,6 +636,23 @@ def compute_place_targets(placement_entry):
     place_release_z = (float(PLACE_WORLD_MIN[2]) + RELEASE_CLEARANCE_ABOVE_FLOOR
                         + float(place_dims[2]) + TIP_LOCAL_OFFSET[2])
     place_world_xy = (float(PLACE_WORLD_CENTER[0]), float(PLACE_WORLD_CENTER[1]))
+
+    # 사용자 실측 확인("벽에 살짝살짝씩 계속 부딪혀") - algorism 배치 알고리즘은 94번이
+    # 트렁크 안에 추가로 세운 가상 뒷벽(ArtificialBackWall, Isaac Sim 콜리전 전용)의 존재를
+    # 모른 채 목표 X를 계산한다 - 박스 앞쪽 끝(목표X + 박스 반길이)이 벽 콜리전 앞면에서
+    # 실측 6mm밖에 안 떨어진 경우가 있었다(STAGE 3.3이 흔들리는 동안 반복 충돌하는 원인).
+    # 여기서 박스 앞쪽 끝이 벽 앞면 - PLACE_WALL_SAFETY_MARGIN보다 안쪽에 있도록 목표 X를
+    # 강제로 당긴다.
+    _box_half_x = float(place_dims[0]) / 2.0
+    _box_front_edge_x = place_world_xy[0] + _box_half_x
+    _max_allowed_front_edge_x = ARTIFICIAL_TRUNK_BACK_WALL_FRONT_X - PLACE_WALL_SAFETY_MARGIN
+    if _box_front_edge_x > _max_allowed_front_edge_x:
+        _pullback = _box_front_edge_x - _max_allowed_front_edge_x
+        print(f"[가상 뒷벽 안전여유 보정] box_id={placement_entry['box_id']} 박스 앞쪽 끝({_box_front_edge_x:.3f})이 "
+              f"벽 안전선({_max_allowed_front_edge_x:.3f})을 {_pullback:.3f}m 넘어서 목표X를 뒤로 당깁니다: "
+              f"{place_world_xy[0]:.3f} -> {place_world_xy[0] - _pullback:.3f}", flush=True)
+        place_world_xy = (place_world_xy[0] - _pullback, place_world_xy[1])
+
     HOLDING_Z = place_release_z + CARRY_CLEARANCE_ABOVE_RELEASE
     print(f"[PLACE 목표 사전계산] place_world_xy={np.round(place_world_xy, 3)} "
           f"place_release_z={place_release_z:.3f} HOLDING_Z={HOLDING_Z:.3f}", flush=True)
@@ -738,6 +755,15 @@ _back_wall_xform.AddScaleOp().Set(Gf.Vec3f(0.05, 1.6, _back_wall_z_span))  # 얇
 UsdPhysics.CollisionAPI.Apply(_back_wall.GetPrim())
 print(f"[가상 뒷벽] /World/ArtificialBackWall x={ARTIFICIAL_TRUNK_BACK_WALL_X:.3f} "
       f"z=[{_back_wall_z_lo:.3f}, {_back_wall_z_hi:.3f}](trunk_map 바닥~천장) 에 설치", flush=True)
+# 사용자 실측 확인("벽에 살짝살짝씩 계속 부딪혀") - 벽은 크기(size=1.0)*스케일(0.05)이라
+# X 반폭이 0.025m, 실제 콜리전 앞면은 ARTIFICIAL_TRUNK_BACK_WALL_X-0.025 = 3.375다.
+# placement_result.json이 계산한 목표 X(예: 3.309)에 박스 반길이(예: 0.06)를 더한 앞쪽
+# 끝은 3.369로, 벽 앞면(3.375)까지 여유가 실측 6mm뿐이었다 - STAGE 3.3이 목표에 딱
+# 붙기도 전에(주행 중 흔들리는 동안) 박스 모서리가 벽에 반복해서 부딪히는 원인이었다.
+# algorism 배치 알고리즘은 이 가상 벽(Isaac Sim 콜리전 전용, 오프라인 계산엔 없음)의
+# 존재를 모르므로, 여기서 목표 X 자체에 확실한 안전 여유를 강제한다.
+ARTIFICIAL_TRUNK_BACK_WALL_FRONT_X = ARTIFICIAL_TRUNK_BACK_WALL_X - 0.025
+PLACE_WALL_SAFETY_MARGIN = 0.05
 
 # ================= 실시간 지오메트리 함수 (설계 문서 6.1) =================
 # 사용자 설계 문서 - "EE를 목표점으로 이동시키는 코드"에서 "박스+로봇 전체의 포락선이
@@ -2609,12 +2635,17 @@ for _box_num, (picked_prim_path, picked_placement) in enumerate(pick_order):
         # Z(높이)는 전혀 바꿀 필요가 없다 - 팔을 접어 내리는 건 3.1의 몫이다. 이렇게 하면 박스가
         # 트렁크 입구 X에서 충분히 멀어져 안전거리가 확보된 상태로 다음 단계를 시작할 수 있다.
 
-        # STAGE 2용 입구 마커(초록=EntrancePlane/노랑=SuccessPlane)는 이제 다 썼다 - 시야를
-        # 가리니 숨긴다(콜리전 없는 순수 시각 마커라 지워도 안전하지만, 되돌리기 쉽게 숨김 처리).
-        for _marker_name in ["EntrancePlane", "SuccessPlane"]:
-            _marker_prim = stage.GetPrimAtPath(f"/World/{_marker_name}")
-            if _marker_prim.IsValid():
-                UsdGeom.Imageable(_marker_prim).MakeInvisible()
+        # 사용자 지시 - 접근 경계 확인용 마커는(콜리전 없는 순수 시각 마커, 실측으로 이미
+        # 확인됨) 그 단계가 끝나면 항상 숨긴다 - 되돌리기 쉽게 삭제 대신 MakeInvisible()만
+        # 쓴다. 여러 단계에서 재사용하도록 헬퍼로 뺀다.
+        def _hide_markers(names):
+            for _marker_name in names:
+                _marker_prim = stage.GetPrimAtPath(f"/World/{_marker_name}")
+                if _marker_prim.IsValid():
+                    UsdGeom.Imageable(_marker_prim).MakeInvisible()
+
+        # STAGE 2용 입구 마커(초록=EntrancePlane/노랑=SuccessPlane)는 이제 다 썼다 - 시야를 가린다.
+        _hide_markers(["EntrancePlane", "SuccessPlane"])
 
         # STAGE 2와 같은 스타일의 확인용 마커 - 청록=내부천장이 시작되는 실측 지점
         # (INTERNAL_CEILING_START_X), 주황=3.0의 실제 정지 목표(안전마진 포함). 스크린샷에서
@@ -2738,6 +2769,8 @@ for _box_num, (picked_prim_path, picked_placement) in enumerate(pick_order):
         # ================= STAGE 3.1: link_5(전완) 최상단이 로컬 천장보다 낮아지도록 팔을 접어
         # 하강(섀시는 그대로, Z만 변경) =================
         # 92.trunk_place_holonomic.py와 완전히 동일(그대로 재사용).
+        # 사용자 지시 - STAGE 3.0용 마커는 이제 다 썼으니 숨긴다.
+        _hide_markers(["CeilingStartPlane", "Stage3TargetPlane", "LiveEnvelopeFrontMarker"])
         STAGE3_1_CEILING_MARGIN = 0.01  # 노란 마커 = 천장(파랑) - 이 마진.
         STAGE3_1_FLOOR_MARGIN = 0.02    # 박스 바닥이 트렁크 바닥보다 이만큼은 위에 있어야 한다.
         STAGE3_1_MAX_ITERS = 6          # ee_z 하강량=link_5 하강량이라는 선형근사가 완벽하지 않으므로
@@ -2828,6 +2861,8 @@ for _box_num, (picked_prim_path, picked_placement) in enumerate(pick_order):
     if STAGE >= 3.2:
         # ================= STAGE 3.2.0: 그리퍼/박스 위치 고정 + 섀시 후진/리프트 상승으로 팔 펴기 =================
         # 92.trunk_place_holonomic.py와 완전히 동일(그대로 재사용).
+        # 사용자 지시 - STAGE 3.1용 마커는 이제 다 썼으니 숨긴다.
+        _hide_markers(["CeilingHeightMarker", "Stage3_1TargetMarker", "LiveLink5TopMarker"])
         STAGE3_2_0_FLAT_JOINT_TOLERANCE = 0.15  # rad(~8.6도) - joint_2/joint_3가 이 안이면 "폈다"로 본다.
         STAGE3_2_0_RETREAT_X = BASE_START_XY[0]  # 안전 상한 - 최초 대기 위치까지만 후진 허용.
         STAGE3_2_0_LIFT_TARGET = LIFT_MAX + 0.2
@@ -3002,6 +3037,8 @@ for _box_num, (picked_prim_path, picked_placement) in enumerate(pick_order):
     if STAGE >= 3.3:
         # ================= STAGE 3.3: 홀로노믹 베이스 X/Y 동시 이동 + 매니퓰레이터 능동 추종으로 정렬 =================
         # 92.trunk_place_holonomic.py와 완전히 동일(그대로 재사용).
+        # 사용자 지시 - STAGE 3.2.1용 마커는 이제 다 썼으니 숨긴다.
+        _hide_markers(["Stage3_2_1TargetPlane", "LiveBoxXMarker"])
         STAGE3_3_TARGET_Y = place_world_xy[1]
         STAGE3_3_TARGET_X = place_world_xy[0]
         STAGE3_3_CEILING_MARGIN = STAGE3_1_CEILING_MARGIN
@@ -3120,6 +3157,8 @@ for _box_num, (picked_prim_path, picked_placement) in enumerate(pick_order):
         # ================= STAGE 3.4: 최종 하강 + 릴리즈 (X/Y는 3.3이 이미 맞춤, Z만 목표 release 높이로) =================
         # 92.trunk_place_holonomic.py와 동일 - 다만 "/World/TestCarryBox" 하드코딩 대신 실제로
         # 집은 박스 경로(picked_prim_path)를 쓴다(92번은 합성 테스트 박스라 고정 경로였음).
+        # 사용자 지시 - STAGE 3.3용 마커는 이제 다 썼으니 숨긴다.
+        _hide_markers(["Stage3_3TargetPlane", "Stage3_3TargetXPlane", "LiveBoxYMarker"])
         _ee_now_3_4, _ = m0609_robot.end_effector.get_world_pose()
         _stage3_4_target_ee = (float(_ee_now_3_4[0]), float(_ee_now_3_4[1]), place_release_z)
         print(f"[STAGE3.4 목표] 현재ee={np.round(_ee_now_3_4, 3)} 목표ee={np.round(_stage3_4_target_ee, 3)} "
