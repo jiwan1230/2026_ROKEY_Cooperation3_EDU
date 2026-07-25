@@ -2348,11 +2348,20 @@ for _box_num, (picked_prim_path, picked_placement) in enumerate(pick_order):
         # 상태로 STAGE 2(92번 원본, target_yaw_deg 없이 "시작 시점 yaw"를 그대로 유지)에 들어가면
         # 그 틀어진 방향으로 계속 전진해 박스가 Y 허용범위(STAGE2_Y_TOLERANCE)를 넘겨 중단됐다.
         # STAGE 2/3.0 코드(92번 원본)는 그대로 두고, 그 대신 여기서 "STAGE 2가 시작하기 직전"에
-        # 섀시를 y=ANCHOR_Y, yaw=_trunk_approach_yaw_deg(보통 0도, 조인트3/5 반전 박스는
-        # 180도)로 다시 맞춘다 - X는 그대로 둔다(STAGE 1/1.1은 X를 안 바꾸므로 여기서도 건드릴
-        # 이유가 없다). STAGE 0.8이 이미 이 yaw로 도착했지만, 그 뒤 STAGE 1/1.1 동안 팔만
-        # 움직이고 섀시엔 명령이 없어 yaw가 미세하게 틀어지므로 여기서 같은 목표로 다시 잡아준다
-        # (0.8과 다른 yaw를 쓰면 방금 세운 반전 자세가 여기서 도로 풀려버린다).
+        # 섀시를 yaw=_trunk_approach_yaw_deg(보통 0도, 조인트3/5 반전 박스는 180도)로 다시
+        # 맞춘다 - X는 그대로 둔다(STAGE 1/1.1은 X를 안 바꾸므로 여기서도 건드릴 이유가 없다).
+        # STAGE 0.8이 이미 이 yaw로 도착했지만, 그 뒤 STAGE 1/1.1 동안 팔만 움직이고 섀시엔
+        # 명령이 없어 yaw가 미세하게 틀어지므로 여기서 같은 목표로 다시 잡아준다(0.8과 다른
+        # yaw를 쓰면 방금 세운 반전 자세가 여기서 도로 풀려버린다).
+        #
+        # 사용자 실측 확인(2차 - 조인트3/5 반전 박스에서 STAGE2가 1스텝만에 "박스 Y가
+        # STAGE2_Y_TOLERANCE를 넘었다"로 중단) - 원인은 흡착 오차(PICK 로그의 horiz=8.5cm
+        # 같은, 항상 존재하는 그리퍼-박스 중심 어긋남)가 손목(joint_6) 각도에 따라 world
+        # Y/X 어느 쪽으로 투영되는지가 달라진다는 것: 반전 branch는 손목 각도가 달라져서 이
+        # 어긋남이 X 대신 Y로 크게 튀었다. "섀시 Y=ANCHOR_Y"가 아니라 "박스 중심 Y=ANCHOR_Y"가
+        # 진짜 목표이므로, 여기서 그 차이(박스중심Y - 섀시Y, 흡착 오차 그대로 반영된 실측값)를
+        # 재고 섀시 목표 Y를 그만큼 보정한다 - 92번 STAGE2 코드는 안 건드리고 이 신규 정렬
+        # 단계의 목표만 고친다.
         _align_hold_q = np.asarray(m0609_robot.get_joint_positions(), dtype=float).copy()
         _align_chassis_start, _align_chassis_quat_start = base_robot.get_world_pose()
         _align_R_start = quat_wxyz_to_matrix(np.asarray(_align_chassis_quat_start, dtype=float))
@@ -2360,6 +2369,11 @@ for _box_num, (picked_prim_path, picked_placement) in enumerate(pick_order):
         _align_tip_rel_local_ref = _align_R_start.T @ (
             _align_tip_start - np.asarray(_align_chassis_start, dtype=float))
         _align_target_x = float(_align_chassis_start[0])
+        _, _, _align_box_center_start = _get_box_x_edges()
+        _align_box_y_offset_from_chassis = float(_align_box_center_start[1]) - float(_align_chassis_start[1])
+        _align_target_y = ANCHOR_Y - _align_box_y_offset_from_chassis
+        print(f"[STAGE1.9 목표Y 보정] 박스중심Y-섀시Y(흡착오차 반영)={_align_box_y_offset_from_chassis:.4f}m "
+              f"-> 섀시 목표Y={_align_target_y:.4f}(ANCHOR_Y={ANCHOR_Y:.3f} 대신)", flush=True)
 
         def _hold_align_arm():
             m0609_robot.apply_action(ArticulationAction(joint_positions=_align_hold_q))
@@ -2375,7 +2389,7 @@ for _box_num, (picked_prim_path, picked_placement) in enumerate(pick_order):
             return relative_error > 0.025 or detached
 
         _, _, _, align_aborted = drive_until(
-            lambda: False, target_x=_align_target_x, target_y=ANCHOR_Y,
+            lambda: False, target_x=_align_target_x, target_y=_align_target_y,
             target_yaw_deg=_trunk_approach_yaw_deg,
             tolerance_xy=0.005, tolerance_yaw_deg=0.5, kp_xy=0.8, kp_yaw=0.8,
             max_speed=0.04, max_wz=0.08, per_step_fn=_hold_align_arm, abort_fn=_align_broken,
