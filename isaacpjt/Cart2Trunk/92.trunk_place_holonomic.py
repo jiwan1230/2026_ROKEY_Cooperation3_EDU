@@ -638,20 +638,40 @@ add_sdf_collision(stage, "/World/Vehicle")
 # (실측: box center x≈3.427가 한계, 목표는 3.578). 차량 메시 자체를 수정하는 대신(단일
 # 병합 메시라 트렁크 안쪽 벽만 따로 편집할 수 없음 - Blender 등 외부 툴 필요), 트렁크
 # 내부에 실제로 도달 가능한 위치보다 살짝 안쪽에 콜리전이 있는 얇은 가상의 뒷벽을 세운다.
-# /World/Vehicle의 자식 프림으로 붙여서, 기존 raycast 함수들(ceiling_z_at/floor_z_at/
-# vehicle_rear_surface_x_at - 전부 "/World/Vehicle" 접두사로 필터링)이 자동으로 이 벽도
-# "차체"로 인식하게 한다 - 별도 예외 처리가 필요 없다.
-ARTIFICIAL_TRUNK_BACK_WALL_X = 3.52  # 실측 도달 한계(box center≈3.427 + 박스 반길이 0.0675 + 여유 0.03)
-_back_wall = UsdGeom.Cube.Define(stage, "/World/Vehicle/ArtificialBackWall")
+#
+# 사용자 실측 확인 - 처음에 이 벽을 /World/Vehicle의 자식으로 넣었었는데, /World/Vehicle
+# 자체가 add_asset()에서 usdz 단위 변환용 scale(≈0.005~0.006)+90도 회전+CAR_POS 이동을
+# 이미 xformOp로 걸어둔 프림이다 - 그 밑에 자식을 넣으면 내가 준 "world 좌표" x=3.52가
+# 그 부모 변환 안에서 로컬 좌표로 다시 해석돼(스케일까지 곱해져) 차량 원점 근처의 초소형
+# 조각으로 렌더링됐다(실측: GUI에서 안 보임). 다른 마커들(_add_x_marker 등)과 동일하게
+# /World/ 바로 밑에 독립 프림으로 만들어 world 좌표를 그대로 쓴다 - 대신 raycast 필터가
+# "/World/Vehicle" 접두사만 인정하므로, 이 벽의 경로도 별도로 필터에 추가해줘야 한다
+# (아래 _RAYCAST_VEHICLE_PREFIX 정의부에서 튜플로 확장).
+# 사용자 지적(2차 수정) - x는 마지막 STAGE 3.2.1 실행에서 생긴 노란 마커(Stage3_2_1TargetPlane,
+# 접근 한계 기반 목표 박스x)의 위치가 딱 맞다고 확인됨 - 3.52가 아니라 그 값(≈3.453)으로
+# 당긴다(박스를 내려놓을 여유까지 감안한 값이라 3.52보다 입구 쪽으로 더 가까움).
+#
+# z는 원래 바닥 살짝 아래~천장 한참 위(0.41~1.31)까지 넉넉하게 잡았는데, 그러면 실제 고정
+# 천장보다 훨씬 높은, 아직 열린 리드 밑면 구간(~1.4m대)까지 벽이 뻗어있는 것처럼 보인다는
+# 지적. trunk_map.json을 직접 확인해보니 x별로 다른 천장 높이 데이터는 없고(단일 flat
+# AABB - "ceiling_limit" 꼭짓점 하나만 있음, 설계상수/실측 중 더 낮은 값 채택), 그 값이
+# 바로 이미 CEILING_WORLD_Z로 로드해서 쓰고 있는 값이다 - 벽의 z 상단을 CEILING_WORLD_Z로,
+# 하단을 TRUNK_FLOOR_Z로 맞춘다(trunk_map이 실제로 갖고 있는 유일한 바닥/천장 값 그대로).
+ARTIFICIAL_TRUNK_BACK_WALL_X = 3.400  # 사용자 최종 조정 - 노란 마커(3.453)보다 살짝 더 안전하게
+_back_wall_z_lo = TRUNK_FLOOR_Z
+_back_wall_z_hi = CEILING_WORLD_Z
+_back_wall_z_center = (_back_wall_z_lo + _back_wall_z_hi) / 2.0
+_back_wall_z_span = _back_wall_z_hi - _back_wall_z_lo
+_back_wall = UsdGeom.Cube.Define(stage, "/World/ArtificialBackWall")
 _back_wall.CreateSizeAttr(1.0)
-_back_wall.CreateDisplayColorAttr([Gf.Vec3f(0.4, 0.05, 0.05)])
+_back_wall.CreateDisplayColorAttr([Gf.Vec3f(0.9, 0.1, 0.1)])
 _back_wall_xform = UsdGeom.Xformable(_back_wall)
 _back_wall_xform.ClearXformOpOrder()
-_back_wall_xform.AddTranslateOp().Set(Gf.Vec3d(ARTIFICIAL_TRUNK_BACK_WALL_X, 0.0, 0.86))
-_back_wall_xform.AddScaleOp().Set(Gf.Vec3f(0.05, 1.6, 0.9))  # 얇은 X, 트렁크 폭보다 넓은 Y, 바닥~천장 위까지 Z
+_back_wall_xform.AddTranslateOp().Set(Gf.Vec3d(ARTIFICIAL_TRUNK_BACK_WALL_X, 0.0, _back_wall_z_center))
+_back_wall_xform.AddScaleOp().Set(Gf.Vec3f(0.05, 1.6, _back_wall_z_span))  # 얇은 X, 넓은 Y, trunk_map 바닥~천장만큼 Z
 UsdPhysics.CollisionAPI.Apply(_back_wall.GetPrim())
-print(f"[가상 뒷벽] /World/Vehicle/ArtificialBackWall x={ARTIFICIAL_TRUNK_BACK_WALL_X:.3f}에 설치 "
-      "(실측 접근 한계 기반, 실제 차체 메시는 그대로 유지)", flush=True)
+print(f"[가상 뒷벽] /World/ArtificialBackWall x={ARTIFICIAL_TRUNK_BACK_WALL_X:.3f} "
+      f"z=[{_back_wall_z_lo:.3f}, {_back_wall_z_hi:.3f}](trunk_map 바닥~천장) 에 설치", flush=True)
 
 # ================= 실시간 지오메트리 함수 (설계 문서 6.1) =================
 # 사용자 설계 문서 - "EE를 목표점으로 이동시키는 코드"에서 "박스+로봇 전체의 포락선이
@@ -662,7 +682,11 @@ print(f"[가상 뒷벽] /World/Vehicle/ArtificialBackWall x={ARTIFICIAL_TRUNK_BA
 # 하드코딩된 구간 경계(예: x=3.125) 대신, 차량 SDF 콜리전에 직접 raycast를 쏴서 "그 시점
 # 실제 형상"을 재는 함수로 만든다 - 차량 스케일이 또 바뀌어도 코드 수정이 필요 없다(이번
 # 세션에서 반복된 "예전 스케일 튜닝값이 새 스케일에서 안 맞음" 문제의 구조적 해결).
-_RAYCAST_VEHICLE_PREFIX = "/World/Vehicle"
+# 사용자 설계 - ArtificialBackWall은 /World/Vehicle의 자식이 아니라(부모 스케일/회전에
+# 좌표가 다시 해석되는 문제 때문에) 독립된 /World/ArtificialBackWall로 만들었다 - 그래도
+# 기존 raycast들이 이걸 "차체"로 인식하도록 접두사 튜플에 같이 넣는다(str.startswith는
+# 튜플을 그대로 받는다).
+_RAYCAST_VEHICLE_PREFIX = ("/World/Vehicle", "/World/ArtificialBackWall")
 
 
 def _raycast_z(x, y, z_start, direction_z, max_dist=4.0):
