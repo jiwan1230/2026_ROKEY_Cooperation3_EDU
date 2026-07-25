@@ -498,6 +498,31 @@ for _ in range(20):
     simulation_app.update()
 add_sdf_collision(stage, "/World/Vehicle")
 
+# 92.trunk_place_holonomic.py와 동일 환경 - 실제 로봇이 도달 가능한 한계(x≈3.4, STAGE 3.2.1
+# 실측 기반)보다 안쪽은 어차피 못 쓰므로, 스캔 단계에서부터 트렁크 안에 얇은 가상 뒷벽을
+# 세워둔다. 92.py와 달리 여기서는 raycast가 아니라 RGB-D 카메라로 점유 공간을 스캔하므로,
+# 이 벽이 카메라에 실제로 "보여야" 포인트클라우드/trunk_map.json의 depth에 반영된다 -
+# 즉 여기서는 라이브 raycast 필터 갱신이 필요 없고(89.py는 raycast 인프라 자체가 없음),
+# 카메라가 인식할 불투명 솔리드 프림이면 충분하다. 92.py와 동일하게 /World/Vehicle의
+# 자식이 아니라 독립 프림으로 만든다(부모의 usdz 단위변환 scale/회전 때문에 좌표가 다시
+# 해석되는 문제를 92.py에서 실측으로 확인했음 - 처음부터 그 실수를 피한다). z는 92.py의
+# CEILING_WORLD_Z(trunk_map 실측 천장 - 89/90번이 아직 안 만들어졌으니 여기선 그 값이 될
+# 설계상수 TRUNK_WALL_TOP)와 TRUNK_FLOOR_Z를 그대로 쓴다.
+ARTIFICIAL_TRUNK_BACK_WALL_X = 3.400  # 92.py 사용자 최종 조정값과 동일
+_back_wall = UsdGeom.Cube.Define(stage, "/World/ArtificialBackWall")
+_back_wall.CreateSizeAttr(1.0)
+_back_wall.CreateDisplayColorAttr([Gf.Vec3f(0.9, 0.1, 0.1)])
+_back_wall_xform = UsdGeom.Xformable(_back_wall)
+_back_wall_xform.ClearXformOpOrder()
+_back_wall_z_center = (TRUNK_FLOOR_Z + TRUNK_WALL_TOP) / 2.0
+_back_wall_z_span = TRUNK_WALL_TOP - TRUNK_FLOOR_Z
+_back_wall_xform.AddTranslateOp().Set(Gf.Vec3d(ARTIFICIAL_TRUNK_BACK_WALL_X, 0.0, _back_wall_z_center))
+_back_wall_xform.AddScaleOp().Set(Gf.Vec3f(0.05, 1.6, _back_wall_z_span))  # 얇은 X, 넓은 Y, 바닥~천장 Z
+UsdPhysics.CollisionAPI.Apply(_back_wall.GetPrim())
+print(f"[가상 뒷벽] /World/ArtificialBackWall x={ARTIFICIAL_TRUNK_BACK_WALL_X:.3f} "
+      f"z=[{TRUNK_FLOOR_Z:.3f}, {TRUNK_WALL_TOP:.3f}]에 설치(92.py와 동일 환경, 스캔에 반영됨)",
+      flush=True)
+
 area_light = UsdLux.SphereLight.Define(stage, "/World/TrunkScanAreaLight")
 area_light.CreateRadiusAttr(0.3)
 area_light.CreateIntensityAttr(80000)
