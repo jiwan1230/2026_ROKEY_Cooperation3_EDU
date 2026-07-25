@@ -1358,32 +1358,13 @@ if "joint_5" in m0609_robot.dof_names:
     _fold_target_mirrored[m0609_robot.dof_names.index("joint_5")] = -np.pi / 2
 
 
-# 사용자 GUI 관찰(스크린샷) - 트렁크 standoff 도착 후 리프트를 올리고 STAGE1 홀딩 자세를
-# 잡을 때 joint_6이 눈에 띄게 반대로(거의 180도) 돌아가면서 그 순간 박스 오차가 커졌다.
-# 원인: _fold_target/_fold_target_mirrored는 joint_3/5만 명시하고 나머지는 전부 0으로 채운
-# 배열이라(np.zeros 기반), raise_lift_and_fold가 이걸 그대로 보간 목표로 쓰면 joint_1/2/4/6도
-# 매번 강제로 0으로 끌려간다 - joint_1은 그 직후 pick_raise_and_aim()이 어차피 실측 기반으로
-# 다시 조준해서 무해했지만, joint_6은 그 뒤 STAGE1의 move_link6(RMPflow)이 반전 branch를
-# 유지하려고 그 값을 다시 ~180도로 되돌리면서 "0으로 꺾었다가 다시 180으로 꺾는" 불필요한
-# 왕복이 생겼다(사용자 지적 - "이것만 안 해보면 어떨까"). 고침: 이 함수는 이제 target_joints에서
-# joint_3/5 값만 실제로 적용하고, 나머지 조인트는 전부 호출 시점의 현재값을 그대로 유지한다
-# (원래 의도가 "조인트3/5만 접고 나머지는 건드리지 않는다"였던 것으로 보이고, joint_1/2/4는
-# 이 변경으로 동작이 안 바뀐다 - joint_2/4는 애초에 이 함수 밖에서 아무도 0이 아닌 값으로
-# 옮기지 않고, joint_1은 항상 이 함수 다음에 재조준되기 때문).
-_FOLD_JOINT_NAMES = ("joint_3", "joint_5")
-_FOLD_JOINT_INDICES = [m0609_robot.dof_names.index(n) for n in _FOLD_JOINT_NAMES
-                       if n in m0609_robot.dof_names]
-
-
 def raise_lift_and_fold(target_h, target_joints, steps=200):
     start_h = lift_state["h"]
     start_joints = np.array(m0609_robot.get_joint_positions(), dtype=float)
-    effective_target = start_joints.copy()
-    effective_target[_FOLD_JOINT_INDICES] = np.asarray(target_joints, dtype=float)[_FOLD_JOINT_INDICES]
     for i in range(steps):
         alpha = (i + 1) / steps
         h = start_h + (target_h - start_h) * alpha
-        j = start_joints + (effective_target - start_joints) * alpha
+        j = start_joints + (target_joints - start_joints) * alpha
         m0609_robot.apply_action(ArticulationAction(joint_positions=j))
         set_lift_height(h)
         world.step(render=True)
@@ -2169,7 +2150,20 @@ for _box_num, (picked_prim_path, picked_placement) in enumerate(pick_order):
         # 그대로 쓰면 된다. 관절 목표는 _fold_target이 아니라 _carry_pick_fold_target을 써야
         # 한다 - 안 그러면 미러 접힘(joint_3/5=-90/-90)이 STAGE 1 진입 직전에 여기서 다시
         # +90/+90으로 풀려버려 실험 자체가 무효화된다.
-        raise_lift_and_fold(LIFT_MAX, _carry_pick_fold_target, steps=200)
+        #
+        # 사용자 GUI 관찰(재수정) - raise_lift_and_fold 자체를 "joint_3/5만 움직이고 나머지는
+        # 현재값 유지"로 바꾸는 시도는 PICK 직후 joint_1이 카트를 향한 채로 안 풀려서 안전
+        # 운송 자세가 카트 쪽을 본 채로 리프트가 올라가 카트에 부딪히는 새 문제를 만들었다
+        # (원상복구 - raise_lift_and_fold는 다시 원래대로 모든 조인트를 target_joints로
+        # 보간한다). 대신 사용자가 직접 지목한 지점(여기, STAGE0.8 끝 리프트 재상승)에서만,
+        # 왼쪽 배치라 조인트3/5를 반전한 박스에 한해 joint_6 목표를 0 대신 180도로 줘서
+        # DOWN_QUAT를 만족하는 반전 branch의 자연스러운 손목 값으로 바로 가게 한다(오른쪽
+        # 배치 박스는 이 분기를 안 타므로 기존과 완전히 동일하게 동작한다).
+        _stage0_8_lift_fold_target = _carry_pick_fold_target
+        if _carry_pick_fold_target is _fold_target_mirrored and "joint_6" in m0609_robot.dof_names:
+            _stage0_8_lift_fold_target = _carry_pick_fold_target.copy()
+            _stage0_8_lift_fold_target[m0609_robot.dof_names.index("joint_6")] = np.pi
+        raise_lift_and_fold(LIFT_MAX, _stage0_8_lift_fold_target, steps=200)
 
         # 사용자 실측 확인(2차 - 리프트 높이를 92번과 맞춘 뒤에도 STAGE1/1.1 동안 yaw가 여전히
         # -0.5도->-4.2도로 틀어짐) - 리프트 높이는 원인이 아니었다. 실제 원인은 홀로노믹 바퀴가
