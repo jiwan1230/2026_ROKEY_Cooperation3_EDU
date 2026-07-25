@@ -2429,9 +2429,12 @@ if STAGE >= 3.2:
         _add_x_marker("Stage3_2_1TargetPlane", _stage3_2_1_target_box_x, (1.0, 1.0, 0.0))
         _add_x_marker("LiveBoxXMarker", box_center[0], (1.0, 0.0, 1.0))
 
+    # 사용자 실측 확인 - 접근 한계가 아니라 drive_until()의 기본 tolerance_xy(0.03, 3cm)
+    # 때문에 목표에 딱 붙기 전에 "충분히 가깝다"고 멈췄다(접근 한계까지는 아직 여유가
+    # 있었음). 최종 정밀 접근이라 훨씬 좁은 허용오차를 쓴다.
     _, _, stage3_2_1_condition_met, stage3_2_1_aborted = drive_until(
         lambda: False, target_x=_stage3_2_1_target_chassis_x, target_y=float(_stage3_2_1_chassis0[1]),
-        kp_xy=0.8, max_speed=0.08, per_step_fn=_hold_stage3_2_1_arm,
+        tolerance_xy=0.005, kp_xy=0.8, max_speed=0.08, per_step_fn=_hold_stage3_2_1_arm,
         abort_fn=_stage3_2_1_broken, hard_stop_on_condition=True,
         label="STAGE3.2.1: 홀로노믹 베이스로 적재 X까지 접근(팔 자세 고정)",
         debug_interval=10, debug_fn=_stage3_2_1_debug,
@@ -2452,6 +2455,103 @@ if STAGE >= 3.2:
         print("\n[STAGE 3.2.1 완료] 노랑/자홍 마커로 박스 X가 목표에 얼마나 가까워졌는지, "
               "접근 한계(차체 표면) 때문에 못 미쳤다면 얼마나 남았는지 확인하세요. STAGE 3.3 "
               "이상(Y 정렬/최종 배치)은 아직 구현 전입니다.\n", flush=True)
+
+if STAGE >= 3.3:
+    # ================= STAGE 3.3: 매니퓰레이터로 Y 정렬(X/Z는 3.2.1/3.2.0이 이미 확보) =================
+    # 사용자 설계(STAGE 3 재설계 7차) - X는 홀로노믹 베이스(3.2.1)로, Z는 리프트+팔 접기
+    # (3.1/3.2.0)로 이미 확보했다. 남은 Y 정렬은 사용자 결정대로 매니퓰레이터가 담당한다
+    # ("베이스의 좌우 이동으로도 할 수 있지만 매니퓰레이터가 어느 정도 커버 가능하다"고
+    # 보고 일부러 남겨뒀던 부분). 섀시/리프트는 전혀 안 움직이고, 팔만 능동적으로 목표
+    # ee 위치(X/Z는 지금 값 그대로, Y만 목표로)를 추종한다 - reach_with_lift()를 그대로
+    # 재사용한다(target_lift_h=현재값을 그대로 줘서 리프트 보간이 사실상 no-op이 되고,
+    # ee 목표의 X/Z도 현재값을 그대로 줘서 Y만 부드럽게 보간되는 효과).
+    STAGE3_3_TARGET_Y = place_world_xy[1]
+    STAGE3_3_CEILING_MARGIN = STAGE3_1_CEILING_MARGIN
+    STAGE3_3_FLOOR_MARGIN = STAGE3_1_FLOOR_MARGIN
+    STAGE3_3_X_DRIFT_TOLERANCE = 0.03  # X는 3.2.1이 이미 맞춰놨으니 이 이상 벗어나면 충돌 의심
+
+    _, _, _stage3_3_box_center0 = _get_box_x_edges()
+    _ee_now_3_3, _ = m0609_robot.end_effector.get_world_pose()
+    _stage3_3_box_y_offset = float(_stage3_3_box_center0[1]) - float(_ee_now_3_3[1])
+    _stage3_3_target_ee_y = STAGE3_3_TARGET_Y - _stage3_3_box_y_offset
+    _stage3_3_target_ee = (float(_ee_now_3_3[0]), _stage3_3_target_ee_y, float(_ee_now_3_3[2]))
+    _stage3_3_locked_x = float(_stage3_3_box_center0[0])
+    print(f"[STAGE3.3 목표] 현재박스Y={float(_stage3_3_box_center0[1]):.3f} 목표Y={STAGE3_3_TARGET_Y:.3f} "
+          f"ee목표={np.round(_stage3_3_target_ee, 3)} (X/Z 고정)", flush=True)
+
+    def _add_y_marker(name, y, color, half_x=0.45, half_y_thickness=0.003, half_z=0.15):
+        marker = UsdGeom.Cube.Define(stage, f"/World/{name}")
+        marker.CreateSizeAttr(1.0)
+        marker.CreateDisplayColorAttr([Gf.Vec3f(*color)])
+        xform = UsdGeom.Xformable(marker)
+        xform.ClearXformOpOrder()
+        xform.AddTranslateOp().Set(Gf.Vec3d(_stage3_3_locked_x, y, 0.86))
+        xform.AddScaleOp().Set(Gf.Vec3f(half_x, half_y_thickness, half_z))
+
+    # 노랑=목표 Y, 자홍=지금 박스 Y(움직이는 동안 계속 갱신) - STAGE 3.0/3.2.1과 같은 색 관례.
+    _add_y_marker("Stage3_3TargetPlane", STAGE3_3_TARGET_Y, (1.0, 1.0, 0.0))
+    _add_y_marker("LiveBoxYMarker", float(_stage3_3_box_center0[1]), (1.0, 0.0, 1.0))
+
+    _stage3_3_clearance_counter = {"n": 0}
+
+    def _stage3_3_broken():
+        detached = not m0609_robot.gripper.is_closed()
+        if detached:
+            print("  [DIAG STAGE3.3] detached=True", flush=True)
+            return True
+        _, box_front_x, box_center = _get_box_x_edges()
+        x_drift = abs(float(box_center[0]) - _stage3_3_locked_x)
+        if x_drift > STAGE3_3_X_DRIFT_TOLERANCE:
+            print(f"  [DIAG STAGE3.3] x_drift={x_drift:.4f} > 마진 - 중단(충돌 의심)", flush=True)
+            return True
+        floor_clear = _box_floor_clearance()
+        if floor_clear is not None and floor_clear < STAGE3_3_FLOOR_MARGIN:
+            print(f"  [DIAG STAGE3.3] 바닥여유={floor_clear:.4f} < 마진 - 중단", flush=True)
+            return True
+        _stage3_3_clearance_counter["n"] += 1
+        if _stage3_3_clearance_counter["n"] % 10 != 0:
+            return False
+        ceiling_here = ceiling_z_at(box_front_x)
+        if ceiling_here is None:
+            return False
+        env_top = measure_carry_envelope()["top_z"]
+        ceiling_margin_now = ceiling_here - env_top
+        if ceiling_margin_now < STAGE3_3_CEILING_MARGIN:
+            print(f"  [DIAG STAGE3.3] 천장여유={ceiling_margin_now:.4f} < 마진 - 중단", flush=True)
+            return True
+        return False
+
+    def _stage3_3_debug(step):
+        _, _, box_center = _get_box_x_edges()
+        print(f"  [DEBUG STAGE3.3 step={step}] 박스Y={box_center[1]:.3f} 목표={STAGE3_3_TARGET_Y:.3f} "
+              f"박스X={box_center[0]:.3f}(고정={_stage3_3_locked_x:.3f})", flush=True)
+        _add_y_marker("LiveBoxYMarker", box_center[1], (1.0, 0.0, 1.0))
+
+    _stage3_3_ee_final, _stage3_3_ee_err, _stage3_3_aborted = reach_with_lift(
+        _stage3_3_target_ee, lift_state["h"], steps=250,
+        hold_gripper_closed=True, label="STAGE3.3: 매니퓰레이터로 Y 정렬(X/Z 고정)",
+        abort_fn=_stage3_3_broken, hard_stop_on_condition=True,
+        debug_interval=10, debug_fn=_stage3_3_debug,
+    )
+    if _stage3_3_aborted:
+        pause_for_inspection("[중단] STAGE 3.3 도중 자세 붕괴/클리어런스 부족이 감지돼 즉시 중단했습니다.")
+    if _stage3_3_ee_err > 0.05:
+        pause_for_inspection(
+            f"[중단] STAGE 3.3 - 목표에 충분히 도달하지 못했습니다(err={_stage3_3_ee_err:.3f}m)."
+        )
+    _, _, _stage3_3_final_box_center = _get_box_x_edges()
+    print(f"[STAGE3.3 종료] 박스Y={_stage3_3_final_box_center[1]:.3f} 목표={STAGE3_3_TARGET_Y:.3f} "
+          f"박스X={_stage3_3_final_box_center[0]:.3f}(고정 목표={_stage3_3_locked_x:.3f})", flush=True)
+    _log_clearance("STAGE3.3 종료(Y 정렬 후)")
+
+    chassis_pos0, _ = base_robot.get_world_pose()
+    snapshot(eye=[chassis_pos0[0] - 0.8, chassis_pos0[1] - 1.6, chassis_pos0[2] + 0.9],
+             target=[_stage3_3_locked_x, STAGE3_3_TARGET_Y, TRUNK_FLOOR_Z + 0.3],
+             fname="_trunkplace_03_3_align_y.png")
+
+    if STAGE < 3.4:
+        print("\n[STAGE 3.3 완료] 노랑/자홍 마커로 박스 Y가 목표에 얼마나 가까워졌는지 확인하세요. "
+              "STAGE 3.4 이상(최종 하강/배치)은 아직 구현 전입니다.\n", flush=True)
 
 if STAGE >= 4:
     # ================= STAGE 4: 후퇴 (STAGE 3 -> ... -> STAGE 1 상태로 역순 복귀) =================
