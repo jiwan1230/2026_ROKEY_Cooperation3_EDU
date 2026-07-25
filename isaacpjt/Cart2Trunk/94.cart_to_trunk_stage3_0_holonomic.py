@@ -1981,6 +1981,14 @@ for _box_num, (picked_prim_path, picked_placement) in enumerate(pick_order):
     # 매 박스마다 카트 옆에서 리프트 재상승+접기+joint_1 재조준부터 다시 시작한다(박스 2개
     # 이상일 때, 앞 박스를 놓고 돌아온 뒤에도 동일하게 필요 - 위 함수 정의부 설명 참고).
     pick_raise_and_aim(_carry_pick_fold_target)
+
+    # 사용자 실측 확인("솔루션 스페이스는 잘 바뀌었는데, 안전운송자세 온 다음에 place위치로
+    # 갈때 반대로 회전해서 자세를 잡아야했다") - 조인트3/5를 반전해서 픽/운송한 박스는 팔이
+    # 반대쪽 solution branch에 붙어있으므로, 트렁크 standoff로 갈 때도 섀시를 180도
+    # 반대(yaw=180)로 세워야 그 branch에 맞는 자세가 나온다. 이 값을 STAGE0.8과
+    # STAGE1.9(둘 다 "트렁크 standoff에서 이 yaw여야 한다"는 동일한 목표를 쓴다) 양쪽에서
+    # 그대로 재사용한다.
+    _trunk_approach_yaw_deg = 180.0 if (_carry_pick_fold_target is _fold_target_mirrored) else 0.0
     box_dim_x, box_dim_y, box_dim_z = BOX_KNOWN_SIZE[picked_prim_path]
     half_height = float(box_dim_z) / 2.0
     horizontal_tolerance = float(max(box_dim_x, box_dim_y)) / 2.0 + GRASP_HORIZONTAL_MARGIN
@@ -2124,9 +2132,11 @@ for _box_num, (picked_prim_path, picked_placement) in enumerate(pick_order):
             return relative_error > 0.025 or detached
 
         _, _, _, transit_drive_aborted = drive_until(
-            lambda: False, target_x=BASE_START_XY[0], target_y=BASE_START_XY[1], target_yaw_deg=0.0,
+            lambda: False, target_x=BASE_START_XY[0], target_y=BASE_START_XY[1],
+            target_yaw_deg=_trunk_approach_yaw_deg,
             max_speed=0.15, per_step_fn=_hold_transit_arm, abort_fn=_transit_pose_broken,
-            hard_stop_on_condition=True, label="STAGE0.8: 카트->트렁크 standoff 주행+회전(팔 자세 고정, yaw->0도)",
+            hard_stop_on_condition=True,
+            label=f"STAGE0.8: 카트->트렁크 standoff 주행+회전(팔 자세 고정, yaw->{_trunk_approach_yaw_deg:.0f}도)",
         )
         if transit_drive_aborted:
             pause_for_inspection("[중단] STAGE 0.8 주행 도중 자세 붕괴/흡착 이탈이 감지돼 즉시 중단했습니다.")
@@ -2338,8 +2348,11 @@ for _box_num, (picked_prim_path, picked_placement) in enumerate(pick_order):
         # 상태로 STAGE 2(92번 원본, target_yaw_deg 없이 "시작 시점 yaw"를 그대로 유지)에 들어가면
         # 그 틀어진 방향으로 계속 전진해 박스가 Y 허용범위(STAGE2_Y_TOLERANCE)를 넘겨 중단됐다.
         # STAGE 2/3.0 코드(92번 원본)는 그대로 두고, 그 대신 여기서 "STAGE 2가 시작하기 직전"에
-        # 섀시를 y=ANCHOR_Y, yaw=0도로 다시 맞춘다 - X는 그대로 둔다(STAGE 1/1.1은 X를 안
-        # 바꾸므로 여기서도 건드릴 이유가 없다).
+        # 섀시를 y=ANCHOR_Y, yaw=_trunk_approach_yaw_deg(보통 0도, 조인트3/5 반전 박스는
+        # 180도)로 다시 맞춘다 - X는 그대로 둔다(STAGE 1/1.1은 X를 안 바꾸므로 여기서도 건드릴
+        # 이유가 없다). STAGE 0.8이 이미 이 yaw로 도착했지만, 그 뒤 STAGE 1/1.1 동안 팔만
+        # 움직이고 섀시엔 명령이 없어 yaw가 미세하게 틀어지므로 여기서 같은 목표로 다시 잡아준다
+        # (0.8과 다른 yaw를 쓰면 방금 세운 반전 자세가 여기서 도로 풀려버린다).
         _align_hold_q = np.asarray(m0609_robot.get_joint_positions(), dtype=float).copy()
         _align_chassis_start, _align_chassis_quat_start = base_robot.get_world_pose()
         _align_R_start = quat_wxyz_to_matrix(np.asarray(_align_chassis_quat_start, dtype=float))
@@ -2362,7 +2375,8 @@ for _box_num, (picked_prim_path, picked_placement) in enumerate(pick_order):
             return relative_error > 0.025 or detached
 
         _, _, _, align_aborted = drive_until(
-            lambda: False, target_x=_align_target_x, target_y=ANCHOR_Y, target_yaw_deg=0.0,
+            lambda: False, target_x=_align_target_x, target_y=ANCHOR_Y,
+            target_yaw_deg=_trunk_approach_yaw_deg,
             tolerance_xy=0.005, tolerance_yaw_deg=0.5, kp_xy=0.8, kp_yaw=0.8,
             max_speed=0.04, max_wz=0.08, per_step_fn=_hold_align_arm, abort_fn=_align_broken,
             hard_stop_on_condition=True, label="STAGE1.9: STAGE 2 진입 전 섀시 y/yaw 재정렬",
