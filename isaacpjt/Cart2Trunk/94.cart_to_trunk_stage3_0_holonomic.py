@@ -670,6 +670,18 @@ def compute_place_targets(placement_entry):
           f"천장한계 {SAFE_TRANSIT_Z:.3f} 이내로 클램프)", flush=True)
 
 
+def box_place_needs_mirrored_pick(placement_entry):
+    """다음 박스의 최종 트렁크 배치 Y가 ANCHOR_Y(차량 중심선)보다 왼쪽(+Y)인지만 계산한다
+    (compute_place_targets()의 PLACE_WORLD_CENTER 계산과 동일한 식 - 가상 뒷벽 안전여유
+    보정은 X만 건드리므로 Y 판정엔 영향 없어 생략). 사용자 지시(link_2가 왼쪽 place때
+    그리퍼보다 튀어나와 부딪히는 문제 대응 실험) - 왼쪽에 놓아야 하는 박스는 카트 복귀
+    도중 조인트3/5를 반대 부호로 접어 반대쪽 solution branch를 유도해본다."""
+    _pos_base = np.asarray(placement_entry["position_base_frame"], dtype=np.float64)
+    _dims = np.asarray(placement_entry["dimensions"], dtype=np.float64)
+    _world_center = SCAN_R_BASE @ (_pos_base + _dims / 2.0) + SCAN_BASE_POS
+    return float(_world_center[1]) > ANCHOR_Y
+
+
 # 사용자 설계 문서(Stage 2 한계 극복) - 지금까지의 STAGE 2/3(수평 이동)는 "박스+그리퍼 스택이
 # 입구 수직 개구부에 다 들어가는" 박스에서만 통한다. 큰 박스는 수평으로는 절대 못 들어가므로
 # 별도의 Tilt-and-Insert(문턱 앞에서 피치업 -> 기울인 채 통과 -> 내부에서 다시 수평 복원)가
@@ -1336,6 +1348,15 @@ if "joint_3" in m0609_robot.dof_names:
 if "joint_5" in m0609_robot.dof_names:
     _fold_target[m0609_robot.dof_names.index("joint_5")] = np.pi / 2
 
+# 사용자 지시(link_2가 왼쪽 place때 그리퍼보다 튀어나와 부딪히는 문제 대응 실험) - 조인트
+# 3/5 부호를 반대로 접은 "미러 접힘" 자세. base의 위치/yaw는 건드리지 않고 팔 조인트만
+# 반대로 접어서 RMPflow가 반대쪽 solution branch(팔꿈치 방향)에 붙도록 유도해본다.
+_fold_target_mirrored = _fold_target.copy()
+if "joint_3" in m0609_robot.dof_names:
+    _fold_target_mirrored[m0609_robot.dof_names.index("joint_3")] = -np.pi / 2
+if "joint_5" in m0609_robot.dof_names:
+    _fold_target_mirrored[m0609_robot.dof_names.index("joint_5")] = -np.pi / 2
+
 
 def raise_lift_and_fold(target_h, target_joints, steps=200):
     start_h = lift_state["h"]
@@ -1361,10 +1382,10 @@ def raise_lift_and_fold(target_h, target_joints, steps=200):
 # (돌아올 때 리프트를 도킹 높이로 낮춰두므로, 다시 호버하려면 이 리프트 재상승 + 조준이
 # 반드시 필요하다 - 안 하면 팔 혼자 리프트 없이 카트 손잡이 높이까지 뻗어야 해서 reach가
 # 부족해진다). 함수로 묶어서 박스 루프 맨 앞(아래)에서 매번 호출한다.
-def pick_raise_and_aim():
-    print(f"\n[리프트] 도킹({LIFT_MIN:.3f}) -> PICK 높이({PICK_LIFT_H:.3f}) + 조인트 3/5 접기(91번과 동일)",
-          flush=True)
-    raise_lift_and_fold(PICK_LIFT_H, _fold_target, steps=200)
+def pick_raise_and_aim(fold_target=_fold_target):
+    print(f"\n[리프트] 도킹({LIFT_MIN:.3f}) -> PICK 높이({PICK_LIFT_H:.3f}) + 조인트 3/5 접기"
+          f"{'(반전)' if fold_target is _fold_target_mirrored else '(91번과 동일)'}", flush=True)
+    raise_lift_and_fold(PICK_LIFT_H, fold_target, steps=200)
 
     # FK 실측 기반 계산(하드코딩 없음) - 지금 접은 자세에서 그리퍼가 실제로 어느 방향을 보고
     # 있는지와 지금 섀시 기준 카트 중심이 어느 방향인지를 둘 다 계산해서 그 차이만큼만 돌린다.
@@ -1948,13 +1969,18 @@ if not pick_order:
 # 사용자 지시("카트에 있는 박스 2개 전부다 성공하도록") - pick_order의 모든 박스를
 # 순서대로 PICK -> 운송 -> 주행 -> STAGE1~4(배치+후퇴)까지 반복한다. 마지막 박스가
 # 아니면 후퇴 후 카트로 되돌아가 다음 박스를 집는다(아래 루프 맨 끝 참고).
+# _carry_pick_fold_target: 이번 박스 PICK/운송에 쓸 접힘 자세(기본은 91번과 동일한
+# +90/+90). "카트 복귀" 블록에서 다음 박스가 왼쪽 배치가 필요하면 이 값을
+# _fold_target_mirrored로 바꿔두고, 이 루프의 다음 반복이 그 값을 이어받아 쓴다(박스
+# 1은 이 대응이 없으므로 항상 기본값으로 시작).
+_carry_pick_fold_target = _fold_target
 for _box_num, (picked_prim_path, picked_placement) in enumerate(pick_order):
     print(f"\n########## 박스 {_box_num + 1}/{len(pick_order)} 시작: {picked_prim_path} "
           f"(box_id={picked_placement['box_id']}) ##########\n", flush=True)
     compute_place_targets(picked_placement)
     # 매 박스마다 카트 옆에서 리프트 재상승+접기+joint_1 재조준부터 다시 시작한다(박스 2개
     # 이상일 때, 앞 박스를 놓고 돌아온 뒤에도 동일하게 필요 - 위 함수 정의부 설명 참고).
-    pick_raise_and_aim()
+    pick_raise_and_aim(_carry_pick_fold_target)
     box_dim_x, box_dim_y, box_dim_z = BOX_KNOWN_SIZE[picked_prim_path]
     half_height = float(box_dim_z) / 2.0
     horizontal_tolerance = float(max(box_dim_x, box_dim_y)) / 2.0 + GRASP_HORIZONTAL_MARGIN
@@ -2037,16 +2063,18 @@ for _box_num, (picked_prim_path, picked_placement) in enumerate(pick_order):
         # 큰 목표 오차를 풀려다 이상하게 움직인다(이 프로젝트에서 반복 확인된 "큰 목표를 한 번에
         # 주면 RMPflow가 이상한 해로 튄다"는 교훈과 동일). 고침: RMPflow ee 목표 대신, 이미
         # PICK 전에 안전하다고 검증된 "조인트 3/5=90/90(나머지 0)" 접기 자세(raise_lift_and_fold의
-        # _fold_target과 동일)로 되돌아간다 - 순수 관절 보간이라 RMPflow가 관여하지 않고, 리프트도
-        # 안 건드리므로(target_h=현재값) 두 단계(접기/리프트하강)가 서로 안 섞인다.
-        raise_lift_and_fold(lift_state["h"], _fold_target, steps=200)
+        # _fold_target과 동일, 단 이번 박스가 미러 접힘 대상이면 _carry_pick_fold_target이
+        # _fold_target_mirrored라 그대로 반영된다)로 되돌아간다 - 순수 관절 보간이라 RMPflow가
+        # 관여하지 않고, 리프트도 안 건드리므로(target_h=현재값) 두 단계(접기/리프트하강)가
+        # 서로 안 섞인다.
+        raise_lift_and_fold(lift_state["h"], _carry_pick_fold_target, steps=200)
         print(f"[STAGE0.5 접기 완료] 조인트={np.round(m0609_robot.get_joint_positions(), 3)} "
               f"grasped={gripper.is_closed()}", flush=True)
 
         # 접은 자세(관절값)는 그대로 유지한 채 리프트만 LIFT_MIN(도킹 높이)까지 내린다 -
         # raise_lift_and_fold를 그대로 재사용(target_joints가 지금 값과 같아서 관절은 안 움직이고
         # 리프트만 보간된다).
-        raise_lift_and_fold(LIFT_MIN, _fold_target, steps=250)
+        raise_lift_and_fold(LIFT_MIN, _carry_pick_fold_target, steps=250)
         print(f"[STAGE0.5 완료] 리프트={lift_state['h']:.3f} grasped={gripper.is_closed()}", flush=True)
 
         chassis_pos_transit, _ = base_robot.get_world_pose()
@@ -2109,8 +2137,10 @@ for _box_num, (picked_prim_path, picked_placement) in enumerate(pick_order):
         # STAGE 1이 시작되기 전에 이미 리프트를 LIFT_MAX(92번 기준 0.388)까지 올려둔 채였다
         # (스폰 직후 1회, 이 파일 앞부분의 raise_lift_and_fold와 동일 원리) - LIFT_MAX는
         # 이제 92번과 완전히 동일값으로 고정돼 있으므로(PICK 전용 높이는 PICK_LIFT_H로 분리)
-        # 그대로 쓰면 된다.
-        raise_lift_and_fold(LIFT_MAX, _fold_target, steps=200)
+        # 그대로 쓰면 된다. 관절 목표는 _fold_target이 아니라 _carry_pick_fold_target을 써야
+        # 한다 - 안 그러면 미러 접힘(joint_3/5=-90/-90)이 STAGE 1 진입 직전에 여기서 다시
+        # +90/+90으로 풀려버려 실험 자체가 무효화된다.
+        raise_lift_and_fold(LIFT_MAX, _carry_pick_fold_target, steps=200)
 
         # 사용자 실측 확인(2차 - 리프트 높이를 92번과 맞춘 뒤에도 STAGE1/1.1 동안 yaw가 여전히
         # -0.5도->-4.2도로 틀어짐) - 리프트 높이는 원인이 아니었다. 실제 원인은 홀로노믹 바퀴가
@@ -2706,12 +2736,6 @@ for _box_num, (picked_prim_path, picked_placement) in enumerate(pick_order):
         # 홀로노믹 베이스 앞쪽에 잡혀있는 게 스크린샷으로 확인됐다. 4파츠 결합 대신 link_5(전완)
         # 하나만 기준으로 쓴다 - 사용자 결정.
         _LINK5_PATH = f"{m0609_path}/link_5"
-        # 사용자 실측 확인(GUI 스크린샷) - 박스를 중심에서 왼쪽/오른쪽으로 옮길 때, 그
-        # 방향으로 팔이 굽는 쪽의 상완(link_2, 어깨~팔꿈치)이 그리퍼/박스보다 더 바깥으로
-        # 튀어나온다 - CARRY_ENVELOPE_PARTS/link_5 어느 쪽도 link_2를 측정하지 않는
-        # 이 프로젝트의 기존 known gap(위 STAGE3.2.0 주석 "link_2가 반복적으로 입구에
-        # 부딪히던 문제" 참고)이 실제로 재현된 것 - STAGE 3.3에서 실측해서 직접 잡는다.
-        _LINK2_PATH = f"{m0609_path}/link_2"
         _stage3_0_chassis0, _ = base_robot.get_world_pose()
         _link5_min0, _link5_max0 = _mesh_world_aabb(_LINK5_PATH)
         if _link5_max0[0] is None:
@@ -3160,25 +3184,6 @@ for _box_num, (picked_prim_path, picked_placement) in enumerate(pick_order):
                     print(f"  [DIAG STAGE3.3] 좌우여유={_side_margin_now:.4f} < 마진(방향={_side_dir:+.0f}) - "
                           f"중단", flush=True)
                     return True
-
-            # 사용자 실측 확인(GUI 스크린샷) - 박스/그리퍼가 아니라 link_2(상완, 어깨~팔꿈치)가
-            # 진행 방향으로 더 튀어나와 있어서 부딪히는 경우가 있다 - 이 프로젝트의 기존
-            # known gap(link_2 전용 충돌 측정 없음)이 실제로 재현된 것. link_2의 실측 세계
-            # 좌표 AABB로 같은 방식의 좌우 여유를 직접 확인한다(박스처럼 대칭 반폭을 가정할
-            # 수 없어 - 실제로 굽은 방향으로만 비대칭하게 튀어나오므로 - 그 방향의 실측
-            # 모서리(min/max)를 그대로 쓴다).
-            _link2_min, _link2_max = _mesh_world_aabb(_LINK2_PATH)
-            if _link2_max[1] is not None:
-                _link2_leading_y = _link2_max[1] if _side_dir > 0 else _link2_min[1]
-                _link2_x = (float(_link2_min[0]) + float(_link2_max[0])) / 2.0
-                _link2_z = (float(_link2_min[2]) + float(_link2_max[2])) / 2.0
-                _link2_wall_y = interior_side_wall_y_at(_link2_x, _link2_z, _side_dir)
-                if _link2_wall_y is not None:
-                    _link2_margin_now = _side_dir * (_link2_wall_y - float(_link2_leading_y))
-                    if _link2_margin_now < STAGE3_3_SIDE_MARGIN:
-                        print(f"  [DIAG STAGE3.3] link_2 좌우여유={_link2_margin_now:.4f} < 마진"
-                              f"(방향={_side_dir:+.0f}) - 중단", flush=True)
-                        return True
             return False
 
         def _stage3_3_debug(step):
@@ -3469,21 +3474,21 @@ for _box_num, (picked_prim_path, picked_placement) in enumerate(pick_order):
     # standoff(CART_BASE_START_XY, yaw=90도)까지 되돌아간다 - 팔을 다시 접고(raise_lift_
     # and_fold, 91번과 동일한 안전 자세) 리프트를 도킹 높이로 낮춘 뒤, 얼린 채로 주행+
     # 회전한다(STAGE 0.8과 동일 패턴, 목표만 반대).
+    #
+    # 사용자 지시(link_2가 왼쪽 place때 그리퍼보다 튀어나와 부딪히는 문제 대응 실험, 이전에
+    # 시도했던 "카트 standoff 위치/yaw 반전"은 효과가 없었다는 피드백 반영) - base의
+    # 위치/yaw는 절대 바꾸지 않고, 다음 박스의 최종 트렁크 배치가 왼쪽(+Y)이면 이 복귀
+    # 주행을 절반 지점에서 한 번 멈춰 세우고 그 자리에서 조인트 3/5만 반대 부호(-90/-90)로
+    # 다시 접은 뒤 나머지 절반을 마저 주행한다 - RMPflow가 반대쪽 solution branch(팔꿈치
+    # 방향)에 붙어서 이어지길 기대하는 실험이며, 이 미러 접힘은 _carry_pick_fold_target에
+    # 저장돼 다음 박스의 PICK/STAGE0.5/STAGE0.8 전체에 이어진다(위 세 곳 참고).
     if _box_num < len(pick_order) - 1:
-        # 사용자 지시(link_2가 왼쪽 place때 그리퍼보다 튀어나와 부딪히는 문제 대응 실험) -
-        # 다음 박스를 홀수 인덱스에서 집을 때는 카트 옆 standoff의 "같은 위치"에 팔을 접은 채
-        # yaw만 180도 반대로 돌려 도착한다(CART_BASE_START_XY는 그대로, target_yaw_deg만
-        # 90 -> -90). pick_raise_and_aim()의 joint_1 조준은 FK 실측이라 이 반대쪽 orientation
-        # 에서도 자동으로 다시 카트를 겨냥하지만, 그 결과 joint_1이 91번 기준과 반대 방향으로
-        # 돌게 되어 팔이 반대쪽 solution branch로 접히길 기대한다. 이후 STAGE 0.8은 원래도
-        # target_yaw_deg=0.0으로 절대각을 맞추므로(drive_until의 yaw 오차가 항상 최단회전을
-        # 고르는 (tyaw-yaw+180)%360-180 식이라) 시작 yaw가 90이든 -90이든 코드 변경 없이도
-        # 반대 방향으로 돌아 동일하게 yaw=0에 수렴한다 - STAGE1~4는 그 결과만 보므로 그대로 안전.
-        _next_box_index = _box_num + 1
-        _cart_approach_yaw = 90.0 if (_next_box_index % 2 == 0) else -90.0
-        print(f"\n[카트 복귀] 박스 {_box_num + 2}/{len(pick_order)}를 집으러 카트로 돌아갑니다. "
-              f"(접근 yaw={_cart_approach_yaw:.0f}도"
-              f"{' - 반대쪽 접근 실험' if _cart_approach_yaw != 90.0 else ''})", flush=True)
+        _next_placement = pick_order[_box_num + 1][1]
+        _next_needs_mirror = box_place_needs_mirrored_pick(_next_placement)
+        _carry_pick_fold_target = _fold_target_mirrored if _next_needs_mirror else _fold_target
+        print(f"\n[카트 복귀] 박스 {_box_num + 2}/{len(pick_order)}를 집으러 카트로 돌아갑니다."
+              f"{' (다음 박스가 왼쪽 배치 - 중간에 조인트3/5 반전 실험)' if _next_needs_mirror else ''}",
+              flush=True)
         raise_lift_and_fold(lift_state["h"], _fold_target, steps=200)
         raise_lift_and_fold(LIFT_MIN, _fold_target, steps=250)
         base_robot.apply_action(holo_forward(0.0, 0.0, 0.0))
@@ -3509,12 +3514,45 @@ for _box_num, (picked_prim_path, picked_placement) in enumerate(pick_order):
             relative_error = float(np.linalg.norm(tip_rel_local - _return_tip_rel_local_ref))
             return relative_error > 0.025
 
+        _return_label_tail = "주행+회전(팔 자세 고정, yaw->90도)"
+        if _next_needs_mirror:
+            _return_start_xy, _ = base_robot.get_world_pose()
+            _return_mid_x = (float(_return_start_xy[0]) + CART_BASE_START_XY[0]) / 2.0
+            _return_mid_y = (float(_return_start_xy[1]) + CART_BASE_START_XY[1]) / 2.0
+            _, _, _, return_leg1_aborted = drive_until(
+                lambda: False, target_x=_return_mid_x, target_y=_return_mid_y,
+                target_yaw_deg=90.0, max_speed=0.15, per_step_fn=_hold_return_arm,
+                abort_fn=_return_broken, hard_stop_on_condition=True,
+                label="카트 복귀 1/2: 트렁크 standoff -> 중간지점 주행+회전(팔 자세 고정, yaw->90도)",
+            )
+            if return_leg1_aborted:
+                pause_for_inspection("[중단] 카트 복귀(1/2) 주행 도중 자세 붕괴가 감지돼 즉시 중단했습니다.")
+            base_robot.apply_action(holo_forward(0.0, 0.0, 0.0))
+            base_robot.set_linear_velocity(np.zeros(3))
+            base_robot.set_angular_velocity(np.zeros(3))
+
+            print("[중간정지] 조인트3/5를 -90/-90으로 반전해 반대쪽 solution branch를 유도합니다.",
+                  flush=True)
+            raise_lift_and_fold(LIFT_MIN, _fold_target_mirrored, steps=150)
+
+            # 조인트를 일부러 바꿨으므로 되짚기 기준(hold_q/tip_rel_local_ref)을 반전 이후
+            # 자세로 다시 잡는다 - 안 그러면 _return_broken()이 반전 직후 바로 오탐한다.
+            # 아래 두 함수는 클로저라 이 재대입이 그대로 반영된다(재정의 불필요).
+            _return_hold_q = np.asarray(m0609_robot.get_joint_positions(), dtype=float).copy()
+            _return_chassis_start, _return_chassis_quat_start = base_robot.get_world_pose()
+            _return_R_start = quat_wxyz_to_matrix(np.asarray(_return_chassis_quat_start, dtype=float))
+            _return_tip_start = measure_tip_world_pos()
+            _return_tip_rel_local_ref = _return_R_start.T @ (
+                _return_tip_start - np.asarray(_return_chassis_start, dtype=float))
+
+            _return_label_tail = "주행+회전(조인트3/5 반전 유지, yaw->90도)"
+
         _, _, _, return_drive_aborted = drive_until(
             lambda: False, target_x=CART_BASE_START_XY[0], target_y=CART_BASE_START_XY[1],
-            target_yaw_deg=_cart_approach_yaw, max_speed=0.15, per_step_fn=_hold_return_arm,
+            target_yaw_deg=90.0, max_speed=0.15, per_step_fn=_hold_return_arm,
             abort_fn=_return_broken, hard_stop_on_condition=True,
-            label=f"카트 복귀: 트렁크 standoff -> 카트 옆 standoff 주행+회전(팔 자세 고정, "
-                  f"yaw->{_cart_approach_yaw:.0f}도)",
+            label=f"카트 복귀 {'2/2: 중간지점' if _next_needs_mirror else ''} -> "
+                  f"카트 옆 standoff {_return_label_tail}",
         )
         if return_drive_aborted:
             pause_for_inspection("[중단] 카트 복귀 주행 도중 자세 붕괴가 감지돼 즉시 중단했습니다.")
