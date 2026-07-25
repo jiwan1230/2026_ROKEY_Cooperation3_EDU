@@ -2562,7 +2562,14 @@ if STAGE >= 3.3:
         ceiling_here = ceiling_z_at(box_front_x)
         if ceiling_here is None:
             return False
-        env_top = measure_carry_envelope()["top_z"]
+        # 사용자 실측 확인(STAGE 3.3 렉) - 여기서 measure_carry_envelope()(4파츠 전체 메시
+        # 정점을 매번 Python 루프로 순회, STAGE 3.0에서 이미 "심한 렉"으로 확인된 패턴)를
+        # 10스텝마다 다시 불렀더니 drive_and_reach의 긴 스텝 예산(최대 3000) 동안 수백 번
+        # 호출되며 심하게 느려졌다. STAGE 3.0이 이미 같은 문제를 "4파츠 결합 대신 link_5
+        # 하나만" 방식으로 해결했다 - 여기서도 동일하게 _link5_top_z()(메시 1개만 순회)로
+        # 대체한다. link_5가 이 프로젝트 전체에서 천장에 가장 먼저 닿는 기준 파츠로 이미
+        # 채택돼 있어 안전 판정의 의미도 그대로 유지된다.
+        env_top = _link5_top_z()
         ceiling_margin_now = ceiling_here - env_top
         if ceiling_margin_now < STAGE3_3_CEILING_MARGIN:
             print(f"  [DIAG STAGE3.3] 천장여유={ceiling_margin_now:.4f} < 마진 - 중단", flush=True)
