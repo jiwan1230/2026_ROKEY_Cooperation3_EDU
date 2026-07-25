@@ -994,7 +994,7 @@ print("\n[안정화 완료]\n", flush=True)
 
 # 사용자 설계 문서(1차: 기하학 측정 및 로그 출력) - 물리가 안정화된 지금 시점에 차량 SDF
 # 콜리전에 직접 raycast를 쏴서 실제 입구~내부천장 전환점을 찾는다(하드코딩된 x=3.125 대신).
-INTERNAL_CEILING_START_X = detect_internal_ceiling_start_x()
+INTERNAL_CEILING_START_X = detect_internal_ceiling_start_x() - 0.05
 print(f"[지오메트리 실측] INTERNAL_CEILING_START_X={INTERNAL_CEILING_START_X:.3f} "
       f"(TRUNK_ENTRANCE_X={TRUNK_ENTRANCE_X:.3f}~TRUNK_X_MAX={TRUNK_X_MAX:.3f} 구간 raycast 스캔)", flush=True)
 for _x in [TRUNK_ENTRANCE_X, TRUNK_X_MIN, INTERNAL_CEILING_START_X, TRUNK_X_MAX]:
