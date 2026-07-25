@@ -1358,13 +1358,32 @@ if "joint_5" in m0609_robot.dof_names:
     _fold_target_mirrored[m0609_robot.dof_names.index("joint_5")] = -np.pi / 2
 
 
+# 사용자 GUI 관찰(스크린샷) - 트렁크 standoff 도착 후 리프트를 올리고 STAGE1 홀딩 자세를
+# 잡을 때 joint_6이 눈에 띄게 반대로(거의 180도) 돌아가면서 그 순간 박스 오차가 커졌다.
+# 원인: _fold_target/_fold_target_mirrored는 joint_3/5만 명시하고 나머지는 전부 0으로 채운
+# 배열이라(np.zeros 기반), raise_lift_and_fold가 이걸 그대로 보간 목표로 쓰면 joint_1/2/4/6도
+# 매번 강제로 0으로 끌려간다 - joint_1은 그 직후 pick_raise_and_aim()이 어차피 실측 기반으로
+# 다시 조준해서 무해했지만, joint_6은 그 뒤 STAGE1의 move_link6(RMPflow)이 반전 branch를
+# 유지하려고 그 값을 다시 ~180도로 되돌리면서 "0으로 꺾었다가 다시 180으로 꺾는" 불필요한
+# 왕복이 생겼다(사용자 지적 - "이것만 안 해보면 어떨까"). 고침: 이 함수는 이제 target_joints에서
+# joint_3/5 값만 실제로 적용하고, 나머지 조인트는 전부 호출 시점의 현재값을 그대로 유지한다
+# (원래 의도가 "조인트3/5만 접고 나머지는 건드리지 않는다"였던 것으로 보이고, joint_1/2/4는
+# 이 변경으로 동작이 안 바뀐다 - joint_2/4는 애초에 이 함수 밖에서 아무도 0이 아닌 값으로
+# 옮기지 않고, joint_1은 항상 이 함수 다음에 재조준되기 때문).
+_FOLD_JOINT_NAMES = ("joint_3", "joint_5")
+_FOLD_JOINT_INDICES = [m0609_robot.dof_names.index(n) for n in _FOLD_JOINT_NAMES
+                       if n in m0609_robot.dof_names]
+
+
 def raise_lift_and_fold(target_h, target_joints, steps=200):
     start_h = lift_state["h"]
     start_joints = np.array(m0609_robot.get_joint_positions(), dtype=float)
+    effective_target = start_joints.copy()
+    effective_target[_FOLD_JOINT_INDICES] = np.asarray(target_joints, dtype=float)[_FOLD_JOINT_INDICES]
     for i in range(steps):
         alpha = (i + 1) / steps
         h = start_h + (target_h - start_h) * alpha
-        j = start_joints + (target_joints - start_joints) * alpha
+        j = start_joints + (effective_target - start_joints) * alpha
         m0609_robot.apply_action(ArticulationAction(joint_positions=j))
         set_lift_height(h)
         world.step(render=True)
