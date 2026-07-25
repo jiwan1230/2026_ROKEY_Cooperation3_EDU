@@ -2706,6 +2706,12 @@ for _box_num, (picked_prim_path, picked_placement) in enumerate(pick_order):
         # 홀로노믹 베이스 앞쪽에 잡혀있는 게 스크린샷으로 확인됐다. 4파츠 결합 대신 link_5(전완)
         # 하나만 기준으로 쓴다 - 사용자 결정.
         _LINK5_PATH = f"{m0609_path}/link_5"
+        # 사용자 실측 확인(GUI 스크린샷) - 박스를 중심에서 왼쪽/오른쪽으로 옮길 때, 그
+        # 방향으로 팔이 굽는 쪽의 상완(link_2, 어깨~팔꿈치)이 그리퍼/박스보다 더 바깥으로
+        # 튀어나온다 - CARRY_ENVELOPE_PARTS/link_5 어느 쪽도 link_2를 측정하지 않는
+        # 이 프로젝트의 기존 known gap(위 STAGE3.2.0 주석 "link_2가 반복적으로 입구에
+        # 부딪히던 문제" 참고)이 실제로 재현된 것 - STAGE 3.3에서 실측해서 직접 잡는다.
+        _LINK2_PATH = f"{m0609_path}/link_2"
         _stage3_0_chassis0, _ = base_robot.get_world_pose()
         _link5_min0, _link5_max0 = _mesh_world_aabb(_LINK5_PATH)
         if _link5_max0[0] is None:
@@ -3154,6 +3160,25 @@ for _box_num, (picked_prim_path, picked_placement) in enumerate(pick_order):
                     print(f"  [DIAG STAGE3.3] 좌우여유={_side_margin_now:.4f} < 마진(방향={_side_dir:+.0f}) - "
                           f"중단", flush=True)
                     return True
+
+            # 사용자 실측 확인(GUI 스크린샷) - 박스/그리퍼가 아니라 link_2(상완, 어깨~팔꿈치)가
+            # 진행 방향으로 더 튀어나와 있어서 부딪히는 경우가 있다 - 이 프로젝트의 기존
+            # known gap(link_2 전용 충돌 측정 없음)이 실제로 재현된 것. link_2의 실측 세계
+            # 좌표 AABB로 같은 방식의 좌우 여유를 직접 확인한다(박스처럼 대칭 반폭을 가정할
+            # 수 없어 - 실제로 굽은 방향으로만 비대칭하게 튀어나오므로 - 그 방향의 실측
+            # 모서리(min/max)를 그대로 쓴다).
+            _link2_min, _link2_max = _mesh_world_aabb(_LINK2_PATH)
+            if _link2_max[1] is not None:
+                _link2_leading_y = _link2_max[1] if _side_dir > 0 else _link2_min[1]
+                _link2_x = (float(_link2_min[0]) + float(_link2_max[0])) / 2.0
+                _link2_z = (float(_link2_min[2]) + float(_link2_max[2])) / 2.0
+                _link2_wall_y = interior_side_wall_y_at(_link2_x, _link2_z, _side_dir)
+                if _link2_wall_y is not None:
+                    _link2_margin_now = _side_dir * (_link2_wall_y - float(_link2_leading_y))
+                    if _link2_margin_now < STAGE3_3_SIDE_MARGIN:
+                        print(f"  [DIAG STAGE3.3] link_2 좌우여유={_link2_margin_now:.4f} < 마진"
+                              f"(방향={_side_dir:+.0f}) - 중단", flush=True)
+                        return True
             return False
 
         def _stage3_3_debug(step):
