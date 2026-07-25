@@ -37,11 +37,13 @@ Cart2Trunk 최종 Pick&Place - 91번(카트 PICK)과 92번(트렁크 PLACE, STAG
    보상) - 주행 중 무게중심을 낮추기 위함.
 4) 홀로노믹 주행: 팔을 그 자세로 얼린 채(STAGE 2와 동일한 "얼려서 드라이브" 패턴)
    카트 옆 standoff에서 92번의 BASE_START_XY(트렁크 standoff)까지 주행한다.
-그 다음은 92번의 STAGE 1(HOLDING_Z 재확립, 이번엔 이미 진짜 박스가 붙어있음) ->
-1.1 -> 2 -> 3.0을 코드 변경 없이 그대로 실행한다. LIFT_TRAVEL_M을 91번 값(0.75)으로
-키운 것도 STAGE 1~3.0에는 영향이 없다 - 이 구간에 포함된 코드에서 LIFT_MAX는 스폰
-직후 리프트를 한 번 올릴 때만 쓰이고(STAGE 3.2 이상에서만 다시 등장하는데, 그건 이
-파일에 없음) 그 이후로는 참조되지 않는다.
+그 다음은 92번의 STAGE 1~4를 코드 변경 없이 그대로 실행한다.
+
+주의(실측으로 확인된 함정) - LIFT_MAX는 92번의 STAGE 3.x 코드 여러 곳(STAGE3.2.0의
+STAGE3_2_0_LIFT_TARGET=LIFT_MAX+0.2 등)에서 직접 참조되므로, 반드시 92번과 동일한
+값(LIFT_MIN+0.35)을 유지해야 한다 - 91번의 PICK용 높은 리프트(0.75 travel)는 별도
+이름(PICK_LIFT_H)으로 분리했다. 처음엔 이걸 못 보고 LIFT_MAX 자체를 91번 값으로 키웠다가
+STAGE 3.2.0에서 리프트가 0.988까지 치솟아 팔이 발산하는 버그가 났었다(고쳐짐).
 """
 
 from isaacsim import SimulationApp
@@ -145,10 +147,10 @@ M0609_RMPFLOW_CONFIG_PATH = str(M0609_DIR / "rmpflow/m0609_rmpflow_common.yaml")
 M0609_MOUNT_Z_ABOVE_CHASSIS_TOP = 0.02
 LIFT_COLUMN_RADIUS = 0.045
 # 91.cart_pick_holonomic.py와 동일값 - 카트 손잡이 높이(~1.03m) 위에서 호버하려면 이만큼
-# 필요하다(91번 docstring 참고, 여러 차례 실측 튜닝된 값). 92번은 트렁크 안전마진 때문에
-# 0.35였지만, STAGE 1~3.0에 포함된 코드는 LIFT_MAX를 스폰 직후 1회성 상한으로만 쓰고
-# 그 뒤로는 참조하지 않으므로(STAGE 3.2 이상에서만 다시 쓰이는데 이 파일엔 없음) 이 값을
-# 키워도 그 구간 동작에 영향이 없다 - PICK 쪽 요구사항(91번)을 그대로 우선한다.
+# 필요하다(91번 docstring 참고, 여러 차례 실측 튜닝된 값). PICK 전용(PICK_LIFT_H)으로만
+# 쓴다 - LIFT_MAX 자체는 92번과 동일한 0.35 기준을 유지한다(STAGE 3.x 여러 곳이 LIFT_MAX를
+# 직접 참조하므로 절대 이 값으로 덮으면 안 된다 - 실측으로 확인된 함정, 아래 LIFT_MAX
+# 정의부 주석 참고).
 LIFT_TRAVEL_M = 0.75
 
 EE_LINK_NAME = "link_6"
@@ -889,16 +891,19 @@ chassis_path, hub_joint_paths, k_factor = build_holonomic_base(
 
 MEASURED_CHASSIS_TOP_OFFSET = 0.0180
 LIFT_MIN = MEASURED_CHASSIS_TOP_OFFSET + M0609_MOUNT_Z_ABOVE_CHASSIS_TOP
-LIFT_MAX = LIFT_MIN + LIFT_TRAVEL_M  # PICK 전용(91번 값 0.75) - 카트 손잡이 위 호버용.
-# 사용자 지적 - STAGE 0.8이 트렁크 standoff 도착 후 "92번 시작 자세와 동일하게" 리프트를
-# 되돌릴 때 LIFT_MAX(=0.788, PICK용 0.75 travel)를 그대로 썼더니, 92번이 실제로 STAGE
-# 1~3.0을 검증했던 리프트 높이(LIFT_TRAVEL_M=0.35 -> 0.388)보다 40cm나 높은 채로 STAGE
-# 1이 시작돼버렸다 - 같은 HOLDING_Z/ENTRY_HOLDING_Z를 요청해도 마운트가 40cm 더 높으니
-# RMPflow가 92번과 다른(훨씬 더 굽히거나 이상한 방향으로 도는) IK 해를 찾았고, 그 반작용
-# 토크로 STAGE 1/1.1 동안 섀시 yaw까지 틀어졌다(로그: STAGE0.8 종료 -0.5도 -> STAGE2 시작
-# -4.2도). 트렁크 접근 구간은 92번과 정확히 같은 물리 높이에서 시작해야 하므로, PICK용
-# LIFT_MAX와는 별도로 92번의 원래 리프트 상한을 그대로 재현하는 상수를 둔다.
-TRUNK_APPROACH_LIFT_H = LIFT_MIN + 0.35  # 92.trunk_place_holonomic.py의 LIFT_TRAVEL_M(0.35)과 동일값.
+# 사용자 실측 확인(STAGE 3.2.0 - "너무 높아졌는데??") - 92.trunk_place_holonomic.py의
+# STAGE 3.x 코드는 그대로 재사용하는데, 그 코드 안에 "LIFT_MAX"를 직접 참조하는 곳이
+# 여러 군데 있다(STAGE3.2.0의 STAGE3_2_0_LIFT_TARGET=LIFT_MAX+0.2, STAGE3.2.1의
+# 천장 여유 리프트 상승 캡 등) - 92번에서 그 이름은 항상 "트렁크 접근용 리프트 상한"
+# (LIFT_TRAVEL_M=0.35 -> 0.388)을 의미했다. 그런데 94번은 카트 PICK을 위해 LIFT_MAX를
+# 91번 값(0.75 travel)으로 키워뒀었다 - 그러면 STAGE3.2.0이 LIFT_MAX+0.2를 계산할 때
+# 0.788+0.2=0.988까지 리프트를 올려버려서(92번 의도 0.588의 거의 2배), 마운트가 팔의
+# 도달범위를 넘어설 만큼 높아져 고정 ee 목표를 못 따라가고 발산했다(실측 err=0.056m로
+# 중단). 고침: LIFT_MAX는 92번과 완전히 동일한 값(트렁크용)으로 되돌리고, PICK 전용
+# 높은 리프트는 별도 이름(PICK_LIFT_H)으로 분리한다 - STAGE 3.x의 LIFT_MAX 참조는 전부
+# 92번이 의도한 대로 동작하게 된다.
+LIFT_MAX = LIFT_MIN + 0.35  # 92.trunk_place_holonomic.py와 완전히 동일값 - STAGE 3.x 전체가 이 이름을 직접 참조한다.
+PICK_LIFT_H = LIFT_MIN + LIFT_TRAVEL_M  # 91.cart_pick_holonomic.py와 동일값(0.75 travel) - 카트 손잡이 위 호버 전용.
 m0609_path, m0609_base_link_path, lift_translate_op, lift_scale_op = mount_m0609(stage, LIFT_MIN)
 gripper_body_path = f"{m0609_path}/{GRIPPER_BODY_NAME}"
 ee_path = f"{m0609_path}/{EE_LINK_NAME}"
@@ -1263,9 +1268,6 @@ def classify_entry_strategy(box_dims):
     return info["strategy"], info
 
 
-print(f"\n[리프트] 도킹({LIFT_MIN:.3f}) -> 최고({LIFT_MAX:.3f}) + 조인트 3/5 접기(91번과 동일)",
-      flush=True)
-
 # 91.cart_pick_holonomic.py와 동일 - 리프트 상승과 조인트 3/5=90/90 접기를 같은 진행률로
 # 동시에 보간한다(팔이 명령 없이 방치되는 구간을 없앰). 92번의 부트스트랩(_init_joints)이
 # 이미 t=0에 이 접힘 값을 텔레포트로 넣어뒀으므로, 여기서는 사실상 리프트만 올라가고
@@ -1303,9 +1305,9 @@ def raise_lift_and_fold(target_h, target_joints, steps=200):
 # 반드시 필요하다 - 안 하면 팔 혼자 리프트 없이 카트 손잡이 높이까지 뻗어야 해서 reach가
 # 부족해진다). 함수로 묶어서 박스 루프 맨 앞(아래)에서 매번 호출한다.
 def pick_raise_and_aim():
-    print(f"\n[리프트] 도킹({LIFT_MIN:.3f}) -> 최고({LIFT_MAX:.3f}) + 조인트 3/5 접기(91번과 동일)",
+    print(f"\n[리프트] 도킹({LIFT_MIN:.3f}) -> PICK 높이({PICK_LIFT_H:.3f}) + 조인트 3/5 접기(91번과 동일)",
           flush=True)
-    raise_lift_and_fold(LIFT_MAX, _fold_target, steps=200)
+    raise_lift_and_fold(PICK_LIFT_H, _fold_target, steps=200)
 
     # FK 실측 기반 계산(하드코딩 없음) - 지금 접은 자세에서 그리퍼가 실제로 어느 방향을 보고
     # 있는지와 지금 섀시 기준 카트 중심이 어느 방향인지를 둘 다 계산해서 그 차이만큼만 돌린다.
@@ -2018,13 +2020,11 @@ for _box_num, (picked_prim_path, picked_placement) in enumerate(pick_order):
               flush=True)
 
         # 사용자 지적 - "자세나 이런것들도 우리 place 처음 시작할때 자세가 되도록". 92번은
-        # STAGE 1이 시작되기 전에 이미 리프트를 (92번 기준) 최고 높이까지 올려둔 채였다(스폰
-        # 직후 1회, 이 파일 앞부분의 raise_lift_and_fold와 동일 원리) - 그런데 그 "최고 높이"는
-        # 92번 자신의 LIFT_TRAVEL_M=0.35 기준값이지, 이 파일 PICK용으로 키운 LIFT_MAX(0.75
-        # travel)가 아니다. 여기서 LIFT_MAX를 쓰면 92번이 실제로 검증한 것보다 40cm 높은 채로
-        # STAGE 1이 시작돼버려 IK 해도, 그로 인한 섀시 반작용(yaw 드리프트)도 달라진다 - 반드시
-        # TRUNK_APPROACH_LIFT_H(92번과 동일한 물리 높이)로 되돌려야 한다.
-        raise_lift_and_fold(TRUNK_APPROACH_LIFT_H, _fold_target, steps=200)
+        # STAGE 1이 시작되기 전에 이미 리프트를 LIFT_MAX(92번 기준 0.388)까지 올려둔 채였다
+        # (스폰 직후 1회, 이 파일 앞부분의 raise_lift_and_fold와 동일 원리) - LIFT_MAX는
+        # 이제 92번과 완전히 동일값으로 고정돼 있으므로(PICK 전용 높이는 PICK_LIFT_H로 분리)
+        # 그대로 쓰면 된다.
+        raise_lift_and_fold(LIFT_MAX, _fold_target, steps=200)
 
         # 사용자 실측 확인(2차 - 리프트 높이를 92번과 맞춘 뒤에도 STAGE1/1.1 동안 yaw가 여전히
         # -0.5도->-4.2도로 틀어짐) - 리프트 높이는 원인이 아니었다. 실제 원인은 홀로노믹 바퀴가
