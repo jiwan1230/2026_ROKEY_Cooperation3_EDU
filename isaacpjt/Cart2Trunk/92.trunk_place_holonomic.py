@@ -632,6 +632,27 @@ for _ in range(20):
     simulation_app.update()
 add_sdf_collision(stage, "/World/Vehicle")
 
+# 사용자 설계(STAGE 3.2.1 실측 후) - placement_result.json(적재 목표)이 실제 차체 메시보다
+# 훨씬 깊은 트렁크를 가정하고 계산된 값이라(trunk_local depth=1.252m vs 실측 trunk_bounds
+# x폭≈0.674m), STAGE 3.2.1이 실제로 도달 가능한 최대치까지 접근해도 목표에 못 미쳤다
+# (실측: box center x≈3.427가 한계, 목표는 3.578). 차량 메시 자체를 수정하는 대신(단일
+# 병합 메시라 트렁크 안쪽 벽만 따로 편집할 수 없음 - Blender 등 외부 툴 필요), 트렁크
+# 내부에 실제로 도달 가능한 위치보다 살짝 안쪽에 콜리전이 있는 얇은 가상의 뒷벽을 세운다.
+# /World/Vehicle의 자식 프림으로 붙여서, 기존 raycast 함수들(ceiling_z_at/floor_z_at/
+# vehicle_rear_surface_x_at - 전부 "/World/Vehicle" 접두사로 필터링)이 자동으로 이 벽도
+# "차체"로 인식하게 한다 - 별도 예외 처리가 필요 없다.
+ARTIFICIAL_TRUNK_BACK_WALL_X = 3.52  # 실측 도달 한계(box center≈3.427 + 박스 반길이 0.0675 + 여유 0.03)
+_back_wall = UsdGeom.Cube.Define(stage, "/World/Vehicle/ArtificialBackWall")
+_back_wall.CreateSizeAttr(1.0)
+_back_wall.CreateDisplayColorAttr([Gf.Vec3f(0.4, 0.05, 0.05)])
+_back_wall_xform = UsdGeom.Xformable(_back_wall)
+_back_wall_xform.ClearXformOpOrder()
+_back_wall_xform.AddTranslateOp().Set(Gf.Vec3d(ARTIFICIAL_TRUNK_BACK_WALL_X, 0.0, 0.86))
+_back_wall_xform.AddScaleOp().Set(Gf.Vec3f(0.05, 1.6, 0.9))  # 얇은 X, 트렁크 폭보다 넓은 Y, 바닥~천장 위까지 Z
+UsdPhysics.CollisionAPI.Apply(_back_wall.GetPrim())
+print(f"[가상 뒷벽] /World/Vehicle/ArtificialBackWall x={ARTIFICIAL_TRUNK_BACK_WALL_X:.3f}에 설치 "
+      "(실측 접근 한계 기반, 실제 차체 메시는 그대로 유지)", flush=True)
+
 # ================= 실시간 지오메트리 함수 (설계 문서 6.1) =================
 # 사용자 설계 문서 - "EE를 목표점으로 이동시키는 코드"에서 "박스+로봇 전체의 포락선이
 # 트렁크의 구간별 자유공간 안에 유지되도록 하는 코드"로 전환하기 위한 기반. 93번 진단
@@ -2222,7 +2243,7 @@ if STAGE >= 3.2:
     # 순정 "전부 0" 펴짐 자세에 가까워졌는지로 직접 판정한다(사용자 결정 - 조인트 각도 기준).
     STAGE3_2_0_FLAT_JOINT_TOLERANCE = 0.15  # rad(~8.6도) - joint_2/joint_3가 이 안이면 "폈다"로 본다.
     STAGE3_2_0_RETREAT_X = BASE_START_XY[0]  # 안전 상한 - 최초 대기 위치까지만 후진 허용.
-    STAGE3_2_0_LIFT_TARGET = LIFT_MAX
+    STAGE3_2_0_LIFT_TARGET = LIFT_MAX + 0.2
 
     _stage3_2_0_fixed_ee, _ = m0609_robot.end_effector.get_world_pose()
     _stage3_2_0_fixed_ee = tuple(float(v) for v in _stage3_2_0_fixed_ee)
@@ -2231,8 +2252,15 @@ if STAGE >= 3.2:
           f"평탄판정오차={STAGE3_2_0_FLAT_JOINT_TOLERANCE:.3f}rad", flush=True)
 
     def _stage3_2_0_joint_flat():
+        # 사용자 실측 확인 - joint_2(어깨)와 joint_3(팔꿈치)를 동시에 0 근처로 요구했더니
+        # 둘이 동시에 0 근처가 되는 순간이 아예 없었다(joint_2는 후진할수록 계속 커지고,
+        # joint_3는 반대로 줄어들어 서로 다른 시점에 "평평한 영역"을 지나감 - 섀시가
+        # 고정된 목표점에서 멀고 높아질수록 그 목표를 겨냥하는 각도(joint_2)는 커지는 게
+        # 당연하다). 실제로 "굽음->일자"를 만드는 건 팔꿈치(joint_3)가 펴지는 것뿐이고,
+        # joint_2는 그 일자 막대가 고정 목표를 향하는 방향일 뿐이라 0일 필요가 없다 -
+        # joint_3만으로 판정한다.
         q = np.asarray(m0609_robot.get_joint_positions(), dtype=float)
-        return abs(q[1]) < STAGE3_2_0_FLAT_JOINT_TOLERANCE and abs(q[2]) < STAGE3_2_0_FLAT_JOINT_TOLERANCE
+        return abs(q[2]) < STAGE3_2_0_FLAT_JOINT_TOLERANCE
 
     def _stage3_2_0_broken():
         _, _, box_center = _get_box_x_edges()
@@ -2273,170 +2301,133 @@ if STAGE >= 3.2:
              target=[_stage3_2_0_fixed_ee[0], ANCHOR_Y, _stage3_2_0_fixed_ee[2]],
              fname="_trunkplace_03_2_0_arm_flattened.png")
 
-    # ================= STAGE 3.2: 리프트-매니퓰레이터 협조 제어로 목표 X까지 팔을 뻗기 =================
-    # 사용자 설계(STAGE 3 재설계 3차, "리프트-매니퓰레이터 협조 기반 수평 삽입 제어") - 섀시는
-    # 3.0/3.1 위치에서 더 움직이지 않는다(홀로노믹 이동은 3.0에서 이미 끝났다). 여기서부터는
-    # 매니퓰레이터+리프트만으로 그리퍼를 목표 X(place_world_xy[0])까지 뻗는다.
-    #
-    # 근본 원리 - 리프트가 낮은 채로 팔만 멀리+아래로 뻗으면, 팔꿈치/어깨가 낮은 마운트에서
-    # 위로 솟구치는 자세가 나와 트렁크 입구 프레임과 부딪히기 쉽다(link_1이 입구보다 낮은
-    # 상태에서 수평+수직을 동시에 커버해야 하는 구조적 문제). 리프트를 같이 올려서
-    # 매니퓰레이터의 작업공간 자체를 입구 높이 쪽으로 옮기고, 팔은 그리퍼의 절대 world Z를
-    # 3.1에서 확보한 낮은 높이 그대로 유지한 채 X방향 reach만 담당하게 한다 - "수직 변위는
-    # 리프트, 수평 삽입은 팔"이라는 역할 분리(기구학적 역할 분담).
-    # 사용자 지적(실측 확인) - CEILING_WORLD_Z 하나(1.010)를 통째로 썼더니, 지금 위치
-    # (x≈3.06~3.15)에서는 실제로 아직 열린 리드 구간이라 라이브 raycast로는 천장이 1.40m대
-    # 로 훨씬 높다(스크립트 시작 시 실측 테이블 참고: x=3.065 ceiling_z=1.404). 반대로
-    # 목표 지점(x=3.578) 근방은 진짜 고정 지붕이 이미 낮아져 있다(x=3.702 ceiling_z=1.068,
-    # CEILING_WORLD_Z=1.010과 비슷한 대역). 즉 천장은 "완만하게 낮아지는 경사"이지 단일 값이
-    # 아니다 - CEILING_WORLD_Z 하나로 퉁치면 (a) 지금 위치 기준으로는 불필요하게 과도하게
-    # 낮춰서 나중에 쓸 여유를 미리 까먹고, (b) 그런데도 목표지점 근처의 진짜 낮은 천장은
-    # 정확히 반영을 못 해서 여전히 위험할 수 있다. 고침: 지금부터 목표 X까지 실제로 지나갈
-    # 구간을 실측 raycast로 스캔해서, 그 구간의 "가장 낮은 천장"을 기준으로 삼는다 - 팔이
-    # 그 구간 어디를 지나든 안전하다.
-    STAGE3_2_TARGET_X = place_world_xy[0]
-    STAGE3_2_CEILING_SCAN_STEP = 0.02
-    STAGE3_2_Y_TOLERANCE = STAGE2_Y_TOLERANCE
-    STAGE3_2_CEILING_MARGIN = STAGE3_1_CEILING_MARGIN
-    STAGE3_2_FLOOR_MARGIN = STAGE3_1_FLOOR_MARGIN
-    _stage3_2_start_x = _link5_front_x()
-    _stage3_2_scan_xs = np.arange(_stage3_2_start_x, STAGE3_2_TARGET_X + 1e-9, STAGE3_2_CEILING_SCAN_STEP)
-    _stage3_2_scan_ceilings = [ceiling_z_at(x) for x in _stage3_2_scan_xs]
-    _stage3_2_scan_ceilings = [c for c in _stage3_2_scan_ceilings if c is not None]
-    if not _stage3_2_scan_ceilings:
-        raise SystemExit("[중단] STAGE 3.2: 목표 구간의 천장 실측(raycast)이 하나도 안 잡힙니다.")
-    _stage3_2_min_ceiling = min(_stage3_2_scan_ceilings)
-    _stage3_2_target_top_z = _stage3_2_min_ceiling - STAGE3_2_CEILING_MARGIN
-    print(f"[STAGE3.2 천장 사전스캔] x={_stage3_2_start_x:.3f}~{STAGE3_2_TARGET_X:.3f} "
-          f"({len(_stage3_2_scan_ceilings)}개 표본) 최저천장={_stage3_2_min_ceiling:.3f} "
-          f"link_5상단 목표={_stage3_2_target_top_z:.3f}", flush=True)
-    # 파랑/노랑 마커를 3.2에서 새로 실측한 값(구간 내 최저천장 기준)으로 갱신 - 3.1의
-    # CEILING_WORLD_Z 기반 마커보다 지금부터는 이게 실제로 쓰이는 기준값이다.
-    _add_z_marker("CeilingHeightMarker", STAGE3_2_TARGET_X, _stage3_2_min_ceiling, (0.2, 0.4, 1.0))
-    _add_z_marker("Stage3_1TargetMarker", STAGE3_2_TARGET_X, _stage3_2_target_top_z, (1.0, 1.0, 0.0))
+    # ================= STAGE 3.2.1: 홀로노믹 베이스로 적재 X까지 접근(팔은 3.2.0에서 편 자세로 고정) =================
+    # 사용자 설계(STAGE 3 재설계 6차) - 3.2.0에서 팔을 거의 다 편 상태로 만들었으니, X방향
+    # 접근은 매니퓰레이터가 아니라 홀로노믹 베이스 움직임으로 담당한다(팔은 지금 자세 그대로
+    # 얼린다 - STAGE 2/3.0과 동일한 검증된 패턴). Y는 나중 단계(매니퓰레이터가 어느 정도
+    # 커버 가능하다고 보고 일부러 남겨둠)에서 다룬다. 접근 한계는 차체 표면 실측
+    # (vehicle_rear_surface_x_at - 직전 3.2.0 설계에서 이미 만들어 둔 함수를 여기서 재사용)
+    # 으로 정하고, 그 한도 안에서 목표 X(place_world_xy[0])에 최대한 가깝게 접근한다.
+    STAGE3_2_1_TARGET_X = place_world_xy[0]
+    STAGE3_2_1_SURFACE_SCAN_ZS = [0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45]
+    STAGE3_2_1_APPROACH_SAFETY_MARGIN = 0.05  # 리프트 반지름(0.045m) + 약간의 여유
+    STAGE3_2_1_CEILING_SCAN_STEP = 0.02
+    STAGE3_2_1_CEILING_MARGIN = STAGE3_1_CEILING_MARGIN
+    STAGE3_2_1_FLOOR_MARGIN = STAGE3_1_FLOOR_MARGIN
+    STAGE3_2_1_Y_TOLERANCE = STAGE2_Y_TOLERANCE
 
-    # 사용자 실측 확인(GUI) - link_2가 트렁크 입구 프레임과 충돌했다. 원래는 리프트를
-    # "+0.10m" 같은 임의값만 올리고 곧장 X로 뻗었는데, link_1/link_2가 아직 입구 높이보다
-    # 한참 낮은 채로 팔이 수평+수직을 동시에 커버해야 했던 게 원인이다(설계 문서에서 이미
-    # 경고했던 "link_1이 입구보다 낮으면 무조건 부딪힌다"는 그 상황). 그런데 리프트를 올리면
-    # (ee z를 그대로 두는 한) 팔이 상대적으로 더 접히며 link_5가 다시 천장을 침범하는 반대
-    # 방향 부작용도 실측으로 확인됐다 - "link_2는 리프트를 최대한 올려야 좋고, link_5는
-    # 너무 올리면 안 좋은" 상충 관계다. 고침: X로 뻗기 전에, 리프트를 (link_5가 이 구간
-    # 최저천장 안전선을 넘지 않는 한도 내에서) 실측하며 최대한 먼저 올리는 단계(Phase A)를
-    # 추가한다 - "얼마나 올릴지"를 임의로 정하지 않고 link_5 클리어런스가 허용하는 만큼만
-    # 올린다. link_2 자체를 아직 측정하고 있지는 않지만(전용 인프라 없음), 리프트를 안전
-    # 한도까지 최대화하는 것이 link_2에게 줄 수 있는 최선의 여유다. 그 다음에야(Phase B)
-    # 고정된 안전 높이에서 X로 뻗는다.
-    STAGE3_2_RAISE_STEP = 0.05
-    STAGE3_2_RAISE_MAX_ITERS = 20
+    _stage3_2_1_surface_xs = [vehicle_rear_surface_x_at(ANCHOR_Y, z) for z in STAGE3_2_1_SURFACE_SCAN_ZS]
+    _stage3_2_1_surface_xs = [x for x in _stage3_2_1_surface_xs if x is not None]
+    if _stage3_2_1_surface_xs:
+        _stage3_2_1_surface_x = min(_stage3_2_1_surface_xs)
+    else:
+        _stage3_2_1_surface_x = TRUNK_ENTRANCE_X - 0.10
+        print("[경고] STAGE 3.2.1: 차체 표면 raycast가 하나도 안 잡혀서 가설값으로 대체합니다.", flush=True)
+    _stage3_2_1_approach_limit_x = _stage3_2_1_surface_x - STAGE3_2_1_APPROACH_SAFETY_MARGIN  # 리프트앞끝 기준
 
-    def _stage3_2_floor_ok_or_pause(where):
-        clearance = _box_floor_clearance()
-        if clearance is not None and clearance < STAGE3_2_FLOOR_MARGIN:
-            pause_for_inspection(
-                f"[중단] STAGE 3.2 {where}: 박스 바닥 여유 부족(clearance={clearance:.3f}m) - "
-                "바닥 충돌 위험이라 멈춥니다."
-            )
-
-    print(f"[STAGE3.2 Phase A 시작] 현재 리프트={lift_state['h']:.3f} "
-          f"현재link_5상단={_link5_top_z():.3f} 목표상한={_stage3_2_target_top_z:.3f}", flush=True)
-    _ee_xy_fixed_3_2, _ = m0609_robot.end_effector.get_world_pose()
-    _ee_xy_fixed_3_2 = (float(_ee_xy_fixed_3_2[0]), float(_ee_xy_fixed_3_2[1]))
-    for _iter_a in range(STAGE3_2_RAISE_MAX_ITERS):
-        if lift_state["h"] >= LIFT_MAX - 1e-4:
-            print("[STAGE3.2 Phase A] 리프트가 이미 LIFT_MAX입니다 - 더 못 올립니다.", flush=True)
-            break
-        _stage3_2_floor_ok_or_pause("Phase A")
-        next_h = min(LIFT_MAX, lift_state["h"] + STAGE3_2_RAISE_STEP)
-        ee_pos_now, _ = m0609_robot.end_effector.get_world_pose()
-        descend_and_raise_lift(
-            _ee_xy_fixed_3_2, float(ee_pos_now[2]), next_h, steps=80,
-            label=f"STAGE3.2 PhaseA[{_iter_a + 1}/{STAGE3_2_RAISE_MAX_ITERS}]: 리프트 상승(link_2 여유 확보)",
-        )
-        new_top = _link5_top_z()
-        if new_top > _stage3_2_target_top_z:
-            # 리프트 상승으로 link_5가 천장 안전선을 넘었다 - 넘은 만큼만 도로 낮춰서
-            # 안전선에 맞춘다(리프트는 그대로 유지 - Phase A의 목적은 리프트 최대화이므로).
-            excess = new_top - _stage3_2_target_top_z
-            ee_pos_now2, _ = m0609_robot.end_effector.get_world_pose()
-            descend_and_raise_lift(
-                _ee_xy_fixed_3_2, float(ee_pos_now2[2]) - excess, lift_state["h"], steps=60,
-                label=f"STAGE3.2 PhaseA[{_iter_a + 1}] 보정: link_5를 천장 안전선으로 복귀",
-            )
-    print(f"[STAGE3.2 Phase A 종료] 리프트={lift_state['h']:.3f} link_5상단={_link5_top_z():.3f}",
+    # ---- "천장에 최대한 붙기" - 지나갈 구간의 최저천장 대비 여유가 있으면 리프트를 더 써버린다 ----
+    _stage3_2_1_chassis0, _ = base_robot.get_world_pose()
+    _, _, _stage3_2_1_box_center0 = _get_box_x_edges()
+    _stage3_2_1_box_offset = float(_stage3_2_1_box_center0[0]) - float(_stage3_2_1_chassis0[0])
+    _stage3_2_1_naive_target_chassis_x = STAGE3_2_1_TARGET_X - _stage3_2_1_box_offset
+    _stage3_2_1_target_chassis_x = min(_stage3_2_1_naive_target_chassis_x,
+                                        _stage3_2_1_approach_limit_x - LIFT_COLUMN_RADIUS)
+    _stage3_2_1_target_box_x = _stage3_2_1_target_chassis_x + _stage3_2_1_box_offset
+    print(f"[STAGE3.2.1 사전측정] 목표 박스x={STAGE3_2_1_TARGET_X:.3f} "
+          f"차체표면x(실측)={_stage3_2_1_surface_x:.3f} 접근한계(리프트앞x)={_stage3_2_1_approach_limit_x:.3f} "
+          f"필요섀시x={_stage3_2_1_naive_target_chassis_x:.3f} -> 실제목표섀시x={_stage3_2_1_target_chassis_x:.3f}",
           flush=True)
-    _stage3_2_floor_ok_or_pause("Phase A 종료")
 
-    # ---- Phase B: 확보된 높이를 그대로 유지한 채(z 고정) X만 목표까지 뻗는다 ----
-    _stage3_2_current_top = _link5_top_z()
-    _stage3_2_extra_drop = max(0.0, _stage3_2_current_top - _stage3_2_target_top_z)
-    _ee_pos_3_2, _ = m0609_robot.end_effector.get_world_pose()
-    _stage3_2_target_ee = (STAGE3_2_TARGET_X, ANCHOR_Y, float(_ee_pos_3_2[2]) - _stage3_2_extra_drop)
-    print(f"[STAGE3.2 Phase B 목표] 현재link_5상단={_stage3_2_current_top:.3f} "
-          f"추가하강={_stage3_2_extra_drop:.3f} ee_target={np.round(_stage3_2_target_ee, 3)} "
-          f"리프트(고정)={lift_state['h']:.3f}", flush=True)
+    _scan_lo, _scan_hi = sorted([float(_stage3_2_1_box_center0[0]), _stage3_2_1_target_box_x])
+    _stage3_2_1_scan_xs = np.arange(_scan_lo, _scan_hi + 1e-9, STAGE3_2_1_CEILING_SCAN_STEP)
+    _stage3_2_1_scan_ceilings = [c for c in (ceiling_z_at(x) for x in _stage3_2_1_scan_xs) if c is not None]
+    if not _stage3_2_1_scan_ceilings:
+        pause_for_inspection("[중단] STAGE 3.2.1: 목표 구간의 천장 실측(raycast)이 하나도 안 잡힙니다.")
+    _stage3_2_1_min_ceiling = min(_stage3_2_1_scan_ceilings)
+    _stage3_2_1_target_top_z = _stage3_2_1_min_ceiling - STAGE3_2_1_CEILING_MARGIN
 
-    # 사용자 실측 확인 - 박스가 바닥을 찍은 게 실패 원인이었다. floor_z_at()은 raycast
-    # 하나라 가볍지만, link_5 상단 체크(_link5_top_z, 메시 정점 전체 순회)는 STAGE 3.0에서
-    # 이미 렉의 원인으로 확인된 무거운 연산이다 - 여기서도 abort_fn이 매 스텝(최대 250번)
-    # 불리므로 같은 문제를 반복하지 않게 바닥 체크(가벼움, 매 스텝)와 천장 체크(무거움, 5스텝
-    # 마다만)를 분리한다.
-    _stage3_2_clearance_counter = {"n": 0}
+    _stage3_2_1_env0 = measure_carry_envelope()
+    _stage3_2_1_slack = _stage3_2_1_target_top_z - _stage3_2_1_env0["top_z"]
+    print(f"[STAGE3.2.1 천장 사전스캔] x={_scan_lo:.3f}~{_scan_hi:.3f} "
+          f"({len(_stage3_2_1_scan_ceilings)}개 표본) 최저천장={_stage3_2_1_min_ceiling:.3f} "
+          f"포락선상단 목표={_stage3_2_1_target_top_z:.3f} 현재포락선상단={_stage3_2_1_env0['top_z']:.3f} "
+          f"여유={_stage3_2_1_slack:.3f}", flush=True)
+    if _stage3_2_1_slack > 0.005:
+        _ee_now, _ = m0609_robot.end_effector.get_world_pose()
+        _raise_amount = min(_stage3_2_1_slack, LIFT_MAX - lift_state["h"])
+        if _raise_amount > 0.001:
+            descend_and_raise_lift(
+                (float(_ee_now[0]), float(_ee_now[1])), float(_ee_now[2]) + _raise_amount,
+                lift_state["h"] + _raise_amount, steps=100,
+                label="STAGE3.2.1: 천장 여유만큼 리프트 추가 상승(전체를 그대로 들어올림)",
+            )
+            print(f"[STAGE3.2.1] 천장 여유 활용 - 리프트 {_raise_amount:.3f}m 추가 상승", flush=True)
 
-    def _stage3_2_broken():
+    # ---- 팔은 지금(위 상승 반영된) 자세 그대로 얼리고, 섀시만 목표 X까지 전진한다 ----
+    _stage3_2_1_hold_q = np.asarray(m0609_robot.get_joint_positions(), dtype=float).copy()
+
+    def _hold_stage3_2_1_arm():
+        m0609_robot.apply_action(ArticulationAction(joint_positions=_stage3_2_1_hold_q))
+        m0609_robot.gripper.close()
+
+    _stage3_2_1_top0 = measure_carry_envelope()["top_z"]
+    _stage3_2_1_clearance_counter = {"n": 0}
+
+    def _stage3_2_1_broken():
         _, _, box_center = _get_box_x_edges()
-        y_broken = abs(float(box_center[1]) - ANCHOR_Y) > STAGE3_2_Y_TOLERANCE
+        y_broken = abs(float(box_center[1]) - ANCHOR_Y) > STAGE3_2_1_Y_TOLERANCE
         detached = not m0609_robot.gripper.is_closed()
         if y_broken or detached:
-            print(f"  [DIAG STAGE3.2] y_broken={y_broken} detached={detached}", flush=True)
+            print(f"  [DIAG STAGE3.2.1] y_broken={y_broken} detached={detached}", flush=True)
             return True
         floor_clear = _box_floor_clearance()
-        if floor_clear is not None and floor_clear < STAGE3_2_FLOOR_MARGIN:
-            print(f"  [DIAG STAGE3.2] 바닥여유={floor_clear:.4f} < 마진 - 중단", flush=True)
+        if floor_clear is not None and floor_clear < STAGE3_2_1_FLOOR_MARGIN:
+            print(f"  [DIAG STAGE3.2.1] 바닥여유={floor_clear:.4f} < 마진 - 중단", flush=True)
             return True
-        _stage3_2_clearance_counter["n"] += 1
-        if _stage3_2_clearance_counter["n"] % 5 != 0:
+        _stage3_2_1_clearance_counter["n"] += 1
+        if _stage3_2_1_clearance_counter["n"] % 10 != 0:
             return False
-        link5_top = _link5_top_z()
-        ceiling_margin_now = _stage3_2_min_ceiling - link5_top
-        if ceiling_margin_now < STAGE3_2_CEILING_MARGIN:
-            print(f"  [DIAG STAGE3.2] link5_top={link5_top:.3f} 천장여유={ceiling_margin_now:.3f} "
-                  "< 마진 - 중단", flush=True)
+        _, box_front_x, _ = _get_box_x_edges()
+        ceiling_here = ceiling_z_at(box_front_x)
+        if ceiling_here is None:
+            return False
+        ceiling_margin_now = ceiling_here - _stage3_2_1_top0
+        if ceiling_margin_now < STAGE3_2_1_CEILING_MARGIN:
+            print(f"  [DIAG STAGE3.2.1] 천장여유={ceiling_margin_now:.4f} < 마진 - 중단", flush=True)
             return True
         return False
 
-    def _stage3_2_debug(step):
-        ee_pos, _ = m0609_robot.end_effector.get_world_pose()
-        print(f"  [DEBUG STAGE3.2 step={step}] 리프트={lift_state['h']:.3f} "
-              f"팔ee=({ee_pos[0]:.3f},{ee_pos[1]:.3f},{ee_pos[2]:.3f}) "
-              f"link_5상단={_link5_top_z():.3f}", flush=True)
-        _add_z_marker("LiveLink5TopMarker", _link5_front_x(), _link5_top_z(), (1.0, 0.0, 1.0))
+    def _stage3_2_1_debug(step):
+        chassis_pos, _ = base_robot.get_world_pose()
+        _, box_front_x, box_center = _get_box_x_edges()
+        print(f"  [DEBUG STAGE3.2.1 step={step}] 섀시x={float(chassis_pos[0]):.3f} "
+              f"박스중심x={box_center[0]:.3f} 목표={_stage3_2_1_target_box_x:.3f}", flush=True)
+        _add_x_marker("Stage3_2_1TargetPlane", _stage3_2_1_target_box_x, (1.0, 1.0, 0.0))
+        _add_x_marker("LiveBoxXMarker", box_center[0], (1.0, 0.0, 1.0))
 
-    _stage3_2_ee_final, _stage3_2_ee_err, _stage3_2_aborted = reach_with_lift(
-        _stage3_2_target_ee, lift_state["h"], steps=250,
-        hold_gripper_closed=True, label="STAGE3.2 PhaseB: 고정 높이에서 목표 X까지 전진",
-        abort_fn=_stage3_2_broken, hard_stop_on_condition=True,
-        debug_interval=10, debug_fn=_stage3_2_debug,
+    _, _, stage3_2_1_condition_met, stage3_2_1_aborted = drive_until(
+        lambda: False, target_x=_stage3_2_1_target_chassis_x, target_y=float(_stage3_2_1_chassis0[1]),
+        kp_xy=0.8, max_speed=0.08, per_step_fn=_hold_stage3_2_1_arm,
+        abort_fn=_stage3_2_1_broken, hard_stop_on_condition=True,
+        label="STAGE3.2.1: 홀로노믹 베이스로 적재 X까지 접근(팔 자세 고정)",
+        debug_interval=10, debug_fn=_stage3_2_1_debug,
     )
-    if _stage3_2_aborted:
-        pause_for_inspection("[중단] STAGE 3.2 도중 자세 붕괴/클리어런스 부족이 감지돼 즉시 중단했습니다.")
-    if _stage3_2_ee_err > 0.05:
-        pause_for_inspection(
-            f"[중단] STAGE 3.2 - 목표에 충분히 도달하지 못했습니다(err={_stage3_2_ee_err:.3f}m) - "
-            "팔 reach 한계이거나 IK 수렴 실패로 보입니다."
-        )
-    print("[성공] STAGE 3.2 - 리프트-팔 협조로 목표 X까지 자세 붕괴 없이 도달했습니다.", flush=True)
-    _log_clearance("STAGE3.2 종료(목표 X 도달 후)")
+    if stage3_2_1_aborted:
+        pause_for_inspection("[중단] STAGE 3.2.1 도중 자세 붕괴/클리어런스 부족이 감지돼 즉시 중단했습니다.")
+    _, _, _stage3_2_1_final_box_center = _get_box_x_edges()
+    print(f"[STAGE3.2.1 종료] 박스중심x={_stage3_2_1_final_box_center[0]:.3f} "
+          f"목표={_stage3_2_1_target_box_x:.3f}(원래 목표={STAGE3_2_1_TARGET_X:.3f})", flush=True)
+    _log_clearance("STAGE3.2.1 종료(적재 X 접근 후)")
 
     chassis_pos0, _ = base_robot.get_world_pose()
     snapshot(eye=[chassis_pos0[0] - 0.8, chassis_pos0[1] - 1.6, chassis_pos0[2] + 0.9],
-             target=[STAGE3_2_TARGET_X, ANCHOR_Y, TRUNK_FLOOR_Z + 0.3],
-             fname="_trunkplace_03_2_reach_x.png")
+             target=[_stage3_2_1_target_box_x, ANCHOR_Y, TRUNK_FLOOR_Z + 0.3],
+             fname="_trunkplace_03_2_1_approach_x.png")
 
     if STAGE < 3.3:
-        print("\n[STAGE 3.2 완료] 파랑/노랑/자홍 마커로 link_5가 여전히 천장 아래인지, ee_err이 "
-              "작은지(팔이 목표에 실제로 도달했는지) 확인하세요. STAGE 3.3 이상(Y 정렬/최종 "
-              "배치)은 아직 구현 전입니다.\n", flush=True)
+        print("\n[STAGE 3.2.1 완료] 노랑/자홍 마커로 박스 X가 목표에 얼마나 가까워졌는지, "
+              "접근 한계(차체 표면) 때문에 못 미쳤다면 얼마나 남았는지 확인하세요. STAGE 3.3 "
+              "이상(Y 정렬/최종 배치)은 아직 구현 전입니다.\n", flush=True)
 
 if STAGE >= 4:
     # ================= STAGE 4: 후퇴 (STAGE 3 -> ... -> STAGE 1 상태로 역순 복귀) =================
