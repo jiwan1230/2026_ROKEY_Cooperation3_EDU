@@ -3173,12 +3173,23 @@ for _box_num, (picked_prim_path, picked_placement) in enumerate(pick_order):
 
     if STAGE >= 3.2:
         # ================= STAGE 3.2.0: 그리퍼/박스 위치 고정 + 섀시 후진/리프트 상승으로 팔 펴기 =================
-        # 92.trunk_place_holonomic.py와 완전히 동일(그대로 재사용).
+        # 92.trunk_place_holonomic.py와 거의 동일 - 리프트 목표만 다르다(사용자 지시
+        # "리프트 좀 더 올리자" - 2번째 박스(반전 branch) STAGE3.4 최종 하강 도중 link_2가
+        # 트렁크 입구 프레임에 부딪혀 IK가 발산한 실측 확인 이후).
         # 사용자 지시 - STAGE 3.1용 마커는 이제 다 썼으니 숨긴다.
         _hide_markers(["CeilingHeightMarker", "Stage3_1TargetMarker", "LiveLink5TopMarker"])
         STAGE3_2_0_FLAT_JOINT_TOLERANCE = 0.15  # rad(~8.6도) - joint_2/joint_3가 이 안이면 "폈다"로 본다.
         STAGE3_2_0_RETREAT_X = BASE_START_XY[0]  # 안전 상한 - 최초 대기 위치까지만 후진 허용.
-        STAGE3_2_0_LIFT_TARGET = LIFT_MAX + 0.2
+        # 사용자 설계(5차, PLACE_LIFT_MAX 정의부 주석 참고) - "팔이 큰 낙차+수평 reach를
+        # 동시에 감당하는 자세에서 팔꿈치/팔뚝이 트렁크 입구 프레임을 스친다"는 문제를
+        # 이미 문서화해뒀고, 그 해법으로 "리프트로 마운트 자체를 목표 높이 가까이 올려
+        # 팔이 작은 나머지 거리만 커버하게" 하는 PLACE_LIFT_MAX(천장 안전한계까지 클램프된
+        # 값, 92번 기준 LIFT_MAX+0.2=0.588보다 높은 0.650)를 미리 계산해뒀었다 - 그런데
+        # 실제로 이 STAGE3.2.0의 목표에는 연결이 안 돼 있었다(계산만 해두고 안 쓰던 상태).
+        # 지금 실측(2번째 박스 STAGE3.4 link_2 충돌)이 정확히 그 문서화된 문제와 일치해서,
+        # 이제 실제로 연결한다 - PLACE_LIFT_MAX 자체가 이미 천장 여유(SAFE_TRANSIT_Z-0.05)로
+        # 클램프돼 있으므로 이 값을 그대로 써도 안전하다.
+        STAGE3_2_0_LIFT_TARGET = PLACE_LIFT_MAX
 
         _stage3_2_0_fixed_ee, _ = m0609_robot.end_effector.get_world_pose()
         _stage3_2_0_fixed_ee = tuple(float(v) for v in _stage3_2_0_fixed_ee)
@@ -3275,7 +3286,13 @@ for _box_num, (picked_prim_path, picked_placement) in enumerate(pick_order):
               f"여유={_stage3_2_1_slack:.3f}", flush=True)
         if _stage3_2_1_slack > 0.005:
             _ee_now, _ = m0609_robot.end_effector.get_world_pose()
-            _raise_amount = min(_stage3_2_1_slack, LIFT_MAX - lift_state["h"])
+            # 사용자 지시("리프트 좀 더 올리자") 관련 - 이 상한도 STAGE3.2.0과 같은 이유로
+            # LIFT_MAX(0.388, under-car 캡)가 아니라 PLACE_LIFT_MAX(트렁크 천장 안전한계)를
+            # 써야 한다. STAGE3.2.0이 이미 리프트를 PLACE_LIFT_MAX까지 올려둔 뒤라
+            # lift_state["h"]가 LIFT_MAX보다 항상 높으므로, 예전 코드는
+            # LIFT_MAX-lift_state["h"]가 항상 음수가 돼 이 "천장 여유만큼 추가 상승" 자체가
+            # 사실상 죽은 코드였다(_raise_amount>0.001을 절대 못 만족).
+            _raise_amount = min(_stage3_2_1_slack, PLACE_LIFT_MAX - lift_state["h"])
             if _raise_amount > 0.001:
                 descend_and_raise_lift(
                     (float(_ee_now[0]), float(_ee_now[1])), float(_ee_now[2]) + _raise_amount,
