@@ -3312,16 +3312,34 @@ for _box_num, (picked_prim_path, picked_placement) in enumerate(pick_order):
             return False
 
         def _stage3_2_1_debug(step):
-            chassis_pos, _ = base_robot.get_world_pose()
+            chassis_pos, chassis_quat = base_robot.get_world_pose()
+            chassis_yaw = float(np.degrees(quat_to_euler_angles(chassis_quat)[2]))
             _, box_front_x, box_center = _get_box_x_edges()
             print(f"  [DEBUG STAGE3.2.1 step={step}] 섀시x={float(chassis_pos[0]):.3f} "
-                  f"박스중심x={box_center[0]:.3f} 목표={_stage3_2_1_target_box_x:.3f}", flush=True)
+                  f"섀시y={float(chassis_pos[1]):.3f} 섀시yaw={chassis_yaw:.1f}deg "
+                  f"박스중심x={box_center[0]:.3f} 목표={_stage3_2_1_target_box_x:.3f} "
+                  f"박스중심y={float(box_center[1]):.4f}(ANCHOR_Y={ANCHOR_Y:.3f})", flush=True)
             _add_x_marker("Stage3_2_1TargetPlane", _stage3_2_1_target_box_x, (1.0, 1.0, 0.0))
             _add_x_marker("LiveBoxXMarker", box_center[0], (1.0, 0.0, 1.0))
 
+        # 사용자 실측 확인(2번째 박스, solution space 2/반전 branch) - STAGE3.2.0(그리퍼
+        # 위치를 RMPflow로 직접 고정)은 자체 y_broken 검사를 통과했는데, 바로 다음인 이
+        # STAGE3.2.1(팔 관절만 얼리고 섀시만 이동)에서 y_broken으로 중단됐다 - 즉 드리프트가
+        # "STAGE1.9 보정이 낡아서"가 아니라 이 구간 자체에서 새로 생겼다는 뜻이다. 원인 추정:
+        # 이 구간은 target_yaw_deg를 안 줘서 drive_until이 시작 시점 yaw를 그대로 목표로
+        # 쓰는데, kp_yaw가 함수 기본값(0.25)인 채로 남아있었다 - eyaw(도)*kp_yaw를 다시
+        # radians()로 변환하는 계산식 특성상 각도오차가 작을수록(예: 1도 미만) 복원 각속도가
+        # 거의 0에 가까워져서, 지속적인 외란(3.2.0에서 막 펴진 팔의 무게가 만드는 요잉
+        # 토크 - 반전 branch는 무게 분포가 표준 branch와 달라 이 토크 크기/방향도 다를
+        # 것으로 보인다)이 있으면 작은 정상상태 yaw 오차가 계속 남는다. 팔이 이미 3.2.0에서
+        # 완전히 펴진 상태라 섀시 중심<->그리퍼 사이 거리(지렛대 팔)가 길어, 그 작은 yaw
+        # 오차만으로도 박스 Y가 눈에 띄게 틀어진다(지렛대팔*sin(오차)). kp_xy는 이미 이
+        # 구간에서 0.8로(함수 기본값 1.8보다 오히려 낮춤 - 정밀 접근을 위한 감속) 튜닝돼
+        # 있었지만 kp_yaw는 손대지 않았었다 - 여기서만 4배로 올려 정상상태 yaw 오차를
+        # 줄인다(max_wz는 그대로라 폭주 위험은 없다 - 작은 오차 영역의 복원력만 커진다).
         _, _, stage3_2_1_condition_met, stage3_2_1_aborted = drive_until(
             lambda: False, target_x=_stage3_2_1_target_chassis_x, target_y=float(_stage3_2_1_chassis0[1]),
-            tolerance_xy=0.005, kp_xy=0.8, max_speed=0.08, per_step_fn=_hold_stage3_2_1_arm,
+            tolerance_xy=0.005, kp_xy=0.8, kp_yaw=1.0, max_speed=0.08, per_step_fn=_hold_stage3_2_1_arm,
             abort_fn=_stage3_2_1_broken, hard_stop_on_condition=True,
             label="STAGE3.2.1: 홀로노믹 베이스로 적재 X까지 접근(팔 자세 고정)",
             debug_interval=10, debug_fn=_stage3_2_1_debug,
