@@ -155,7 +155,7 @@ TRUNK_MAP_JSON = OUT_DIR / "trunk_map.json"
 
 # 시험용 - 실제로는 91번이 이미 카트에서 집어온 박스를 그대로 들고 온다. 이 격리 테스트는
 # 그 상태를 흉내내기 위해 그리퍼에 미리 박스를 붙여서 시작한다.
-TEST_BOX_SIZE = (0.135, 0.177, 0.106)  # placement_result.json의 첫 박스 치수 참고
+TEST_BOX_SIZE = (0.135, 0.177, 0.206)  # placement_result.json의 첫 박스 치수 참고
 
 def load_recommended_dims():
     import csv
@@ -604,28 +604,20 @@ def box_needs_tilt(box_height_z, ceiling_z=CEILING_WORLD_Z, floor_ref_z=TRUNK_FL
     available = float(ceiling_z) - float(floor_ref_z)
     return required > available, required, available
 
-# 사용자 설계(5차, 최초 버전) - LIFT_TRAVEL_M=0.35(LIFT_MAX≈0.388)는 "차체 밑을 지나는"
-# 시나리오의 안전마진인데, ENTRY_HOLDING_Z(0.83)->place_release_z 낙차를 팔 혼자서만
-# 커버하면 팔꿈치/팔뚝이 트렁크 입구 프레임을 스친다(91.py PICK Phase A와 같은 원리로 해결:
-# 리프트로 마운트 자체를 목표 높이 가까이 올리면 팔은 작은 나머지 거리만 커버하면 되어
-# 자세가 컴팩트하게 유지된다). 처음엔 단일 SAFE_TRANSIT_Z(전역 상수) 기준 min(0.65, ...)로
-# 고정했었다 - 설계 문서 5차/6.6: 실제 배치 위치(place_world_xy)의 로컬 천장을 실측해서
-# 계산하도록 lift_bounds_for()로 일반화한다(로봇/차량 스폰 이후, STAGE 3에서 실제 사용 직전에
-# 호출 - ceiling_z_at()이 raycast라 물리 씬이 준비된 뒤에만 의미 있는 값을 준다).
-def lift_bounds_for(target_xy, ceiling_margin=None, hard_cap=0.65):
-    """target_xy 위치의 로컬 천장(ceiling_z_at)과 현재 섀시 높이를 실측해서, 리프트
-    마운트 자체가 천장에 닿지 않는 최댓값을 계산한다. 실측 실패(경계 밖 등) 시 옛
-    SAFE_TRANSIT_Z 기반 값으로 안전하게 대체한다."""
-    if ceiling_margin is None:
-        ceiling_margin = HORIZONTAL_PASS_MARGIN
-    chassis_pos, _ = base_robot.get_world_pose()
-    ceiling_here = ceiling_z_at(target_xy[0], target_xy[1])
-    if ceiling_here is None:
-        lift_max = min(hard_cap, SAFE_TRANSIT_Z - 0.05)
-    else:
-        lift_max_from_ceiling = ceiling_here - ceiling_margin - float(chassis_pos[2])
-        lift_max = max(LIFT_MIN, min(hard_cap, lift_max_from_ceiling))
-    return LIFT_MIN, lift_max
+# 사용자 설계(5차) - LIFT_TRAVEL_M=0.35(LIFT_MAX≈0.388)는 "차체 밑을 지나는" 시나리오의
+# 안전마진인데, 스크립트 시작부터 계속 LIFT_MAX에 고정해두고 그 이후 ENTRY_HOLDING_Z(0.83)
+# ->place_release_z 낙차를 팔 혼자서만 커버해왔다 - 팔이 그 큰 낙차+수평 reach를 동시에
+# 감당하는 자세에서 팔꿈치/팔뚝이 트렁크 입구 프레임을 스쳤다(91.py PICK Phase A와 같은
+# 원리로 해결: 리프트로 마운트 자체를 목표 높이 가까이 올리면 팔은 작은 나머지 거리만
+# 커버하면 되어 자세가 컴팩트하게 유지된다). 이 시점(STAGE 3 마지막 PLACE 하강)에는 섀시가
+# 이미 차체 밑이 아니라 트렁크 입구/안쪽에 있으므로, under-car 캡(LIFT_MAX) 대신 트렁크
+# 천장 안전한계(SAFE_TRANSIT_Z)까지 리프트를 더 올려도 된다.
+# 사용자 실측(재검토) - release_z-0.05(≈0.53) 기준으로 STAGE 3을 돌려보니 효과는 확인됐지만
+# 조금 더 올려도 여유가 있어 보였다 - 0.65로 상향(마운트가 release_z보다 살짝 높아져 팔이
+# 아주 약간만 아래로 향하면 되는 상태, 여전히 천장 안전한계 이내).
+PLACE_LIFT_MAX = min(0.65, SAFE_TRANSIT_Z - 0.05)
+print(f"[PLACE 하강용 리프트 상한] PLACE_LIFT_MAX={PLACE_LIFT_MAX:.3f} "
+      f"(천장한계 {SAFE_TRANSIT_Z:.3f} 이내로 클램프)", flush=True)
 
 
 # ================= 씬 구성 =================
@@ -1414,20 +1406,10 @@ def measure_carry_envelope():
 def evaluate_pose_clearance():
     """설계 문서 6.3 - 지금 자세가 문턱/천장 대비 얼마나 여유 있는지 실측해서 반환한다.
     ceiling_z_at/floor_z_at은 라이브 raycast라 x=3.125 같은 매직넘버 없이 그 시점 실제
-    형상을 그대로 반영한다.
-
-    사용자 지적(STAGE 3 실측 재현으로 발견된 버그) - 원래 floor_z_at()을 env["rear_x"](박스
-    + 그리퍼 + link_6 + 전완 전체 포락선의 가장 뒤쪽)에 쐈는데, 전완(link_4/5)이 박스보다
-    훨씬 뒤(섀시/마운트 쪽)까지 뻗어있어 그 x가 아직 차량 진입 이전 영역(x<TRUNK_X_MIN)일
-    수 있다 - 그 위치에서 위로 쏜 raycast가 "바닥"이 아니라 열린 트렁크 리드의 밑면(약
-    1.4m)을 맞혀서 box_to_threshold가 -0.79m 같은 터무니없는 값이 나왔다(실측 확인). "문턱을
-    넘었는가"는 원래 박스 자체의 질문이므로, floor_z_at은 박스 자신의 rear_x(_get_box_x_edges)
-    로만 쏜다 - ceiling_z_at은 전체 포락선의 front_x를 그대로 쓴다(그리퍼/link_6가 실제로
-    가장 앞서/위로 나가는 부분이라 천장 스침 우려에는 전체 포락선이 맞다)."""
+    형상을 그대로 반영한다."""
     env = measure_carry_envelope()
-    box_rear_x, _, _ = _get_box_x_edges()
     ceiling_here = ceiling_z_at(env["front_x"])
-    floor_here = floor_z_at(box_rear_x)
+    floor_here = floor_z_at(env["rear_x"])
     box_to_threshold = (env["bottom_z"] - floor_here) if floor_here is not None else None
     box_to_ceiling = (ceiling_here - env["top_z"]) if ceiling_here is not None else None
     candidates = [v for v in [box_to_threshold, box_to_ceiling] if v is not None]
@@ -1786,222 +1768,135 @@ if STAGE >= 2:
               "STAGE=3으로 다시 실행하면 정밀 접근/PLACE까지 진행합니다.\n", flush=True)
 
 if STAGE >= 3:
-    # ================= STAGE 3: 정밀 접근(홀로노믹+매니퓰레이터 동시 조정) + PLACE =================
-    # 사용자 설계 재검토(3차) - STAGE 2에서 이미 박스가 입구를 넘겼으므로, 여기서부터는 남은
-    # X/Y 차이를 홀로노믹+팔이 "같은 스텝에서 동시에" 조금씩 좁혀나간다(drive_and_reach) -
-    # "Z축 정렬 후 하강"이 아니라 "X축 기준으로 옆에서 안쪽으로 밀어넣는" 동작. 진입 높이는
-    # STAGE 1.1의 ENTRY_HOLDING_Z를 그대로 유지하다가, XY가 다 맞은 뒤에야 release 높이로
-    # 내린다(입구 턱을 넘긴 높이를 여기서 미리 낮추면 STAGE 1.1의 의미가 없어진다).
-    #
-    # 사용자 지적(4차, STAGE 2 통과 후 재검토) - 예전 버전은 drive_and_reach()의 섀시 목표를
-    # "지금 섀시가 있는 바로 그 자리"로 넣었다 - drive_and_reach는 섀시 오차가 tolerance_xy
-    # 이내면 바로 끝나므로, 사실상 섀시는 한 발짝도 안 움직이고 팔만 뻗는 결과가 됐다(주석의
-    # "홀로노믹+팔 동시 조정"이 실제로는 발생하지 않음). 고침: 섀시 목표를 place_world_xy 쪽으로
-    # 실제로 전진시키되, 목표 지점 바로 위까지 밀어붙이지 않고 STAGE3_ARM_REACH_MARGIN만큼
-    # 앞에서 멈춘다 - STAGE 1/2 디버그 로그에서 실측된 "팔이 접은 자세로 섀시보다 자연스럽게
-    # 앞서는 정도"(~0.36m)와 비슷한 여유를 남겨서, 팔이 과도하게 뻗지 않고도 도달하게 한다.
-    # 또한 STAGE 2에서 만든 안전장치(자세 붕괴 감지/즉시 정지/근접 시 저속화)를 여기도 그대로
-    # 적용한다 - STAGE 2는 팔이 얼어붙어 있어 "기준 오프셋 대비 편차"로 충돌을 감지했지만,
-    # 여기는 팔이 능동적으로 추종 중이므로 대신 박스 Y 이탈/흡착 해제만으로 감지한다.
+    # ================= STAGE 3.0: 전완 앞끝을 내부천장 시작점 바로 앞까지 전진(Z 고정) =================
+    # 사용자 설계(STAGE 3 재설계 1차) - STAGE 3을 여러 세부 단계(3.0/3.1/3.2/3.3/3.4)로 쪼갠다.
+    # 3.0은 STAGE 2와 완전히 같은 방식(팔을 STAGE 2 종료 자세로 완전히 얼린 채 섀시만 전진 -
+    # STAGE 2가 이미 493스텝 무충돌로 증명한 안전 패턴 그대로 재사용)으로, "박스+그리퍼+link_6+
+    # 전완(포락선)의 가장 앞쪽 x"가 내부 고정천장이 시작되는 지점(INTERNAL_CEILING_START_X)
+    # 바로 앞까지 오도록 만든다. 아직 열린 트렁크 리드 밑면(높은 천장) 구간 안에서만 움직이므로
+    # Z(높이)는 전혀 바꿀 필요가 없다 - 팔을 접어 내리는 건 3.1의 몫이다. 이렇게 하면 박스가
+    # 트렁크 입구 X에서 충분히 멀어져 안전거리가 확보된 상태로 다음 단계를 시작할 수 있다.
 
-    # 사용자 지적(STAGE 2->3 전환에서 충돌) - STAGE 2까지는 리프트가 LIFT_MAX(차체 밑을
-    # 지나는 안전마진)로 고정돼 있었다. 박스가 입구를 이미 넘은 지금은 더 이상 차체 밑이
-    # 아니라 트렁크 입구/안쪽이라 아래쪽에 여유가 있으므로, STAGE 3(홀로노믹+팔 동시 접근)에
-    # 들어가기 전에 리프트를 살짝 낮춰본다. 처음엔 0.15m를 내리면서 ee 목표 높이(ENTRY_HOLDING_Z)를
-    # 그대로 유지했더니 너무 많이 내려갔고, 그리고 사용자가 "그리퍼(ee)는 고정한 채 리프트만
-    # 내려서 팔이 그만큼 더 위로 뻗어 보정하는" 방식이 아니라 "매니퓰레이터(ee)도 리프트와
-    # 같이 내려갔으면 좋겠다"고 지적 - 리프트/ee가 같은 양만큼 함께 내려가도록 target_z도
-    # STAGE3_PRE_LIFT_DROP만큼 낮춘다(팔이 보정용으로 더 뻗지 않고, 자세 자체는 유지한 채
-    # 통째로 하강).
-    # 사용자 지적(재조정) - TRUNK_ENTRANCE_X/STAGE3_PRE_LIFT_DROP만으로는 한계가 있었다 -
-    # 순수 수직 하강이라 그리퍼가 입구 아래쪽 턱을 정면으로 긁는다. 하강하는 동안 그리퍼가
-    # 대각선으로 살짝 더 안쪽(+X, 트렁크 쪽)까지 들어가게 만들어서 "아래로 내려가며 동시에
-    # 조금 전진"하는 경로로 턱을 피해가게 한다 - target_xy를 stage2_end_ee_pos 그대로가 아니라
-    # STAGE3_PRE_X_ADVANCE만큼 앞으로 옮긴 지점으로 준다(z는 기존처럼 alpha로 보간, xy는
-    # RMPflow가 매 스텝 그 앞쪽 목표를 향해 수렴하므로 자연스럽게 대각선 경로가 나온다).
-    STAGE3_PRE_X_ADVANCE = 0.02
-    stage3_pre_target_xy = (
-        float(stage2_end_ee_pos[0]) + STAGE3_PRE_X_ADVANCE,
-        float(stage2_end_ee_pos[1]),
-    )
-    # 사용자 설계 문서(3차: LOWER_BELOW_INTERNAL_ROOF) 시도 - stage3_pre_target_xy의 로컬
-    # 천장(ceiling_z_at)만 보고 하강량을 정했더니 실측에서 회귀가 발생했다: 그 위치(x≈2.95)는
-    # 아직 열린 리드 밑면 구간(INTERNAL_CEILING_START_X=3.115 이전)이라 로컬 천장이 매우
-    # 높게(~1.43m) 나와서 "하강 불필요"로 계산됐는데, 실제로는 STAGE3_ENTRY_Z=ENTRY_HOLDING_Z
-    # 그대로 두고 진행하니 STAGE 3 정밀 접근이 19스텝만에 자세 붕괴(ee_err=0.55m)했다 -
-    # 즉 이 0.05m 하강의 실제 역할은 "천장 클리어런스"가 아니라 "입구 프레임을 통과하는
-    # 전진 동작 중 팔 자세를 더 컴팩트하게 만들어 하단 턱/프레임을 스치지 않게 하는 것"이었다
-    # (이 값을 처음 도입할 때의 사용자 지적 - "그리퍼가 입구 아래쪽 턱을 정면으로 긁는다").
-    # 순수 천장 기준 재계산은 이 역할을 놓친다 - 검증된 고정값으로 되돌리고, 제대로 된
-    # 일반화(리프트-EE 결합 범위)는 5/6차(리프트 결합 하강/내부천장 추종)에서 다시 다룬다.
-    STAGE3_PRE_LIFT_DROP = 0.05
-    STAGE3_ENTRY_Z = ENTRY_HOLDING_Z - STAGE3_PRE_LIFT_DROP
-    STAGE3_PRE_LIFT_H = max(LIFT_MIN, LIFT_MAX - STAGE3_PRE_LIFT_DROP)
-    stage3_pre_ee, stage3_pre_err = descend_and_raise_lift(
-        stage3_pre_target_xy,
-        STAGE3_ENTRY_Z,
-        STAGE3_PRE_LIFT_H, steps=150, hold_gripper_closed=True,
-        label="STAGE3 사전: 입구 통과 후 리프트+팔 함께 대각선(하강+소폭 전진)",
-    )
-    if stage3_pre_err > 0.03:
-        raise SystemExit(f"[중단] STAGE3 사전 리프트 하강 실패: err={stage3_pre_err:.3f}m")
+    # STAGE 2용 입구 마커(초록=EntrancePlane/노랑=SuccessPlane)는 이제 다 썼다 - 시야를
+    # 가리니 숨긴다(콜리전 없는 순수 시각 마커라 지워도 안전하지만, 되돌리기 쉽게 숨김 처리).
+    for _marker_name in ["EntrancePlane", "SuccessPlane"]:
+        _marker_prim = stage.GetPrimAtPath(f"/World/{_marker_name}")
+        if _marker_prim.IsValid():
+            UsdGeom.Imageable(_marker_prim).MakeInvisible()
 
-    STAGE3_ARM_REACH_MARGIN = 0.35
-    STAGE3_Y_TOLERANCE = 0.04
-    stage3_target_x = min(place_world_xy[0] - STAGE3_ARM_REACH_MARGIN, TRUNK_X_MAX)
-    print(f"[PLACE 목표] xy={np.round(place_world_xy, 3)} release_z={place_release_z:.3f} "
-          f"entry_holding_z={ENTRY_HOLDING_Z:.3f} 섀시목표_x={stage3_target_x:.3f}", flush=True)
+    # STAGE 2와 같은 스타일의 확인용 마커 - 청록=내부천장이 시작되는 실측 지점
+    # (INTERNAL_CEILING_START_X), 주황=3.0의 실제 정지 목표(안전마진 포함). 스크린샷에서
+    # 전완 앞쪽이 이 마커들을 넘지 않았는지, 실제 천장 메시와 비교해 눈으로 확인할 수 있다.
+    STAGE3_0_FRONT_MARGIN = 0.01  # 전완 앞쪽이 내부천장 시작점보다 이만큼 못 미쳐야 한다.
+    _add_x_marker("CeilingStartPlane", INTERNAL_CEILING_START_X, (0.0, 1.0, 1.0))
+    _add_x_marker("Stage3TargetPlane", INTERNAL_CEILING_START_X - STAGE3_0_FRONT_MARGIN, (1.0, 0.5, 0.0))
 
-    # 사용자 설계 문서(3차) 검증 중 실측으로 발견된 선재 버그(round3 이전부터 있었음, 이번
-    # 라운드 변경과 무관함이 재현으로 확인됨) - y_broken이 box_center[1]을 고정된 ANCHOR_Y와
-    # 비교했는데, STAGE 3의 팔 목표(ee_target_pos)는 place_world_xy[1](이 배치는 -0.257,
-    # 중앙에서 한참 벗어남)이라 팔이 정상적으로 그 목표를 향해 뻗을수록 박스 Y가 ANCHOR_Y에서
-    # 점점 멀어지는 게 당연하다(실측 로그: step 5/10/15/19에서 box y가 -0.001->-0.015->
-    # -0.029->-0.04로 매끄럽게 증가 - 급격한 충돌 스파이크가 아니라 정상 추종 동작 자체였음).
-    # 그 결과 19스텝만에 "자세 붕괴"로 오판, STAGE 3이 항상 실패했다. 고침: 박스가 "그리퍼를
-    # 잘 따라가고 있는지"(그리퍼 tip의 Y와 비교 - 붙어있다면 항상 거의 일치해야 함)로 바꾼다 -
-    # 이게 진짜 "충돌/이탈"을 감지하는 방식이고, 목표 Y가 어디든 상관없이 성립한다.
-    # 사용자 설계 문서(6차: CEILING_HUGGING_TRANSIT) - STAGE 3는 ee 목표 z가 STAGE3_ENTRY_Z로
-    # 고정된 채 섀시+팔이 함께 전진하는데, 실제 로컬 천장은 구간마다 다르다(열린 리드 구간
-    # ~1.4m대 -> INTERNAL_CEILING_START_X 이후 ~1.07~1.11m대로 하강). 실측 재현 결과(3차
-    # 검증) 95스텝 지점에서 ee_err=0.645m, ee_z=1.04까지 튀는 실제 충돌이 확인됐다 - 매 스텝
-    # 실측 포락선이 그 지점 로컬 천장을 침범하는지 확인해서, 물리 엔진이 세게 밀어붙이기
-    # 전에(오차가 폭주하기 전에) 먼저 멈춘다.
-    STAGE3_CEILING_ABORT_MARGIN = 0.01
+    # 실측 클리어런스(전완 앞쪽 x에서의 천장 여유)가 이 밑으로 떨어지면 즉시 중단 - 혹시
+    # 목표 마진을 넘어서더라도 실제 천장에 닿기 전에 멈추기 위한 이중 안전장치(STAGE 2의
+    # front_clear 판정과 같은 원리).
+    STAGE3_0_CEILING_ABORT_MARGIN = 0.01
+    # 사용자 지적(성능, 실측 렉 확인) - 예전 STAGE 3 설계가 abort_fn/condition_fn 안에서
+    # measure_carry_envelope()/evaluate_pose_clearance()를 매 물리 스텝 그대로 호출해서 심한
+    # 렉을 일으켰었다(그래서 그 설계 자체를 되돌렸었는데, 3.0을 새로 짜면서 똑같은 실수를
+    # 반복했었다). measure_carry_envelope()는 4개 파츠의 모든 메시 정점을 Usd.PrimRange로
+    # 순회하며 world로 변환하는 순수 Python 루프라 원래 무겁다 - 이걸 최대 300스텝(drive_until
+    # 상한) 동안 매 스텝 다시 돌리면 감당이 안 된다. 그런데 이 단계는 팔이 STAGE 2 자세로
+    # 완전히 얼어있어 섀시만 움직이므로, "전완 앞쪽 x - 섀시 x"와 "전완 최상단 z"는 시작부터
+    # 끝까지 상수다 - 시작 시점에 딱 한 번만 무거운 측정을 하고, 루프 안에서는 섀시 위치에
+    # 상수 오프셋만 더하는 값싼 연산으로 대체한다. 천장 raycast(ceiling_z_at, PhysX 네이티브
+    # 쿼리 1회라 메시 순회보다 훨씬 가벼움)만 그것도 매 스텝이 아니라
+    # STAGE3_0_CLEARANCE_CHECK_INTERVAL마다 한 번씩만 확인한다.
+    STAGE3_0_CLEARANCE_CHECK_INTERVAL = 20
 
-    def _stage3_pose_broken():
-        tip_pos = _measure_tip_pos()
+    # 사용자 실측 확인 - LiveEnvelopeFrontMarker(4파츠 결합 front_x)가 그리퍼/전완이 아니라
+    # 홀로노믹 베이스 앞쪽에 잡혀있는 게 스크린샷으로 확인됐다. 4파츠 결합 대신 link_5(전완)
+    # 하나만 기준으로 쓴다 - 사용자 결정.
+    _LINK5_PATH = f"{m0609_path}/link_5"
+    _stage3_0_chassis0, _ = base_robot.get_world_pose()
+    _link5_min0, _link5_max0 = _mesh_world_aabb(_LINK5_PATH)
+    if _link5_max0[0] is None:
+        raise SystemExit(f"[중단] STAGE 3.0: {_LINK5_PATH} 메시를 찾지 못했습니다 - 경로를 확인하세요.")
+    _stage3_0_front_offset = float(_link5_max0[0]) - float(_stage3_0_chassis0[0])
+    _stage3_0_top_z = float(_link5_max0[2])
+    print(f"[STAGE3.0 사전측정, 1회] 기준=link_5 섀시x={float(_stage3_0_chassis0[0]):.3f} "
+          f"link_5앞x={_link5_max0[0]:.3f} 오프셋={_stage3_0_front_offset:.3f} "
+          f"link_5상단z={_stage3_0_top_z:.3f}(팔이 얼어있는 동안 상수로 취급)", flush=True)
+
+    # 자홍색 마커 - 지금 정지 조건이 실제로 보고 있는 link_5 앞x. 스크린샷에서 link_5(전완)
+    # 끝에 있는지 바로 눈으로 확인 가능.
+    _add_x_marker("LiveEnvelopeFrontMarker", _link5_max0[0], (1.0, 0.0, 1.0))
+    _gripper_probe_pos, _ = m0609_robot.end_effector.get_world_pose()
+    snapshot(eye=[float(_gripper_probe_pos[0]) - 0.8, float(_gripper_probe_pos[1]) - 1.2, float(_gripper_probe_pos[2]) + 0.6],
+             target=[float(_gripper_probe_pos[0]), float(_gripper_probe_pos[1]), float(_gripper_probe_pos[2])],
+             fname="_trunkplace_03_0_front_x_diag.png")
+
+    def _stage3_0_front_x():
+        chassis_pos, _ = base_robot.get_world_pose()
+        return float(chassis_pos[0]) + _stage3_0_front_offset
+
+    def _stage3_0_condition():
+        return _stage3_0_front_x() >= INTERNAL_CEILING_START_X - STAGE3_0_FRONT_MARGIN
+
+    _stage3_0_clearance_counter = {"n": 0}
+
+    def _stage3_0_broken():
         _, _, box_center = _get_box_x_edges()
-        y_broken = abs(float(box_center[1]) - float(tip_pos[1])) > STAGE3_Y_TOLERANCE
+        y_broken = abs(float(box_center[1]) - ANCHOR_Y) > STAGE2_Y_TOLERANCE
         detached = not m0609_robot.gripper.is_closed()
         if y_broken or detached:
-            print(f"  [DIAG _stage3_pose_broken] y_broken={y_broken} detached={detached} "
-                  f"box_y={box_center[1]:.4f} tip_y={tip_pos[1]:.4f}", flush=True)
+            print(f"  [DIAG STAGE3.0] y_broken={y_broken} detached={detached}", flush=True)
             return True
-        c = evaluate_pose_clearance()
-        broken = c["minimum_clearance"] is not None and c["minimum_clearance"] < STAGE3_CEILING_ABORT_MARGIN
+        _stage3_0_clearance_counter["n"] += 1
+        if _stage3_0_clearance_counter["n"] % STAGE3_0_CLEARANCE_CHECK_INTERVAL != 0:
+            return False
+        front_x = _stage3_0_front_x()
+        ceiling_here = ceiling_z_at(front_x)
+        if ceiling_here is None:
+            return False
+        clearance = ceiling_here - _stage3_0_top_z
+        broken = clearance < STAGE3_0_CEILING_ABORT_MARGIN
         if broken:
-            print(f"  [DIAG _stage3_pose_broken] clearance={c}", flush=True)
+            print(f"  [DIAG STAGE3.0] 천장clearance={clearance:.4f} front_x={front_x:.3f} "
+                  f"ceiling={ceiling_here:.3f}", flush=True)
         return broken
 
-    def _stage3_max_speed():
+    def _stage3_0_debug(step):
         chassis_pos, _ = base_robot.get_world_pose()
-        remaining = abs(stage3_target_x - float(chassis_pos[0]))
-        if remaining < 0.08:
-            return 0.025
-        if remaining < 0.15:
-            return 0.05
-        return 0.10
+        front_x = _stage3_0_front_x()
+        print(f"  [DEBUG STAGE3.0 step={step}] 섀시x={float(chassis_pos[0]):.3f} "
+              f"전완앞x={front_x:.3f} 목표={INTERNAL_CEILING_START_X - STAGE3_0_FRONT_MARGIN:.3f} "
+              f"전완상단z={_stage3_0_top_z:.3f}", flush=True)
+        # 자홍색 마커를 계속 이 front_x로 옮겨서, 접근하는 동안에도 실제 그리퍼/전완 위치와
+        # 계속 일치하는지(=오프셋 가정이 여전히 유효한지) 눈으로 추적할 수 있게 한다.
+        _add_x_marker("LiveEnvelopeFrontMarker", front_x, (1.0, 0.0, 1.0))
 
-    def _stage3_debug(step):
-        chassis_pos, _ = base_robot.get_world_pose()
-        ee_pos, _ = m0609_robot.end_effector.get_world_pose()
-        rear_x, front_x, box_center = _get_box_x_edges()
-        print(f"  [DEBUG step={step}] 섀시목표_x={stage3_target_x:.3f} | "
-              f"섀시중심=({float(chassis_pos[0]):.3f},{float(chassis_pos[1]):.3f}) | "
-              f"팔ee=({ee_pos[0]:.3f},{ee_pos[1]:.3f},{ee_pos[2]:.3f}) | "
-              f"박스 뒤={rear_x:.3f} 앞={front_x:.3f} 중심={np.round(box_center, 3)} "
-              f"붙어있음={m0609_robot.gripper.is_closed()}", flush=True)
-
-    # 사용자 지적(라운드6 검증, 시행착오 끝에 확인된 근본 원인) - 원래 여기 target_y=ANCHOR_Y
-    # 였다가, "섀시도 Y를 분담해야 한다"고 고쳐 target_y=place_world_xy[1]로 바꿔봤지만
-    # 여전히 실패했다(17스텝, ee_err=0.56m) - 섀시 속도가 스무딩(SMOOTH_ALPHA)돼 있어서
-    # 초반 몇 스텝은 거의 안 움직이는데, ee_target_pos는 처음부터 곧장 최종 place_world_xy를
-    # 가리키므로 섀시가 움직이기도 전에 팔이 X+Y 대각선으로 큰 reach를 한 번에 풀려다 팔꿈치
-    # (전완, link_4/5)가 들려 내부천장(x>3.115)을 스쳤다(clearance≈0.00004m, 거의 접촉).
-    # 리프트를 먼저 올려보는 시도(PICK Phase A 원리)도 해봤지만, 그건 "위아래" 낙차를
-    # 감당하는 원리라 "옆으로" 휘두르는 이 동작엔 안 맞았다 - 마운트를 올리니 휘두름의 절대
-    # 높이만 더 올라가 오히려 더 빨리(6스텝) 붕괴했다.
-    # 근본 원인 - STAGE 2는 팔을 완전히 얼린 채 순수 X 이동만으로 493스텝 내내 전혀 문제
-    # 없었다(수평 이동 자체는 안전하다는 증거). 문제는 "Y로 크게 벌어진 채 X로도 동시에
-    # 전진"하는 대각선 reach였다. 해법 - Y 정렬과 X 전진을 분리한다: 아직 열린 리드 구간
-    # (천장 ~1.4m, 여유 큼)에 있을 때 먼저 Y만 맞추고(STAGE3a), 그 다음 이미 Y가 맞춰진
-    # 컴팩트한 자세로 내부천장 구간을 순수 X 전진(STAGE3b)으로 통과한다.
-    #
-    # ---- STAGE 3a: Y 정렬 먼저(아직 X는 그대로, 입구 근처의 넓은 천장 구간에서) ----
-    stage3a_x = float(stage3_pre_target_xy[0])
-    _, stage3a_ee, stage3a_ee_err, _, stage3a_aborted = drive_and_reach(
-        target_x=stage3a_x, target_y=place_world_xy[1],
-        ee_target_pos=(stage3a_x, place_world_xy[1], STAGE3_ENTRY_Z),
-        ee_orientation=DOWN_QUAT, hold_gripper_closed=True,
-        max_speed=0.08, abort_fn=_stage3_pose_broken, hard_stop_on_condition=True,
-        label="STAGE3a: Y 정렬(입구 근처, 넓은 구간에서 먼저)",
+    _, _, stage3_0_met, stage3_0_aborted = drive_until(
+        _stage3_0_condition, target_x=TRUNK_X_MAX, target_y=ANCHOR_Y,
+        kp_xy=0.8, max_speed=0.08, per_step_fn=_hold_stage2_arm,
+        abort_fn=_stage3_0_broken, hard_stop_on_condition=True,
+        label="STAGE3.0: 전완 앞끝이 내부천장 시작점 바로 앞까지 전진(팔 자세 고정, Z 유지)",
+        debug_interval=10, debug_fn=_stage3_0_debug,
     )
-    if stage3a_aborted or stage3a_ee_err > 0.03:
+    if stage3_0_aborted:
+        raise SystemExit("[중단] STAGE 3.0 도중 자세 붕괴/클리어런스 부족이 감지돼 즉시 중단했습니다.")
+    if not stage3_0_met:
         raise SystemExit(
-            f"[중단] STAGE 3a Y정렬 실패(자세붕괴={stage3a_aborted}, ee_err={stage3a_ee_err:.3f}m)"
+            "[중단] STAGE 3.0 - 안전 상한(TRUNK_X_MAX)까지 갔는데도 전완 앞끝이 목표에 도달하지 "
+            "못했습니다 - INTERNAL_CEILING_START_X/마진을 재검토하세요."
         )
+    print("[성공] STAGE 3.0 - 전완 앞끝이 내부천장 시작점 바로 앞까지 자세 붕괴 없이 도달했습니다.",
+          flush=True)
+    _log_clearance("STAGE3.0 종료(내부천장 시작점 직전)")
 
-    # ---- STAGE 3b: 순수 X 전진(Y는 3a에서 이미 맞춰짐 - STAGE 2와 동일한 검증된 안전 패턴) ----
-    _, stage3_ee_pos, stage3_ee_err, _, stage3_aborted = drive_and_reach(
-        target_x=stage3_target_x, target_y=place_world_xy[1],
-        ee_target_pos=(place_world_xy[0], place_world_xy[1], STAGE3_ENTRY_Z),
-        ee_orientation=DOWN_QUAT, hold_gripper_closed=True,
-        max_speed=0.10, max_speed_fn=_stage3_max_speed,
-        abort_fn=_stage3_pose_broken, hard_stop_on_condition=True,
-        label="STAGE3b: 정밀 접근(Y 정렬 완료 후 순수 X 전진)",
-        debug_interval=5, debug_fn=_stage3_debug,
-    )
-    # 사용자 지적(중대 버그) - 원래는 여기서 경고만 찍고 그대로 PLACE/후퇴까지 계속 진행했다.
-    # 그러면 "충돌로 틀어진 임의의 상태"에서 박스를 내려놓고 후퇴를 시작하게 되어, 그 뒤
-    # 모든 단계가 성공한 전진 경로가 아니라 잘못된 상태를 기준으로 동작하게 된다 - 실제로
-    # 이 때문에 STAGE 4 후퇴가 연쇄적으로 잘못됐다. 여기서 확실히 멈춘다.
-    if stage3_aborted or stage3_ee_err > 0.03:
-        raise SystemExit(
-            f"[중단] STAGE 3 정밀 접근 실패(자세붕괴={stage3_aborted}, ee_err={stage3_ee_err:.3f}m) - "
-            "PLACE/후퇴를 진행하지 않습니다. STAGE3_ARM_REACH_MARGIN을 늘리거나 접근 경로를 "
-            "재검토하세요."
-        )
-
-    # 위 결합 이동이 정체/시간 부족으로 덜 수렴했을 경우를 대비한 마무리 정렬(여전히 진입 높이).
-    side_entry_pos = (place_world_xy[0], place_world_xy[1], STAGE3_ENTRY_Z)
-    move_link6(side_entry_pos, steps=200, label="PLACE 측면 진입 마무리 정렬(진입 높이 유지)")
-
+    chassis_pos0, _ = base_robot.get_world_pose()
     snapshot(eye=[chassis_pos0[0] - 1.2, chassis_pos0[1] - 2.0, chassis_pos0[2] + 1.3],
-             target=[place_world_xy[0], place_world_xy[1], TRUNK_FLOOR_Z], fname="_trunkplace_01_approaching.png")
+             target=[INTERNAL_CEILING_START_X, ANCHOR_Y, TRUNK_FLOOR_Z + 0.3],
+             fname="_trunkplace_03_0_ceiling_start_approach.png")
 
-    # 사용자 설계(5차) - ENTRY_HOLDING_Z -> place_release_z 낙차를 팔 혼자 감당하게 하는 대신,
-    # 리프트를 같이 올려서(마운트 자체가 목표 높이로 다가감) 팔이 커버할 나머지 거리를
-    # 최소화한다(91.py PICK Phase A와 같은 원리) - 팔꿈치/팔뚝이 트렁크 입구 프레임을 스치는
-    # 걸 막기 위함. 섀시는 이미 입구를 지나 트렁크 안쪽에 있으므로 under-car 안전캡(LIFT_MAX)
-    # 대신 천장 안전한계까지 리프트를 더 써도 된다 - lift_bounds_for()로 place_world_xy의
-    # 로컬 천장을 실측해서 상한을 정한다(옛 단일 SAFE_TRANSIT_Z 상수 대신, 설계 문서 5차).
-    _, PLACE_LIFT_MAX = lift_bounds_for(place_world_xy)
-    print(f"[PLACE 하강용 리프트 상한] PLACE_LIFT_MAX={PLACE_LIFT_MAX:.3f}(로컬 천장 실측 기반)", flush=True)
-    descend_and_raise_lift(
-        (place_world_xy[0], place_world_xy[1]), place_release_z, PLACE_LIFT_MAX, steps=250,
-        label="PLACE 하강(진입높이 -> release 높이, 리프트 동시 상승)",
-    )
-
-    snapshot(eye=[chassis_pos0[0] - 1.0, chassis_pos0[1] - 1.6, chassis_pos0[2] + 1.0],
-             target=[place_world_xy[0], place_world_xy[1], TRUNK_FLOOR_Z], fname="_trunkplace_02_descended.png")
-
-    gripper.open()
-    box_rigid_prim = SingleRigidPrim("/World/TestCarryBox")
-    box_rigid_prim.initialize(physics_sim_view=world.physics_sim_view)
-    box_rigid_prim.set_linear_velocity(np.array([0.0, 0.0, -0.3]))
-    step_hold(60)
-
-    final_box_pos = get_world_pos(stage.GetPrimAtPath("/World/TestCarryBox"))
-    err_xy = float(np.linalg.norm(final_box_pos[:2] - np.array(place_world_xy)))
-    print(f"\n[완료] 최종 박스 world 위치={np.round(final_box_pos, 3)} 목표 xy={np.round(place_world_xy, 3)} "
-          f"xy 오차={err_xy:.4f}m", flush=True)
-
-    snapshot(eye=[chassis_pos0[0] - 1.0, chassis_pos0[1] - 1.6, chassis_pos0[2] + 1.0],
-             target=[place_world_xy[0], place_world_xy[1], TRUNK_FLOOR_Z], fname="_trunkplace_03_placed.png")
-
-    result = {
-        "place_world_xy": list(place_world_xy),
-        "target_release_z": place_release_z,
-        "final_box_pos": final_box_pos.tolist(),
-        "xy_error_m": err_xy,
-    }
-    (OUT_DIR / "_trunkplace_result.json").write_text(json.dumps(result, indent=2))
-    print(f"[저장 완료] {OUT_DIR / '_trunkplace_result.json'}", flush=True)
-
-    if STAGE < 4:
-        print("\n[STAGE 3 완료] PLACE까지 완료 - STAGE=4로 다시 실행하면 STAGE 1 상태로 "
-              "후퇴하는 것까지 진행합니다.\n", flush=True)
+    if STAGE < 3.1:
+        print("\n[STAGE 3.0 완료] 전완앞x가 CeilingStartPlane(청록)/Stage3TargetPlane(주황) 마커 "
+              "근처까지 왔는지, 실제 천장 메시와 부딪히지 않았는지 스크린샷으로 확인하세요. "
+              "STAGE 3.1 이상은 아직 구현 전입니다 - 다음 라운드에서 이어서 만듭니다.\n", flush=True)
 
 if STAGE >= 4:
     # ================= STAGE 4: 후퇴 (STAGE 3 -> ... -> STAGE 1 상태로 역순 복귀) =================
