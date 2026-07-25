@@ -907,7 +907,16 @@ chassis_path, hub_joint_paths, k_factor = build_holonomic_base(
 
 MEASURED_CHASSIS_TOP_OFFSET = 0.0180
 LIFT_MIN = MEASURED_CHASSIS_TOP_OFFSET + M0609_MOUNT_Z_ABOVE_CHASSIS_TOP
-LIFT_MAX = LIFT_MIN + LIFT_TRAVEL_M
+LIFT_MAX = LIFT_MIN + LIFT_TRAVEL_M  # PICK 전용(91번 값 0.75) - 카트 손잡이 위 호버용.
+# 사용자 지적 - STAGE 0.8이 트렁크 standoff 도착 후 "92번 시작 자세와 동일하게" 리프트를
+# 되돌릴 때 LIFT_MAX(=0.788, PICK용 0.75 travel)를 그대로 썼더니, 92번이 실제로 STAGE
+# 1~3.0을 검증했던 리프트 높이(LIFT_TRAVEL_M=0.35 -> 0.388)보다 40cm나 높은 채로 STAGE
+# 1이 시작돼버렸다 - 같은 HOLDING_Z/ENTRY_HOLDING_Z를 요청해도 마운트가 40cm 더 높으니
+# RMPflow가 92번과 다른(훨씬 더 굽히거나 이상한 방향으로 도는) IK 해를 찾았고, 그 반작용
+# 토크로 STAGE 1/1.1 동안 섀시 yaw까지 틀어졌다(로그: STAGE0.8 종료 -0.5도 -> STAGE2 시작
+# -4.2도). 트렁크 접근 구간은 92번과 정확히 같은 물리 높이에서 시작해야 하므로, PICK용
+# LIFT_MAX와는 별도로 92번의 원래 리프트 상한을 그대로 재현하는 상수를 둔다.
+TRUNK_APPROACH_LIFT_H = LIFT_MIN + 0.35  # 92.trunk_place_holonomic.py의 LIFT_TRAVEL_M(0.35)과 동일값.
 m0609_path, m0609_base_link_path, lift_translate_op, lift_scale_op = mount_m0609(stage, LIFT_MIN)
 gripper_body_path = f"{m0609_path}/{GRIPPER_BODY_NAME}"
 ee_path = f"{m0609_path}/{EE_LINK_NAME}"
@@ -1895,6 +1904,39 @@ snapshot(eye=[chassis_pos_pick2[0] - 0.8, chassis_pos_pick2[1] - 1.1, hover_z + 
 test_box = cart_box_objects[picked_prim_path]
 TEST_BOX_SIZE = BOX_KNOWN_SIZE[picked_prim_path]
 
+# 사용자 지적 기반 진단 - place_release_z/HOLDING_Z/ENTRY_HOLDING_Z는 로봇 스폰보다도
+# 전에(모듈 맨 위에서) place_dims(비전이 잰 박스 두께)와 "ee가 박스 상단에 딱 닿아있다"는
+# 가정만으로 미리 계산해뒀다. 그런데 실제 PICK은 (a) 비전 dimensions(0.094m)와 실제
+# 스폰된 박스 두께(0.110m)가 다르고, (b) 원통형 흡착 판정이 수직 허용치(2cm) 안에서 붙기
+# 때문에 흡착판이 박스 상단에서 뜬 채로(실측 2cm) 그대로 고정된다 - 이 두 오차가 겹쳐서
+# "ee가 박스 상단에 닿아있다"는 가정이 실제로는 약 4cm 어긋난다(로그로 확인됨). 고침:
+# 가정 대신 지금 실제로 파지한 상태에서 "ee z - 박스 바닥 z"를 직접 측정해서, 그 실측값으로
+# 세 목표 높이를 다시 계산한다(박스가 기울어져도 맞도록 회전 투영으로 바닥 z를 구함).
+def _measure_ee_to_box_bottom_offset():
+    ee_pos, _ = m0609_robot.end_effector.get_world_pose()
+    box_pos, box_quat = test_box.get_world_pose()
+    R = quat_wxyz_to_matrix(np.asarray(box_quat, dtype=float))
+    half_dims = np.asarray(TEST_BOX_SIZE, dtype=float) / 2.0
+    projected_half_z = (
+        abs(R[2, 0]) * half_dims[0] + abs(R[2, 1]) * half_dims[1] + abs(R[2, 2]) * half_dims[2]
+    )
+    box_bottom_z = float(box_pos[2]) - projected_half_z
+    return float(ee_pos[2]) - box_bottom_z
+
+
+EE_TO_BOX_BOTTOM_OFFSET = _measure_ee_to_box_bottom_offset()
+_old_place_release_z, _old_holding_z, _old_entry_holding_z = place_release_z, HOLDING_Z, ENTRY_HOLDING_Z
+place_release_z = float(PLACE_WORLD_MIN[2]) + RELEASE_CLEARANCE_ABOVE_FLOOR + EE_TO_BOX_BOTTOM_OFFSET
+HOLDING_Z = place_release_z + CARRY_CLEARANCE_ABOVE_RELEASE
+ENTRY_HOLDING_Z = min(
+    float(PLACE_WORLD_MIN[2]) + RELEASE_CLEARANCE_ABOVE_FLOOR + ENTRY_CLEARANCE_ABOVE_RELEASE + EE_TO_BOX_BOTTOM_OFFSET,
+    SAFE_TRANSIT_Z - 0.03,
+)
+print(f"[PICK 후 목표 높이 재계산] 실측 ee-박스바닥 오프셋={EE_TO_BOX_BOTTOM_OFFSET:.4f}m "
+      f"place_release_z {_old_place_release_z:.3f}->{place_release_z:.3f} "
+      f"HOLDING_Z {_old_holding_z:.3f}->{HOLDING_Z:.3f} "
+      f"ENTRY_HOLDING_Z {_old_entry_holding_z:.3f}->{ENTRY_HOLDING_Z:.3f}", flush=True)
+
 if STAGE < 0.5:
     print("\n[STAGE 0 완료] 카트에서 박스를 집어 계속 붙잡고 있는지 스크린샷으로 확인하세요. "
           "STAGE=0.5 이상으로 다시 실행하면 안전 운송 자세 확립까지 진행합니다.\n", flush=True)
@@ -1975,13 +2017,29 @@ if STAGE >= 0.8:
           flush=True)
 
     # 사용자 지적 - "자세나 이런것들도 우리 place 처음 시작할때 자세가 되도록". 92번은
-    # STAGE 1이 시작되기 전에 이미 리프트를 LIFT_MAX까지 올려둔 채였다(스폰 직후 1회,
-    # 이 파일 앞부분의 raise_lift_and_fold와 동일 원리) - STAGE 0.5에서 주행을 위해
-    # LIFT_MIN까지 내려뒀던 걸 여기서 다시 LIFT_MAX로 올려서, 이후 STAGE 1이 92번과 완전히
-    # 동일한 초기 조건(섀시 yaw=0, 팔 접힘, 리프트=LIFT_MAX)에서 시작하게 맞춘다.
-    raise_lift_and_fold(LIFT_MAX, _fold_target, steps=200)
-    print(f"[STAGE0.8 완료] 리프트={lift_state['h']:.3f}(92번 시작 자세와 동일) grasped={gripper.is_closed()}",
-          flush=True)
+    # STAGE 1이 시작되기 전에 이미 리프트를 (92번 기준) 최고 높이까지 올려둔 채였다(스폰
+    # 직후 1회, 이 파일 앞부분의 raise_lift_and_fold와 동일 원리) - 그런데 그 "최고 높이"는
+    # 92번 자신의 LIFT_TRAVEL_M=0.35 기준값이지, 이 파일 PICK용으로 키운 LIFT_MAX(0.75
+    # travel)가 아니다. 여기서 LIFT_MAX를 쓰면 92번이 실제로 검증한 것보다 40cm 높은 채로
+    # STAGE 1이 시작돼버려 IK 해도, 그로 인한 섀시 반작용(yaw 드리프트)도 달라진다 - 반드시
+    # TRUNK_APPROACH_LIFT_H(92번과 동일한 물리 높이)로 되돌려야 한다.
+    raise_lift_and_fold(TRUNK_APPROACH_LIFT_H, _fold_target, steps=200)
+
+    # 사용자 실측 확인(2차 - 리프트 높이를 92번과 맞춘 뒤에도 STAGE1/1.1 동안 yaw가 여전히
+    # -0.5도->-4.2도로 틀어짐) - 리프트 높이는 원인이 아니었다. 실제 원인은 홀로노믹 바퀴가
+    # DRIVE_STIFFNESS=0(위치 유지 없음, 감쇠만 있는 속도 드라이브)라는 점이다.
+    # drive_until()의 감속 꼬리(30스텝)는 속도를 "거의" 0으로 줄일 뿐 정확히 0으로 만들지
+    # 않고, 그 이후 STAGE 1(400스텝)+1.1(400스텝) 동안은 move_link6()가 팔만 움직이고
+    # base_robot에는 그 어떤 명령도 다시 보내지 않는다 - 마지막으로 명령된 그 미세한 잔여
+    # 속도가 바퀴 속도 드라이브의 목표값으로 800스텝 내내 그대로 유지되며 조금씩 계속
+    # 밀렸을 가능성이 크다(STAGE1/1.1은 92번 원본 코드라 손대지 않는다 - 대신 그 코드로
+    # 넘어가기 직전, 이 파일이 소유한 STAGE 0.8 끝에서 섀시 속도를 명시적으로 완전히
+    # 0으로 만들어 넘긴다).
+    base_robot.apply_action(holo_forward(0.0, 0.0, 0.0))
+    base_robot.set_linear_velocity(np.zeros(3))
+    base_robot.set_angular_velocity(np.zeros(3))
+    print(f"[STAGE0.8 완료] 리프트={lift_state['h']:.3f}(92번 시작 자세와 동일) grasped={gripper.is_closed()} "
+          f"섀시 속도 0으로 강제 정지", flush=True)
 
     chassis_pos_arrived, _ = base_robot.get_world_pose()
     snapshot(eye=[chassis_pos_arrived[0] - 1.5, chassis_pos_arrived[1] - 2.2, 1.4],
@@ -2155,6 +2213,49 @@ if STAGE >= 1.1:
               "스크린샷에서 박스 하단이 트렁크 입구 턱보다 높은지, 그리퍼/팔이 천장에 닿지 "
               "않는지 확인하세요. 부족하면 ENTRY_CLEARANCE_ABOVE_RELEASE 값을 조정 후 재실행. "
               "STAGE=2 이상으로 다시 실행하면 다음 단계로 진행합니다.\n", flush=True)
+
+if STAGE >= 2:
+    # ================= STAGE 1.9(신규): STAGE 2 진입 전 섀시 y/yaw 재정렬 =================
+    # 사용자 실측 확인 - STAGE 0.8 종료 시 yaw는 0도 근처였는데, STAGE 1/1.1(둘 다 팔만
+    # 움직이고 섀시엔 아무 명령도 없음)을 지나는 동안 yaw가 몇 도씩 틀어지고(-4도대) 그
+    # 상태로 STAGE 2(92번 원본, target_yaw_deg 없이 "시작 시점 yaw"를 그대로 유지)에 들어가면
+    # 그 틀어진 방향으로 계속 전진해 박스가 Y 허용범위(STAGE2_Y_TOLERANCE)를 넘겨 중단됐다.
+    # STAGE 2/3.0 코드(92번 원본)는 그대로 두고, 그 대신 여기서 "STAGE 2가 시작하기 직전"에
+    # 섀시를 y=ANCHOR_Y, yaw=0도로 다시 맞춘다 - X는 그대로 둔다(STAGE 1/1.1은 X를 안
+    # 바꾸므로 여기서도 건드릴 이유가 없다).
+    _align_hold_q = np.asarray(m0609_robot.get_joint_positions(), dtype=float).copy()
+    _align_chassis_start, _align_chassis_quat_start = base_robot.get_world_pose()
+    _align_R_start = quat_wxyz_to_matrix(np.asarray(_align_chassis_quat_start, dtype=float))
+    _align_tip_start = measure_tip_world_pos()
+    _align_tip_rel_local_ref = _align_R_start.T @ (
+        _align_tip_start - np.asarray(_align_chassis_start, dtype=float))
+    _align_target_x = float(_align_chassis_start[0])
+
+    def _hold_align_arm():
+        m0609_robot.apply_action(ArticulationAction(joint_positions=_align_hold_q))
+        m0609_robot.gripper.close()
+
+    def _align_broken():
+        chassis_pos, chassis_quat = base_robot.get_world_pose()
+        R_now = quat_wxyz_to_matrix(np.asarray(chassis_quat, dtype=float))
+        tip_pos = measure_tip_world_pos()
+        tip_rel_local = R_now.T @ (tip_pos - np.asarray(chassis_pos, dtype=float))
+        relative_error = float(np.linalg.norm(tip_rel_local - _align_tip_rel_local_ref))
+        detached = not m0609_robot.gripper.is_closed()
+        return relative_error > 0.025 or detached
+
+    _, _, _, align_aborted = drive_until(
+        lambda: False, target_x=_align_target_x, target_y=ANCHOR_Y, target_yaw_deg=0.0,
+        tolerance_xy=0.005, tolerance_yaw_deg=0.5, kp_xy=0.8, kp_yaw=0.8,
+        max_speed=0.04, max_wz=0.08, per_step_fn=_hold_align_arm, abort_fn=_align_broken,
+        hard_stop_on_condition=True, label="STAGE1.9: STAGE 2 진입 전 섀시 y/yaw 재정렬",
+    )
+    if align_aborted:
+        pause_for_inspection("[중단] STAGE 1.9 재정렬 도중 자세 붕괴/흡착 이탈이 감지됐습니다.")
+    _align_final_pos, _align_final_quat = base_robot.get_world_pose()
+    _align_final_yaw = float(np.degrees(quat_to_euler_angles(_align_final_quat)[2]))
+    print(f"[STAGE1.9 완료] 섀시=({float(_align_final_pos[0]):.3f},{float(_align_final_pos[1]):.3f}) "
+          f"yaw={_align_final_yaw:.1f}deg grasped={gripper.is_closed()}", flush=True)
 
 if STAGE >= 2:
     # ================= STAGE 2: 홀로노믹 근접 접근 (팔 자세 그대로, 박스가 입구를 완전히
@@ -2457,6 +2558,16 @@ if STAGE >= 2:
     if STAGE < 3:
         print(f"\n[STAGE 2 완료] 확인용 스크린샷 저장 완료(성공={condition_met and not aborted}) - "
               "STAGE=3으로 다시 실행하면 정밀 접근/PLACE까지 진행합니다.\n", flush=True)
+
+# 92번 원본은 STAGE 2가 실패해도(aborted=True 또는 condition_met=False) 경고만 찍고 그냥
+# STAGE 3.0으로 넘어간다(92번 자체의 동작이라 STAGE 2/3.0 코드는 안 건드림) - 대신 그 경계에
+# 이 가드만 새로 추가한다. STAGE 2가 실패한 상태로 이어진 STAGE 3.0 결과는 어차피 신뢰할 수
+# 없으므로(입구를 못 넘었거나 충돌 의심 상태), 여기서 멈춰서 GUI로 직접 확인하게 한다.
+if STAGE >= 3 and (aborted or not condition_met):
+    pause_for_inspection(
+        f"[중단] STAGE 2가 실패/미완주 상태입니다(자세붕괴={aborted}, 조건충족={condition_met}) - "
+        "이 상태로는 STAGE 3.0 결과를 신뢰할 수 없어 여기서 멈춥니다."
+    )
 
 if STAGE >= 3:
     # ================= STAGE 3.0: 전완 앞끝을 내부천장 시작점 바로 앞까지 전진(Z 고정) =================
