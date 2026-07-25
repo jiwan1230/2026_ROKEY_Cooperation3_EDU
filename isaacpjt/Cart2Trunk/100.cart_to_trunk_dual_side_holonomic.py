@@ -1014,11 +1014,40 @@ BOX_KNOWN_SIZE = {f"/World/{name}": size for name, size, _ in CART_BOX_SPECS}
 # CART_STANDOFF_DIST는 91번의 CART_STANDOFF_X와 완전히 동일한 계산이되, 카트의 길이가
 # 아니라 너비(cart_half_y, 회전 후 의미)에 여유를 더한다 - 접근이 카트의 폭 방향
 # 옆면이므로 91번의 "카트 옆에 홀로노믹 베이스 측면이 붙는다"는 기하학적 전제를 그대로
-# 유지한다.
+# 유지한다(BASE_FACE_ROT_Z=90도가 yaw=0/180에서 정확히 폭(width) 축을 Y로 보내므로,
+# 이 standoff에 도착해서 yaw=0/180이 되면 실제로 옆면이 카트를 향한다 - 아래 CART_CLEAR_X
+# 설명 참고, "스폰 시점"엔 아직 이 yaw가 아니라는 게 실측으로 확인된 함정이었다).
 CART_STANDOFF_DIST = CHASSIS_HALF_WIDTH_EFFECTIVE + cart_half_y + CART_STANDOFF_MARGIN
 # "A(손잡이,-X)에서 B(입구,+X)를 바라봤을 때"를 기준으로 왼쪽(+Y)/오른쪽(-Y) standoff.
 CART_BASE_LEFT_XY = (cart_center_xy[0], cart_center_xy[1] + CART_STANDOFF_DIST)
 CART_BASE_RIGHT_XY = (cart_center_xy[0], cart_center_xy[1] - CART_STANDOFF_DIST)
+
+# 사용자 실측 확인("생성하자마자 충돌이 나서 터졌어") - 원인 분석: BASE_FACE_ROT_Z=90도가
+# 고정이라 섀시는 항상 yaw=90도로 스폰된다. yaw=90도에서는 섀시의 "길이"(LENGTH, 바퀴
+# 배치상 CHASSIS_HALF_LENGTH_EFFECTIVE, 팔/리프트를 얹기 위해 CHASSIS_LENGTH_EXTENDED=1.0m
+# 로 늘려둔 축) 축이 월드 Y를 향하고 "폭"(WIDTH, CHASSIS_HALF_WIDTH_EFFECTIVE) 축이 월드
+# X를 향한다(yaw=0/180에서는 반대: 길이->X, 폭->Y). CART_BASE_LEFT_XY/RIGHT_XY는 "도착
+# 후(yaw=0/180) 폭 축이 Y를 향한다"는 전제로 Y 오프싯을 CHASSIS_HALF_WIDTH_EFFECTIVE
+# 기준으로 계산했다 - 그런데 스폰 직후(아직 yaw=90도인 채)는 반대로 "긴" 길이 축이 Y를
+# 향하므로, 그 standoff 자리에 yaw=90도로 그냥 스폰하면 섀시 몸체(길이 0.53m 반경)가
+# 카트(폭 0.3m 반경) 쪽으로 그만큼 더 파고들어 스폰 즉시 겹친다(실측: 두 AABB가 X/Y
+# 모두 겹침).
+#
+# 고침 - 카트의 "길이"(A-B) 축 연장선상, 카트 B단(+X, 입구/차량쪽)보다 한참 바깥에
+# "회전 안전지대" CART_CLEAR_X를 둔다. 이 X에서는 섀시 중심이 카트 X범위와 이미
+# (CHASSIS_HALF_LENGTH_EFFECTIVE+CHASSIS_HALF_WIDTH_EFFECTIVE, 즉 대각선 최댓값보다도
+# 넉넉한) 여유로 떨어져 있어 X축만으로 두 AABB가 분리되므로, yaw가 0/90/180 중 무엇이든
+# (심지어 회전 도중 45도 같은 중간값이어도) 절대 카트와 겹치지 않는다 - AABB 겹침
+# 판정은 "한 축만 분리돼도 안 겹친다"는 성질을 이용한 것. 스폰은 이 안전지대에서 하고
+# (yaw=90도가 뭘 향하든 안전), 아래 박스 루프의 "카트 접근" 주행을 3단계로 나눈다:
+#   1단계(회전지대로 후퇴/유지) - X만 CART_CLEAR_X로(Y/yaw는 지금 값 유지, 회전 없음)
+#   2단계(회전+횡이동) - X는 CART_CLEAR_X 고정(카트에서 먼 채), Y와 yaw만 목표로
+#   3단계(최종 접근) - Y/yaw는 이미 목표값, X만 CART_CLEAR_X->cart_center_x로 직진
+#     (이 3단계는 Y가 목표 standoff Y로 고정된 채라 카트와의 Y축 분리가 시종일관
+#     유지되므로, 얼마나 카트 쪽으로 다가가든 안전하다).
+CART_CLEAR_X = (cart_center_xy[0] + cart_half_x
+                + CHASSIS_HALF_LENGTH_EFFECTIVE + CHASSIS_HALF_WIDTH_EFFECTIVE
+                + CART_STANDOFF_MARGIN)
 
 # 트렁크 standoff(92번과 완전히 동일한 계산) - 92번은 섀시를 여기서 스폰했지만, 100번은
 # 카트 옆(CART_BASE_LEFT_XY/CART_BASE_RIGHT_XY 중 하나)에서 스폰하고 이 지점까지는
@@ -1028,12 +1057,13 @@ CART_BASE_RIGHT_XY = (cart_center_xy[0], cart_center_xy[1] - CART_STANDOFF_DIST)
 CHASSIS_HALF_LENGTH_EFFECTIVE_LOCAL = CHASSIS_HALF_LENGTH_EFFECTIVE
 STANDOFF_TRUNK = CHASSIS_HALF_LENGTH_EFFECTIVE_LOCAL + STANDOFF_MARGIN
 BASE_START_XY = (TRUNK_X_MIN - STANDOFF_TRUNK - 0.3, ANCHOR_Y)
-# 사용자 설계 - 스폰 위치는 두 standoff 중 어느 쪽이든 상관없다(임의로 RIGHT를 기본값으로
-# 선택). 박스 루프가 시작되면 첫 박스 역시 다른 모든 박스와 동일하게 "이 박스가 필요로
-# 하는 standoff로 주행"부터 시작하므로(아래 박스 루프 참고), 스폰 지점이 실제 필요와
-# 다르면 그냥 루프의 첫 주행이 실제로 이동하는 것뿐 - 박스1을 특별 취급할 필요가 없다.
+# 사용자 설계 - 스폰은 CART_CLEAR_X(회전 안전지대)에서 한다(Y는 임의로 cart_center_xy[1]
+# - 안전지대에서는 yaw=90도든 뭐든 Y값과 무관하게 안전하다). 박스 루프가 시작되면 첫
+# 박스 역시 다른 모든 박스와 동일하게 "이 박스가 필요로 하는 standoff로 3단계 주행"부터
+# 시작하므로(아래 박스 루프 참고) 박스1을 특별 취급할 필요가 없다.
+CHASSIS_SPAWN_XY = (CART_CLEAR_X, cart_center_xy[1])
 chassis_path, hub_joint_paths, k_factor = build_holonomic_base(
-    stage, CART_BASE_RIGHT_XY, BASE_LENGTH, BASE_WIDTH, BASE_HEIGHT)
+    stage, CHASSIS_SPAWN_XY, BASE_LENGTH, BASE_WIDTH, BASE_HEIGHT)
 
 MEASURED_CHASSIS_TOP_OFFSET = 0.0180
 LIFT_MIN = MEASURED_CHASSIS_TOP_OFFSET + M0609_MOUNT_Z_ABOVE_CHASSIS_TOP
@@ -2089,6 +2119,12 @@ for _box_num, (picked_prim_path, picked_placement) in enumerate(pick_order):
     base_robot.set_linear_velocity(np.zeros(3))
     base_robot.set_angular_velocity(np.zeros(3))
 
+    # 사용자 실측 확인("생성하자마자 충돌이 나서 터졌어") - CART_CLEAR_X 정의부에서 분석한
+    # 대로, yaw=90도(스폰 시)든 회전 도중의 중간 각도든 카트와 겹치지 않으려면 "카트와의
+    # X축 분리"(CART_CLEAR_X)만으로 안전을 확보한 채로 회전을 마치고, Y/yaw가 이미 최종
+    # 목표값이 된 뒤에만(이제부터는 "카트와의 Y축 분리"로 안전 확보) X를 좁혀 최종
+    # standoff까지 접근한다 - 3단계로 나눈다(각 단계는 팔을 얼린 채 진행, hold_q/abort
+    # 기준은 이 구간 내내 팔이 전혀 안 움직이므로 한 번만 계산해서 3단계 모두 재사용).
     _cartgo_hold_q = np.asarray(m0609_robot.get_joint_positions(), dtype=float).copy()
     _cartgo_chassis_start, _cartgo_chassis_quat_start = base_robot.get_world_pose()
     _cartgo_R_start = quat_wxyz_to_matrix(np.asarray(_cartgo_chassis_quat_start, dtype=float))
@@ -2108,20 +2144,40 @@ for _box_num, (picked_prim_path, picked_placement) in enumerate(pick_order):
         relative_error = float(np.linalg.norm(tip_rel_local - _cartgo_tip_rel_local_ref))
         return relative_error > 0.025
 
-    _, _, _, cartgo_aborted = drive_until(
-        lambda: False, target_x=_cart_target_xy[0], target_y=_cart_target_xy[1],
-        target_yaw_deg=_cart_approach_yaw_deg, max_speed=0.15, per_step_fn=_hold_cartgo_arm,
-        abort_fn=_cartgo_broken, hard_stop_on_condition=True,
-        label=f"카트 접근: {'스폰 위치' if _box_num == 0 else '트렁크 standoff'} -> "
-              f"카트 {'왼쪽' if _approach_cart_left else '오른쪽'} standoff 주행+회전"
-              f"(팔 자세 고정, yaw->{_cart_approach_yaw_deg:.0f}도)",
-    )
-    if cartgo_aborted:
-        pause_for_inspection("[중단] 카트 접근 주행 도중 자세 붕괴가 감지돼 즉시 중단했습니다.")
-    base_robot.apply_action(holo_forward(0.0, 0.0, 0.0))
-    base_robot.set_linear_velocity(np.zeros(3))
-    base_robot.set_angular_velocity(np.zeros(3))
-    print(f"[성공] 카트 {'왼쪽' if _approach_cart_left else '오른쪽'} standoff 도착.", flush=True)
+    def _drive_cartgo_leg(target_x, target_y, target_yaw, label):
+        _, _, _, _aborted = drive_until(
+            lambda: False, target_x=target_x, target_y=target_y, target_yaw_deg=target_yaw,
+            max_speed=0.15, per_step_fn=_hold_cartgo_arm, abort_fn=_cartgo_broken,
+            hard_stop_on_condition=True, label=label,
+        )
+        if _aborted:
+            pause_for_inspection(f"[중단] 카트 접근({label}) 도중 자세 붕괴가 감지돼 즉시 중단했습니다.")
+        base_robot.apply_action(holo_forward(0.0, 0.0, 0.0))
+        base_robot.set_linear_velocity(np.zeros(3))
+        base_robot.set_angular_velocity(np.zeros(3))
+
+    _cartgo_start_pos, _cartgo_start_quat = base_robot.get_world_pose()
+    _cartgo_start_yaw = float(np.degrees(quat_to_euler_angles(_cartgo_start_quat)[2]))
+    _side_label = '왼쪽' if _approach_cart_left else '오른쪽'
+
+    # 1단계 - 회전 안전지대(X=CART_CLEAR_X)로 이동. Y/yaw는 지금 값 그대로 유지(회전 없음) -
+    # 카트와 X축만으로 분리되므로 지금 yaw가 무엇이든(스폰 직후의 90도 포함) 안전하다.
+    _drive_cartgo_leg(CART_CLEAR_X, float(_cartgo_start_pos[1]), _cartgo_start_yaw,
+                      f"카트 접근 1/3: {'스폰 위치' if _box_num == 0 else '트렁크 standoff'} -> "
+                      f"회전 안전지대(팔 자세 고정, X만 이동)")
+
+    # 2단계 - 안전지대(X 고정)에서 목표 Y + 목표 yaw로 회전+횡이동. X가 카트와 계속
+    # 분리돼 있으므로 회전 도중의 중간 각도도 안전하다.
+    _drive_cartgo_leg(CART_CLEAR_X, _cart_target_xy[1], _cart_approach_yaw_deg,
+                      f"카트 접근 2/3: 회전 안전지대에서 카트 {_side_label} 방향으로 회전+횡이동")
+
+    # 3단계 - 이미 목표 yaw(도착 후 폭 축이 Y를 향함)+목표 Y인 채로 X만 좁혀 최종
+    # standoff까지 직진 접근. Y가 내내 고정돼 카트와 Y축 분리가 유지되므로 안전하다 -
+    # 사용자 지시("카트에 접근할 때는 홀로노믹 베이스의 옆면이 닿아있게") 그대로, 폭(짧은)
+    # 축이 카트를 향한 채로 곧장 다가간다.
+    _drive_cartgo_leg(_cart_target_xy[0], _cart_target_xy[1], _cart_approach_yaw_deg,
+                      f"카트 접근 3/3: 회전 안전지대 -> 카트 {_side_label} standoff 최종 접근")
+    print(f"[성공] 카트 {_side_label} standoff 도착.", flush=True)
 
     # 매 박스마다 카트 옆에서 리프트 재상승+접기(이번 박스가 필요로 하는 solution space
     # 그대로)+joint_1 재조준부터 다시 시작한다.
