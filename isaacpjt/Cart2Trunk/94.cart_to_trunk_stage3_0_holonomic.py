@@ -3470,8 +3470,20 @@ for _box_num, (picked_prim_path, picked_placement) in enumerate(pick_order):
     # and_fold, 91번과 동일한 안전 자세) 리프트를 도킹 높이로 낮춘 뒤, 얼린 채로 주행+
     # 회전한다(STAGE 0.8과 동일 패턴, 목표만 반대).
     if _box_num < len(pick_order) - 1:
-        print(f"\n[카트 복귀] 박스 {_box_num + 2}/{len(pick_order)}를 집으러 카트로 돌아갑니다.",
-              flush=True)
+        # 사용자 지시(link_2가 왼쪽 place때 그리퍼보다 튀어나와 부딪히는 문제 대응 실험) -
+        # 다음 박스를 홀수 인덱스에서 집을 때는 카트 옆 standoff의 "같은 위치"에 팔을 접은 채
+        # yaw만 180도 반대로 돌려 도착한다(CART_BASE_START_XY는 그대로, target_yaw_deg만
+        # 90 -> -90). pick_raise_and_aim()의 joint_1 조준은 FK 실측이라 이 반대쪽 orientation
+        # 에서도 자동으로 다시 카트를 겨냥하지만, 그 결과 joint_1이 91번 기준과 반대 방향으로
+        # 돌게 되어 팔이 반대쪽 solution branch로 접히길 기대한다. 이후 STAGE 0.8은 원래도
+        # target_yaw_deg=0.0으로 절대각을 맞추므로(drive_until의 yaw 오차가 항상 최단회전을
+        # 고르는 (tyaw-yaw+180)%360-180 식이라) 시작 yaw가 90이든 -90이든 코드 변경 없이도
+        # 반대 방향으로 돌아 동일하게 yaw=0에 수렴한다 - STAGE1~4는 그 결과만 보므로 그대로 안전.
+        _next_box_index = _box_num + 1
+        _cart_approach_yaw = 90.0 if (_next_box_index % 2 == 0) else -90.0
+        print(f"\n[카트 복귀] 박스 {_box_num + 2}/{len(pick_order)}를 집으러 카트로 돌아갑니다. "
+              f"(접근 yaw={_cart_approach_yaw:.0f}도"
+              f"{' - 반대쪽 접근 실험' if _cart_approach_yaw != 90.0 else ''})", flush=True)
         raise_lift_and_fold(lift_state["h"], _fold_target, steps=200)
         raise_lift_and_fold(LIFT_MIN, _fold_target, steps=250)
         base_robot.apply_action(holo_forward(0.0, 0.0, 0.0))
@@ -3499,9 +3511,10 @@ for _box_num, (picked_prim_path, picked_placement) in enumerate(pick_order):
 
         _, _, _, return_drive_aborted = drive_until(
             lambda: False, target_x=CART_BASE_START_XY[0], target_y=CART_BASE_START_XY[1],
-            target_yaw_deg=90.0, max_speed=0.15, per_step_fn=_hold_return_arm,
+            target_yaw_deg=_cart_approach_yaw, max_speed=0.15, per_step_fn=_hold_return_arm,
             abort_fn=_return_broken, hard_stop_on_condition=True,
-            label="카트 복귀: 트렁크 standoff -> 카트 옆 standoff 주행+회전(팔 자세 고정, yaw->90도)",
+            label=f"카트 복귀: 트렁크 standoff -> 카트 옆 standoff 주행+회전(팔 자세 고정, "
+                  f"yaw->{_cart_approach_yaw:.0f}도)",
         )
         if return_drive_aborted:
             pause_for_inspection("[중단] 카트 복귀 주행 도중 자세 붕괴가 감지돼 즉시 중단했습니다.")
