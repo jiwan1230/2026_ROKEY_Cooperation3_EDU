@@ -1898,6 +1898,111 @@ if STAGE >= 3:
               "근처까지 왔는지, 실제 천장 메시와 부딪히지 않았는지 스크린샷으로 확인하세요. "
               "STAGE 3.1 이상은 아직 구현 전입니다 - 다음 라운드에서 이어서 만듭니다.\n", flush=True)
 
+if STAGE >= 3.1:
+    # ================= STAGE 3.1: link_5(전완) 최상단이 로컬 천장보다 낮아지도록 팔을 접어
+    # 하강(섀시는 그대로, Z만 변경) =================
+    # 사용자 설계(STAGE 3 재설계 2차) - 3.0에서 이미 전완 앞끝을 내부천장 시작점 바로 앞까지
+    # 옮겨놨다. 여기서는 섀시를 전혀 움직이지 않고(X/Y 고정), 리프트+팔을 함께 낮춰서
+    # link_5(전완)의 최상단 z가 그 지점의 실측 천장(ceiling_z_at)보다 낮아지게 만든다 -
+    # 이렇게 컴팩트해진 자세라야 3.2에서 XY로 움직여도 천장에 안 부딪힌다. 당연히 박스
+    # 바닥이 트렁크 바닥보다는 계속 높아야 한다(그래야 바닥 충돌이 없다) - 매 하강 스텝마다
+    # 확인한다.
+    STAGE3_1_CEILING_MARGIN = 0.01  # 노란 마커 = 천장(파랑) - 이 마진.
+    STAGE3_1_FLOOR_MARGIN = 0.02    # 박스 바닥이 트렁크 바닥보다 이만큼은 위에 있어야 한다.
+    STAGE3_1_MAX_ITERS = 6          # ee_z 하강량=link_5 하강량이라는 선형근사가 완벽하지 않으므로
+                                     # 잔여 오차를 반복 보정한다(측정->하강->재측정).
+
+    def _link5_top_z():
+        _, _max = _mesh_world_aabb(_LINK5_PATH)
+        return float(_max[2])
+
+    def _link5_front_x():
+        _, _max = _mesh_world_aabb(_LINK5_PATH)
+        return float(_max[0])
+
+    def _box_floor_clearance():
+        box_rear_x, _, box_center = _get_box_x_edges()
+        box_bottom_z = float(box_center[2]) - TEST_BOX_SIZE[2] / 2.0
+        floor_here = floor_z_at(box_rear_x)
+        if floor_here is None:
+            return None
+        return box_bottom_z - floor_here
+
+    def _add_z_marker(name, x, z, color, half_x=0.15, half_y=0.45, half_z=0.003):
+        marker = UsdGeom.Cube.Define(stage, f"/World/{name}")
+        marker.CreateSizeAttr(1.0)
+        marker.CreateDisplayColorAttr([Gf.Vec3f(*color)])
+        xform = UsdGeom.Xformable(marker)
+        xform.ClearXformOpOrder()
+        xform.AddTranslateOp().Set(Gf.Vec3d(x, 0.0, z))
+        xform.AddScaleOp().Set(Gf.Vec3f(half_x, half_y, half_z))
+
+    # 사용자 지적 - link_5의 "지금" x에서 ceiling_z_at()을 재는 건 x를 어디로 잡든 결국
+    # 추측이다(열린 리드 밑면/고정 천장 경계 근처는 raycast 결과가 x에 아주 민감함). 대신
+    # 이미 trunk_map.json 스캔으로 계산해둔 CEILING_WORLD_Z(89/90번이 실측한 고정 내부
+    # 천장의 대표 z값, 라이브 로그에서 이미 "[트렁크맵] ceiling_z(world)=..."로 찍힘)를
+    # 그대로 기준으로 쓴다 - x 추측이 필요 없고, 그리퍼가 트렁크 안쪽 어디로 가든 넘지
+    # 말아야 할 진짜 고정 천장 높이 그 자체다.
+    _stage3_1_front_x0 = _link5_front_x()
+    _stage3_1_ceiling_here = CEILING_WORLD_Z
+    _stage3_1_target_top_z = _stage3_1_ceiling_here - STAGE3_1_CEILING_MARGIN
+    print(f"[STAGE3.1 사전측정] link_5앞x(지금)={_stage3_1_front_x0:.3f} "
+          f"천장(CEILING_WORLD_Z)={_stage3_1_ceiling_here:.3f} "
+          f"목표(link_5상단)={_stage3_1_target_top_z:.3f} "
+          f"현재link_5상단={_link5_top_z():.3f}", flush=True)
+
+    # 파랑=CEILING_WORLD_Z(마진 없는 원값), 노랑=마진 뺀 실제 정지 목표 - 절대 높이라
+    # 어디에 그려도 상관없지만, 지금 작업 중인 위치(link_5 앞x)에 놓아서 눈으로 보기 쉽게
+    # 한다. 자홍=지금 link_5 최상단(하강하는 동안 계속 갱신).
+    _add_z_marker("CeilingHeightMarker", _stage3_1_front_x0, _stage3_1_ceiling_here, (0.2, 0.4, 1.0))
+    _add_z_marker("Stage3_1TargetMarker", _stage3_1_front_x0, _stage3_1_target_top_z, (1.0, 1.0, 0.0))
+    _add_z_marker("LiveLink5TopMarker", _stage3_1_front_x0, _link5_top_z(), (1.0, 0.0, 1.0))
+
+    if _link5_top_z() <= _stage3_1_target_top_z:
+        print("[STAGE 3.1] 이미 link_5 최상단이 목표보다 낮습니다 - 하강 없이 통과.", flush=True)
+    else:
+        _ee_pos0, _ = m0609_robot.end_effector.get_world_pose()
+        _stage3_1_ee_xy = (float(_ee_pos0[0]), float(_ee_pos0[1]))
+        for _iter in range(STAGE3_1_MAX_ITERS):
+            current_top = _link5_top_z()
+            gap = current_top - _stage3_1_target_top_z
+            if gap <= 0:
+                print(f"[STAGE 3.1] {_iter}회 보정 후 목표 도달(link_5상단={current_top:.3f}).",
+                      flush=True)
+                break
+            clearance = _box_floor_clearance()
+            if clearance is not None and clearance < STAGE3_1_FLOOR_MARGIN:
+                raise SystemExit(
+                    f"[중단] STAGE 3.1: 박스 바닥이 트렁크 바닥에 너무 가까워졌습니다"
+                    f"(여유={clearance:.3f}m) - 더 내리면 바닥 충돌 위험이라 멈춥니다."
+                )
+            ee_pos_now, _ = m0609_robot.end_effector.get_world_pose()
+            target_ee_z = float(ee_pos_now[2]) - gap
+            target_lift_h = max(LIFT_MIN, lift_state["h"] - gap)
+            descend_and_raise_lift(
+                _stage3_1_ee_xy, target_ee_z, target_lift_h, steps=120, hold_gripper_closed=True,
+                label=f"STAGE3.1[{_iter + 1}/{STAGE3_1_MAX_ITERS}]: link_5 상단 하강(잔여 {gap:.3f}m)",
+            )
+            _add_z_marker("LiveLink5TopMarker", _link5_front_x(), _link5_top_z(), (1.0, 0.0, 1.0))
+        else:
+            print(f"[경고] STAGE 3.1: {STAGE3_1_MAX_ITERS}회 반복해도 link_5 상단이 목표에 도달하지 "
+                  f"못했습니다(현재={_link5_top_z():.3f}, 목표={_stage3_1_target_top_z:.3f}).", flush=True)
+
+    _stage3_1_final_clearance = _box_floor_clearance()
+    print(f"[STAGE 3.1 종료] link_5상단={_link5_top_z():.3f} 목표={_stage3_1_target_top_z:.3f} "
+          f"박스-바닥여유={_stage3_1_final_clearance}", flush=True)
+    _log_clearance("STAGE3.1 종료(전완 접어 하강 후)")
+
+    chassis_pos0, _ = base_robot.get_world_pose()
+    snapshot(eye=[chassis_pos0[0] - 1.0, chassis_pos0[1] - 1.8, chassis_pos0[2] + 1.0],
+             target=[_stage3_1_front_x0, ANCHOR_Y, TRUNK_FLOOR_Z + 0.3],
+             fname="_trunkplace_03_1_folded_low.png")
+
+    if STAGE < 3.2:
+        print("\n[STAGE 3.1 완료] 파랑(천장 실측)/노랑(마진 뺀 목표)/자홍(link_5 최상단) 마커로 "
+              "실제로 낮아졌는지, 박스가 바닥에 안 닿았는지 확인하세요. STAGE 3.2 이상은 아직 "
+              "구현 전입니다.\n", flush=True)
+
 if STAGE >= 4:
     # ================= STAGE 4: 후퇴 (STAGE 3 -> ... -> STAGE 1 상태로 역순 복귀) =================
     # 사용자 설계(재검토) - 지금까지 밟은 전진 시퀀스를 그대로 거꾸로 밟는다:
