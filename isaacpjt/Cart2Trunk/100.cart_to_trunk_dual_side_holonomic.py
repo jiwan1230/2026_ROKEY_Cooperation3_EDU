@@ -2325,15 +2325,39 @@ for _box_num, (picked_prim_path, picked_placement) in enumerate(pick_order):
             detached = not m0609_robot.gripper.is_closed()
             return relative_error > 0.025 or detached
 
-        _, _, _, transit_drive_aborted = drive_until(
-            lambda: False, target_x=BASE_START_XY[0], target_y=BASE_START_XY[1],
-            target_yaw_deg=_trunk_approach_yaw_deg,
-            max_speed=0.15, per_step_fn=_hold_transit_arm, abort_fn=_transit_pose_broken,
-            hard_stop_on_condition=True,
-            label=f"STAGE0.8: 카트->트렁크 standoff 주행+회전(팔 자세 고정, yaw->{_trunk_approach_yaw_deg:.0f}도)",
-        )
-        if transit_drive_aborted:
-            pause_for_inspection("[중단] STAGE 0.8 주행 도중 자세 붕괴/흡착 이탈이 감지돼 즉시 중단했습니다.")
+        # 사용자 지적("이런거는 다 고려해줘야 하는거 아니야?") - 맞는 말이다. "카트 접근"
+        # 3단계를 만들 때 카트로 다가가는 방향만 고치고, 카트에서 트렁크로 떠나는 이
+        # STAGE0.8은 94번의 단일 drive_until을 그대로 복붙해서 정확히 같은 함정을
+        # 다시 심어놨었다 - 지금 섀시는 카트 옆 standoff(X≈cart_center_x, 즉 카트 길이
+        # 범위 한복판)에 서 있고, 목표 yaw가 현재값과 다르면(이번처럼 180->0) 카트 바로
+        # 옆에서 그대로 회전해야 하는데, 회전 도중 섀시의 "긴" 길이 축이 카트 쪽(Y)을
+        # 향하는 중간 각도를 반드시 거친다(CART_CLEAR_X 정의부의 축 반전 설명과
+        # 완전히 동일한 원리) - 그 순간 카트와 겹쳐서 부딪힌다. "카트 접근"과 완전히
+        # 대칭인 3단계(카트와 X축 분리를 먼저 확보 -> 그 상태에서만 회전 -> 이미 목표
+        # yaw가 된 채로 최종 접근)로 고친다 - hold_q/abort 기준은 이 구간 내내 팔이
+        # 전혀 안 움직이므로 그대로 재사용한다.
+        def _drive_transit_leg(target_x, target_y, target_yaw, label):
+            _, _, _, _aborted = drive_until(
+                lambda: False, target_x=target_x, target_y=target_y, target_yaw_deg=target_yaw,
+                max_speed=0.15, per_step_fn=_hold_transit_arm, abort_fn=_transit_pose_broken,
+                hard_stop_on_condition=True, label=label,
+            )
+            if _aborted:
+                pause_for_inspection(f"[중단] STAGE 0.8({label}) 도중 자세 붕괴/흡착 이탈이 감지돼 즉시 중단했습니다.")
+            base_robot.apply_action(holo_forward(0.0, 0.0, 0.0))
+            base_robot.set_linear_velocity(np.zeros(3))
+            base_robot.set_angular_velocity(np.zeros(3))
+
+        # 1단계 - 회전 없이 X만 안전지대로(카트와 X축 분리 확보, 지금 Y/yaw 유지).
+        _drive_transit_leg(CART_CLEAR_X, float(_transit_chassis_start[1]),
+                            float(np.degrees(quat_to_euler_angles(_transit_chassis_quat_start)[2])),
+                            "STAGE0.8 1/3: 카트 standoff -> 회전 안전지대(X만 이동)")
+        # 2단계 - 안전지대(X 고정)에서 목표 yaw로 회전 + Y를 트렁크 standoff Y로.
+        _drive_transit_leg(CART_CLEAR_X, BASE_START_XY[1], _trunk_approach_yaw_deg,
+                            f"STAGE0.8 2/3: 회전 안전지대에서 yaw->{_trunk_approach_yaw_deg:.0f}도 회전+횡이동")
+        # 3단계 - 이미 목표 yaw/Y인 채로 X만 좁혀 트렁크 standoff까지 최종 접근.
+        _drive_transit_leg(BASE_START_XY[0], BASE_START_XY[1], _trunk_approach_yaw_deg,
+                            "STAGE0.8 3/3: 회전 안전지대 -> 트렁크 standoff 최종 접근")
         print(f"[성공] STAGE 0.8 - 트렁크 standoff(BASE_START_XY)까지 "
               f"yaw={_trunk_approach_yaw_deg:.0f}도로 자세 붕괴 없이 도달했습니다.", flush=True)
 
