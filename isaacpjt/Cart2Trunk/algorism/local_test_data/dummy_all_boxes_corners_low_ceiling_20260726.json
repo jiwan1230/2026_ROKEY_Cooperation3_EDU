@@ -1,0 +1,102 @@
+{
+  "coordinate_frame": "m0609_base_link",
+  "completed_ply_file": "dummy_low_ceiling.ply",
+  "boxes": [
+    {
+      "box_id": "BoxOK",
+      "support_type": "floor",
+      "support_candidate_id": 0,
+      "top_candidate_id": 0,
+      "corners_m": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.2,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.2,
+          0.0
+        ],
+        [
+          0.2,
+          0.2,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.1
+        ],
+        [
+          0.2,
+          0.0,
+          0.1
+        ],
+        [
+          0.0,
+          0.2,
+          0.1
+        ],
+        [
+          0.2,
+          0.2,
+          0.1
+        ]
+      ]
+    },
+    {
+      "box_id": "BoxTooTall",
+      "support_type": "floor",
+      "support_candidate_id": 1,
+      "top_candidate_id": 1,
+      "corners_m": [
+        [
+          0.3,
+          0.0,
+          0.0
+        ],
+        [
+          0.5,
+          0.0,
+          0.0
+        ],
+        [
+          0.3,
+          0.2,
+          0.0
+        ],
+        [
+          0.5,
+          0.2,
+          0.0
+        ],
+        [
+          0.3,
+          0.0,
+          0.25
+        ],
+        [
+          0.5,
+          0.0,
+          0.25
+        ],
+        [
+          0.3,
+          0.2,
+          0.25
+        ],
+        [
+          0.5,
+          0.2,
+          0.25
+        ]
+      ]
+    }
+  ]
+}

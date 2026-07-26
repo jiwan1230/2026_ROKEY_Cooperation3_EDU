@@ -72,6 +72,13 @@ class Object3D:
     # None이면 아직 추적 로직이 없다는 뜻 (현재 상태).
     object_id: Optional[str] = None
 
+    # 카트 위에서 이 박스가 놓인 초기 회전각(라디안, z축 기준). "HMI 화면 설계
+    # 가이드라인" 문서의 box_scan.json 스키마에 있는 필드 - MSI2로 넘길
+    # target_yaw(⑦ PlacementPlan.target_yaw) 계산의 시작점이 된다("초기 Yaw
+    # 유지" 옵션도 이 값이 있어야 의미가 생김). 기존 실제 샘플(all_boxes_corners_*
+    # .json)에는 없는 필드라 기본값 0.0으로 하위 호환.
+    yaw: float = 0.0
+
     # ⑥ 픽업 순서 제약용 - 이 박스가 카트 위에서 다른 어떤 박스 위에 얹혀 있는지
     # (그 박스의 id). 없으면 None(바닥에 있거나 관계 정보 없음). 실제 비전 필드
     # (support_candidate_id 등)와의 정확한 매핑은 아직 미확정 - load_boxes_from_vision_json()
@@ -96,7 +103,7 @@ def object3d_to_box(obj: Object3D):
     Box = import_module("03_extreme_point_candidates").Box
 
     w, d, h = obj.size_xyz
-    return Box(id=obj.id, width=w, depth=d, height=h, rests_on_id=obj.rests_on_id)
+    return Box(id=obj.id, width=w, depth=d, height=h, rests_on_id=obj.rests_on_id, initial_yaw=obj.yaw)
 
 
 # ⑥ 픽업 순서(rests_on_id) 자동 판정용 임계값. 비전이 주는 support_candidate_id/
@@ -217,6 +224,72 @@ def load_boxes_from_vision_json(path) -> List[Object3D]:
             rests_on_id=rests_on_by_id.get(box_id),
         ))
     return boxes
+
+
+@dataclass(frozen=True)
+class BoxSnapshot:
+    """box_scan.json 하나(카트 스캔 한 번의 결과)를 통째로 담는 컨테이너.
+    snapshot_id는 ⑳ Task JSON의 box_snapshot_id로 그대로 나가고, HMI 8절
+    원칙("Box Snapshot과 Trunk Map의 ID가 다르면 계획을 실행하지 않는다")의
+    검증 대상이 된다."""
+    snapshot_id: str
+    frame_id: str
+    quality_score: float
+    boxes: List["Object3D"]
+
+
+def load_box_snapshot_from_json(source) -> "BoxSnapshot":
+    """
+    "Cart2Trunk 최종 프로젝트 시나리오 및 시스템 흐름" 문서 4.2절이 정의한
+    box_scan.json 스키마를 파싱한다:
+      {"snapshot_id":..., "frame_id":..., "quality_score":...,
+       "boxes":[{"box_id":..., "center":[x,y,z], "size":[w,d,h], "yaw":...,
+                 "corners":[[x,y,z], ...], "confidence":...}]}
+
+    ⚠️ load_boxes_from_vision_json()과는 다른 스키마다. 그쪽은 지완의 실제 샘플
+    (all_boxes_corners_*.json - corners_m만 있고 yaw/snapshot_id/confidence
+    없음) 기준이고, 이건 이 문서가 적은 "목표" 스키마 기준이라 준형 쪽 실제
+    최종 출력이 어느 쪽인지(혹은 필드명이 또 다른지) 아직 확인 안 됐다 - 실제
+    연동 전에 준형과 맞춰야 함. 그때까지는 두 로더를 그대로 남겨둔다.
+
+    yaw/confidence는 문서엔 있지만 기존 실제 샘플엔 없을 수 있어서, 없으면
+    각각 0.0 / 1.0으로 채워 하위 호환한다.
+
+    frame_id 검증: 문서 예시의 값("m0609_base")이 이미 확정된 ① 상수
+    EXPECTED_BOX_FRAME("m0609_base_link")과 다르다 - 오타인지 실제로 다른
+    값인지 미확정이라, 일단 기존에 확정된 EXPECTED_BOX_FRAME 기준으로 검증하고
+    다르면 에러를 낸다(조용히 엉뚱한 좌표계로 배치하는 것보다 안전).
+    """
+    import json
+    from pathlib import Path
+
+    data = json.loads(Path(source).read_text()) if isinstance(source, (str, Path)) else source
+
+    frame = data.get("frame_id")
+    if frame != EXPECTED_BOX_FRAME:
+        raise ValueError(
+            f"box_scan.json의 frame_id가 '{frame}'인데 '{EXPECTED_BOX_FRAME}'이어야 함 - "
+            f"trunk_map.json과 같은 좌표계로 맞춰서 다시 내보내달라고 요청해야 함"
+        )
+
+    boxes = []
+    for entry in data.get("boxes", []):
+        size = tuple(entry["size"])
+        boxes.append(Object3D(
+            id=str(entry["box_id"]),
+            center_xyz=tuple(entry.get("center", (0.0, 0.0, 0.0))),
+            size_xyz=size,
+            volume=size[0] * size[1] * size[2],
+            confidence=entry.get("confidence", 1.0),
+            yaw=entry.get("yaw", 0.0),
+        ))
+
+    return BoxSnapshot(
+        snapshot_id=data.get("snapshot_id", ""),
+        frame_id=frame,
+        quality_score=data.get("quality_score", 0.0),
+        boxes=boxes,
+    )
 
 
 # ---------------------------------------------------------------------------

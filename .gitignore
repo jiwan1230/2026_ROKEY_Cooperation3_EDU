@@ -21,3 +21,7 @@ isaacpjt/Cart2Trunk/perception/.venv/
 
 # planner_gui.py가 실행할 때마다 덮어쓰는 비포/애프터 임시 이미지 (재생성 가능)
 isaacpjt/Cart2Trunk/algorism/local_test_data/_gui_output/
+
+# 승인된 Task JSON의 임시 저장 위치 (MSI2 실제 전송 경로 확정 전까지의 로컬 스텁
+# 출력 - trunk_map_planner_node._send_task_to_msi2 참고, 재생성 가능)
+isaacpjt/Cart2Trunk/algorism/local_test_data/pending_tasks/

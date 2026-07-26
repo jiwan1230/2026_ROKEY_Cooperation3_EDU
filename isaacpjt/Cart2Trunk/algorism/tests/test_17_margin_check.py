@@ -10,6 +10,8 @@ test_17_margin_check.py
 import sys, pathlib
 from importlib import import_module
 
+import pytest
+
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))  # tests/ -> algorism/
 _m02 = import_module("02_trunk_space_state")
 _m03 = import_module("03_extreme_point_candidates")
@@ -125,3 +127,110 @@ def test_place_one_box_leaves_margin_between_boxes():
     x_gap = max(x1 - (x2 + box2.width), x2 - (x1 + box1.width))
     y_gap = max(y1 - (y2 + box2.depth), y2 - (y1 + box1.depth))
     assert x_gap >= MARGIN - 1e-9 or y_gap >= MARGIN - 1e-9
+
+
+# ---------------------------------------------------------------------------
+# "HMI 화면 설계 가이드라인" 문서가 요구하는 마진 4종 분리(박스간/벽면/천장/
+# 장애물) 중 벽면·장애물 부분 - box_margin(margin)과 별개로 wall_margin/
+# obstacle_margin을 따로 줄 수 있어야 한다.
+# ---------------------------------------------------------------------------
+
+def test_has_sufficient_margin_wall_margin_override_is_independent_of_box_margin():
+    """wall_margin을 margin과 다르게 주면 벽 판정에는 wall_margin이 쓰이고
+    박스-박스 판정에는 그대로 margin(box_margin)이 쓰여야 한다."""
+    trunk = Trunk(width=1.0, depth=1.0, height=1.0)
+    box = Box("A", width=0.2, depth=0.2, height=0.2)
+    # 벽에서 0.05m 떨어짐: wall_margin=0.05면 통과, wall_margin=0.1이면 거부
+    assert has_sufficient_margin(0.05, 0.5, 0.0, box, trunk, [], margin=0.02, wall_margin=0.05) is True
+    assert has_sufficient_margin(0.05, 0.5, 0.0, box, trunk, [], margin=0.02, wall_margin=0.10) is False
+
+
+def test_has_sufficient_margin_wall_margin_defaults_to_margin_when_not_given():
+    """wall_margin을 안 주면 margin(box_margin) 값을 그대로 씀 - 하위 호환."""
+    trunk = Trunk(width=1.0, depth=1.0, height=1.0)
+    box = Box("A", width=0.2, depth=0.2, height=0.2)
+    assert has_sufficient_margin(0.05, 0.5, 0.0, box, trunk, [], margin=0.05) is True
+    assert has_sufficient_margin(0.04, 0.5, 0.0, box, trunk, [], margin=0.05) is False
+
+
+def test_obstacle_margin_applies_only_to_boxes_flagged_as_obstacle():
+    """is_obstacle=True인 PlacedBox와의 간격은 obstacle_margin으로, 일반 카트
+    박스와의 간격은 그대로 margin(box_margin)으로 판정해야 한다."""
+    trunk = Trunk(width=2.0, depth=2.0, height=1.0)
+    obstacle = PlacedBox(box=Box("Wheel", 0.3, 0.3, 0.2, is_obstacle=True), x=0.0, y=0.5, z=0.0)
+    cart_box = PlacedBox(box=Box("N", 0.3, 0.3, 0.2), x=1.0, y=0.5, z=0.0)
+    candidate = Box("C", width=0.2, depth=0.2, height=0.2)
+
+    # 장애물에서 0.05m: obstacle_margin=0.05면 통과, obstacle_margin=0.1이면 거부
+    # (y=0.5로 둘 다 벽 마진은 넉넉히 통과하게 잡아서, 여기서 갈리는 건 오직 박스-박스/장애물 판정뿐)
+    assert has_sufficient_margin(0.35, 0.5, 0.0, candidate, trunk, [obstacle],
+                                  margin=0.02, obstacle_margin=0.05) is True
+    assert has_sufficient_margin(0.35, 0.5, 0.0, candidate, trunk, [obstacle],
+                                  margin=0.02, obstacle_margin=0.10) is False
+    # 일반 카트 박스는 obstacle_margin이 아니라 margin(0.02)으로 판정되어야 함
+    assert has_sufficient_margin(0.65, 0.5, 0.0, candidate, trunk, [cart_box],
+                                  margin=0.02, obstacle_margin=0.10) is True
+
+
+def test_box_is_obstacle_defaults_to_false():
+    box = Box("A", width=0.2, depth=0.2, height=0.2)
+    assert box.is_obstacle is False
+
+
+# ---------------------------------------------------------------------------
+# "HMI 화면 설계 가이드라인" 문서의 "트렁크 입구 여유 거리" - wall_margin과 별개로
+# 입구 쪽 벽만 다른 간격을 줄 수 있어야 한다.
+# ---------------------------------------------------------------------------
+
+def test_entrance_margin_applies_only_to_entrance_side_wall():
+    """entrance_near_x=True면 x=0쪽이 입구 - entrance_margin은 x=0쪽에만 적용되고
+    반대쪽(안쪽 벽)은 margin(또는 wall_margin) 그대로여야 한다."""
+    trunk = Trunk(width=1.0, depth=1.0, height=1.0, entrance_near_x=True)
+    box = Box("A", width=0.2, depth=0.2, height=0.2)
+
+    # 입구(x=0)에서 0.10m: entrance_margin=0.10이면 통과, margin(0.02) 기준이면 거부됐을 값
+    assert has_wall_margin(0.10, 0.5, 0.0, box, trunk, margin=0.02, entrance_margin=0.10) is True
+    # 안쪽 벽(x+width=1.0)에서는 여전히 margin(0.02)만 있으면 됨 - entrance_margin과 무관
+    assert has_wall_margin(0.78, 0.5, 0.0, box, trunk, margin=0.02, entrance_margin=0.10) is True
+    # 입구에서 0.05m밖에 안 띄우면 entrance_margin=0.10 기준으로 거부되어야 함
+    assert has_wall_margin(0.05, 0.5, 0.0, box, trunk, margin=0.02, entrance_margin=0.10) is False
+
+
+def test_entrance_margin_flips_side_when_entrance_is_on_far_x():
+    """entrance_near_x=False면 x=width쪽이 입구 - entrance_margin이 그쪽에 적용돼야 한다."""
+    trunk = Trunk(width=1.0, depth=1.0, height=1.0, entrance_near_x=False)
+    box = Box("A", width=0.2, depth=0.2, height=0.2)
+
+    # 입구(x+width=1.0)에서 0.10m 띄운 자리: x=1.0-0.2-0.10=0.70
+    assert has_wall_margin(0.70, 0.5, 0.0, box, trunk, margin=0.02, entrance_margin=0.10) is True
+    # 입구에서 0.05m만 띄우면(x=0.75) entrance_margin=0.10 기준 거부
+    assert has_wall_margin(0.75, 0.5, 0.0, box, trunk, margin=0.02, entrance_margin=0.10) is False
+
+
+def test_entrance_margin_none_falls_back_to_margin():
+    """entrance_margin을 안 주면 margin과 동일하게 동작 (하위 호환)."""
+    trunk = Trunk(width=1.0, depth=1.0, height=1.0, entrance_near_x=True)
+    box = Box("A", width=0.2, depth=0.2, height=0.2)
+    assert has_wall_margin(0.02, 0.5, 0.0, box, trunk, margin=0.02) is True
+    assert has_wall_margin(0.01, 0.5, 0.0, box, trunk, margin=0.02) is False
+
+
+def test_place_one_box_can_sit_flush_at_entrance_margin_distance():
+    """통합 테스트: 빈 트렁크의 '첫 박스'도 entrance_margin 거리의 입구쪽 후보를
+    실제로 만날 수 있어야 한다 (기존엔 안쪽 벽 플러시 후보만 명시적으로 생성돼서,
+    입구쪽 마진 후보가 아예 없는 경우가 있었음 - entrance_preference=-1로 입구를
+    강하게 우선하면 이 후보가 선택돼야 확인 가능)."""
+    from importlib import import_module as im
+    _m05 = im("05_candidate_scoring")
+    make_weighted_score_fn = _m05.make_weighted_score_fn
+
+    trunk = Trunk(width=1.0, depth=1.0, height=0.5)
+    state = ExtremePointState()
+    box = Box("A", width=0.2, depth=0.2, height=0.15)
+
+    entrance_first_score = make_weighted_score_fn(entrance_preference=-1.0)
+    plan = place_one_box(box, trunk, state, order=1, margin=0.02, entrance_margin=0.10,
+                          score_fn=entrance_first_score)
+    assert plan is not None
+    x, _y, _z = plan.position
+    assert x == pytest.approx(0.10)

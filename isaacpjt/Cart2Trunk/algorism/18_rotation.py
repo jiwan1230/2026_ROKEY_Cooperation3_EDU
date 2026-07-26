@@ -21,6 +21,7 @@
   그리퍼 동작이 하나 더 필요해서, 꼭 필요할 때만 쓴다).
 """
 
+import dataclasses
 import sys, pathlib
 from importlib import import_module
 
@@ -32,16 +33,12 @@ fits_dims = _m03.fits_dims
 
 
 def rotate_box(box: "Box") -> "Box":
-    """가로/세로를 맞바꾼 새 Box를 반환한다 (높이·id·질량 등 나머지는 그대로)."""
-    return Box(
-        id=box.id,
-        width=box.depth,
-        depth=box.width,
-        height=box.height,
-        mass_kg=box.mass_kg,
-        is_fragile=box.is_fragile,
-        rests_on_id=box.rests_on_id,
-    )
+    """가로/세로를 맞바꾼 새 Box를 반환한다 (높이는 절대 안 바뀜). width/depth를
+    제외한 나머지 필드는 dataclasses.replace로 전부 그대로 옮긴다 - 필드를 하나씩
+    나열하는 방식은 Box에 새 필드(initial_yaw 등)가 추가될 때마다 여기도 같이
+    고쳐야 하는데 깜빡하면 조용히 기본값으로 리셋되는 버그가 난다(실제로
+    initial_yaw가 이렇게 누락되어 있었음)."""
+    return dataclasses.replace(box, width=box.depth, depth=box.width)
 
 
 def fits_dims_any_rotation(box: "Box", trunk) -> bool:

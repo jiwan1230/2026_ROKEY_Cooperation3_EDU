@@ -26,15 +26,15 @@ PLACEMENT_SAFETY_MARGIN_M=0.02 상수를 박아넣는 방식으로 2cm로 올렸
 [이 파일이 하는 것 / 안 하는 것]
 - 좌우(x/y, 트렁크 옆벽·안쪽벽) 방향으로만 마진을 확인한다.
 - 바닥(z=0)은 대상이 아니다 - 박스는 바닥에 딱 붙어야(접촉해야) 정상이다.
-- 천장 쪽 여유는 이미 ⑮(OVERHEAD_CLEARANCE=0.20m)가 훨씬 큰 마진으로 다루고
-  있어서 여기서 따로 안 다룬다.
+- 천장 쪽 여유는 이미 ⑮(OVERHEAD_CLEARANCE=0.15m, 그리퍼 실측 0.12m + 안전
+  마진 0.03m, 7/25 갱신)가 훨씬 큰 마진으로 다루고 있어서 여기서 따로 안 다룬다.
 - 박스끼리도, z 범위가 실제로 겹치는(=옆으로 나란한) 경우에만 마진을 요구한다.
   z가 안 겹치는(한쪽이 다른 쪽 위에 쌓인) 관계는 오히려 완전히 맞닿아야
   (⑬ 받침) 하므로 마진 대상이 아니다.
 """
 
 import sys, pathlib
-from typing import List
+from typing import List, Optional
 from importlib import import_module
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
@@ -56,21 +56,40 @@ PlacedBox = _m03.PlacedBox
 MARGIN = 0.04
 
 
-def has_wall_margin(x: float, y: float, z: float, box: "Box", trunk, margin: float = MARGIN) -> bool:
-    """트렁크 옆벽/안쪽벽까지 x·y 방향으로 margin 이상 떨어져 있는지 확인 (바닥/천장 제외)."""
+def has_wall_margin(
+    x: float, y: float, z: float, box: "Box", trunk, margin: float = MARGIN,
+    entrance_margin: Optional[float] = None,
+) -> bool:
+    """트렁크 옆벽/안쪽벽까지 x·y 방향으로 margin 이상 떨어져 있는지 확인 (바닥/천장 제외).
+
+    [entrance_margin] "HMI 화면 설계 가이드라인" 문서의 "트렁크 입구 여유 거리"
+    - 입구 쪽 벽에만 margin 대신 이 값을 쓴다(trunk.entrance_near_x로 어느 쪽이
+    입구인지 판단). None(기본값)이면 margin과 동일(하위 호환) - 안쪽 벽/옆벽은
+    항상 margin 그대로."""
+    entrance_req = entrance_margin if entrance_margin is not None else margin
+    near_x_req = entrance_req if trunk.entrance_near_x else margin
+    far_x_req = margin if trunk.entrance_near_x else entrance_req
     return (
-        x >= margin - 1e-9
-        and x + box.width <= trunk.width - margin + 1e-9
+        x >= near_x_req - 1e-9
+        and x + box.width <= trunk.width - far_x_req + 1e-9
         and y >= margin - 1e-9
         and y + box.depth <= trunk.depth - margin + 1e-9
     )
 
 
-def has_box_margin(x: float, y: float, z: float, box: "Box", placed: List["PlacedBox"], margin: float = MARGIN) -> bool:
+def has_box_margin(
+    x: float, y: float, z: float, box: "Box", placed: List["PlacedBox"], margin: float = MARGIN,
+    obstacle_margin: Optional[float] = None,
+) -> bool:
     """
     z 범위가 실제로 겹치는(옆으로 나란히 놓이는) 다른 박스와 x 또는 y 방향으로
-    margin 이상 떨어져 있는지 확인. 셋 중 하나라도 겹치는 게 있으면 그 박스와는
-    x_gap, y_gap 둘 다 margin 미만이면 안 된다(대각선으로 너무 가까운 것도 거부).
+    필요한 만큼 떨어져 있는지 확인. 셋 중 하나라도 겹치는 게 있으면 그 박스와는
+    x_gap, y_gap 둘 다 미만이면 안 된다(대각선으로 너무 가까운 것도 거부).
+
+    [obstacle_margin] "HMI 화면 설계 가이드라인" 문서의 "장애물 간격" 슬라이더 -
+    p.box.is_obstacle=True인 상대(휠하우스 등 고정 장애물)에는 margin 대신 이
+    값을 쓴다. None(기본값)이면 margin과 동일(하위 호환 - 장애물도 일반
+    박스처럼 취급).
     """
     x0, x1 = x, x + box.width
     y0, y1 = y, y + box.depth
@@ -81,21 +100,38 @@ def has_box_margin(x: float, y: float, z: float, box: "Box", placed: List["Place
         if not (z0 < pz1 - 1e-9 and z1 > pz0 + 1e-9):
             continue  # z가 안 겹침 - 쌓기 관계라 마진 대상 아님
 
+        required = obstacle_margin if (p.box.is_obstacle and obstacle_margin is not None) else margin
         px0, px1 = p.x_range
         py0, py1 = p.y_range
         x_gap = max(px0 - x1, x0 - px1)
         y_gap = max(py0 - y1, y0 - py1)
-        if x_gap < margin - 1e-9 and y_gap < margin - 1e-9:
+        if x_gap < required - 1e-9 and y_gap < required - 1e-9:
             return False
 
     return True
 
 
 def has_sufficient_margin(
-    x: float, y: float, z: float, box: "Box", trunk, placed: List["PlacedBox"], margin: float = MARGIN
+    x: float, y: float, z: float, box: "Box", trunk, placed: List["PlacedBox"], margin: float = MARGIN,
+    wall_margin: Optional[float] = None, obstacle_margin: Optional[float] = None,
+    entrance_margin: Optional[float] = None,
 ) -> bool:
-    """벽 마진 + 박스 간 마진을 모두 확인 (하드 컷 - ⑬/⑮와 같은 원칙)."""
-    return has_wall_margin(x, y, z, box, trunk, margin) and has_box_margin(x, y, z, box, placed, margin)
+    """
+    벽 마진 + 박스 간 마진을 모두 확인 (하드 컷 - ⑬/⑮와 같은 원칙).
+
+    [wall_margin] "벽면 간격" 슬라이더 - None(기본값)이면 margin("박스 간격")과
+    같은 값을 벽에도 그대로 쓴다(하위 호환). 다르게 주면 벽 판정에만 이 값이
+    쓰이고, 박스-박스 판정은 그대로 margin을 쓴다.
+    [obstacle_margin] has_box_margin 참고 - "장애물 간격" 슬라이더.
+    [entrance_margin] "트렁크 입구 여유 거리" 슬라이더 - wall_margin(정해졌으면
+    그 값, 아니면 margin)을 기본으로 삼되, 입구 쪽 벽만 이 값으로 덮어쓴다.
+    has_wall_margin 참고.
+    """
+    effective_wall_margin = wall_margin if wall_margin is not None else margin
+    return (
+        has_wall_margin(x, y, z, box, trunk, effective_wall_margin, entrance_margin=entrance_margin)
+        and has_box_margin(x, y, z, box, placed, margin, obstacle_margin=obstacle_margin)
+    )
 
 
 if __name__ == "__main__":
