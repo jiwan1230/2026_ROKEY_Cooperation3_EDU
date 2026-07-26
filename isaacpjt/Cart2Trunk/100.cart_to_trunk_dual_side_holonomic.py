@@ -1733,7 +1733,7 @@ def retreat_and_raise(target_chassis_x, target_lift_h, ee_target_pos, ee_orienta
                        tolerance_xy=0.03, max_speed=0.06, kp_xy=1.0, lift_speed=0.002,
                        max_steps=2000, hold_gripper_closed=True, label="",
                        condition_fn=None, abort_fn=None, hard_stop_on_condition=True,
-                       debug_interval=0, debug_fn=None):
+                       debug_interval=0, debug_fn=None, record_into=None, joint_trajectory=None):
     """사용자 설계(STAGE 3 재설계 5차) - 그리퍼/박스는 ee_target_pos(STAGE 3.1이 잡아둔 자리)에
     고정한 채, 섀시를 target_chassis_x까지 후진시키고 동시에 리프트를 target_lift_h까지
     올린다. 마운트가 그 고정 지점에서 뒤로+위로 물러날수록, 계속 그 자리를 추종해야 하는
@@ -1741,13 +1741,32 @@ def retreat_and_raise(target_chassis_x, target_lift_h, ee_target_pos, ee_orienta
     세로 공간을 덜 차지하게 만드는 게 목적이다(link_2가 반복적으로 입구에 부딪히던 문제의
     기구학적 우회). drive_and_reach()(섀시+팔, 리프트 고정)와 reach_with_lift()(리프트+팔,
     섀시 고정)를 합친 버전 - condition_fn(관절이 충분히 폈는지)이 True가 되면 목표 지점
-    전이라도 drive_until()과 동일한 원칙으로 조기 정지한다."""
+    전이라도 drive_until()과 동일한 원칙으로 조기 정지한다.
+
+    사용자 질문("Link3이 아래쪽으로 접히는 자세를 후퇴 때도 그대로 재현하고 싶은데,
+    RMPflow/IK라서 방향을 제어할 수 없나?") - RMPflow는 매 스텝 "지금 관절 상태에서
+    목표에 가장 가까운 국소해"만 반응적으로 찾는 솔버라, 후퇴(STAGE 4)처럼 이 함수를
+    거꾸로 다시 부르면 그 시점의 관절 상태가 조금만 달라도 다른 solution branch로
+    수렴할 수 있다(이번 세션에서 반복 확인된 현상) - "IK라서 제어 불가능"한 게 아니라,
+    후퇴 때도 매번 RMPflow에게 branch 선택을 새로 맡기고 있었던 게 문제다. 고침:
+    RMPflow에게 매번 다시 풀게 하는 대신, 정방향(펴기, STAGE 3.2.0) 통과 때 실제로
+    거쳐간 관절 궤적을 리프트 높이를 키(key)로 기록해뒀다가(record_into), 역방향
+    (접기, STAGE 4-4)에서는 IK를 아예 다시 안 풀고 그 기록을 리프트 높이로
+    보간(joint_trajectory)해서 직접 재생한다 - 같은 물리적 경로를 그대로 되짚으므로
+    RMPflow가 다른 branch를 고를 여지 자체가 없어진다.
+    - record_into: 리스트를 넘기면, 매 스텝 (리프트 높이, 그 순간 실제 관절값)을
+      append한다(정방향 호출에서만 의미 있음 - RMPflow가 실제로 그 관절을 명령했을 때).
+    - joint_trajectory: (heights_array, joints_matrix) 튜플을 넘기면, RMPflow를 아예
+      건너뛰고 그 자리에서 현재 리프트 높이로 관절을 선형보간해 직접 명령한다(재생
+      모드) - 리프트 높이는 두 방향 모두에서 공통으로 측정 가능한 물리량이라, 정방향
+      기록과 역방향 재생을 이어주는 키로 쓸 수 있다."""
     ee_target_pos = np.array(ee_target_pos, dtype=float)
     start_pos, _ = base_robot.get_world_pose()
     ty = float(start_pos[1])
     aborted = False
     condition_met = False
     freeze_q = None
+    last_replay_q = np.asarray(m0609_robot.get_joint_positions(), dtype=float).copy()
     step = 0
     for step in range(1, max_steps + 1):
         if debug_interval and debug_fn is not None and step % debug_interval == 0:
@@ -1785,15 +1804,29 @@ def retreat_and_raise(target_chassis_x, target_lift_h, ee_target_pos, ee_orienta
         lift_delta = float(np.clip(target_lift_h - lift_state["h"], -lift_speed, lift_speed))
         lift_state["h"] += lift_delta
 
-        sync_rmp_base()
-        actions = controller.forward(
-            target_end_effector_position=ee_target_pos, target_end_effector_orientation=ee_orientation,
-        )
-        m0609_robot.apply_action(actions)
+        if joint_trajectory is not None:
+            # 재생 모드 - RMPflow를 건너뛰고, 정방향 통과가 기록해둔 (리프트 높이, 관절값)
+            # 궤적을 지금 리프트 높이로 보간해 그대로 명령한다.
+            _heights, _joints_matrix = joint_trajectory
+            _replay_q = np.array([
+                np.interp(lift_state["h"], _heights, _joints_matrix[:, _j])
+                for _j in range(_joints_matrix.shape[1])
+            ])
+            m0609_robot.apply_action(ArticulationAction(joint_positions=_replay_q))
+            last_replay_q = _replay_q
+        else:
+            sync_rmp_base()
+            actions = controller.forward(
+                target_end_effector_position=ee_target_pos, target_end_effector_orientation=ee_orientation,
+            )
+            m0609_robot.apply_action(actions)
         if hold_gripper_closed:
             m0609_robot.gripper.close()
         set_lift_height(lift_state["h"])
         world.step(render=True)
+        if record_into is not None:
+            record_into.append((float(lift_state["h"]),
+                                 np.asarray(m0609_robot.get_joint_positions(), dtype=float).copy()))
 
     if hard_stop_on_condition and aborted:
         for _ in range(8):
@@ -1807,11 +1840,17 @@ def retreat_and_raise(target_chassis_x, target_lift_h, ee_target_pos, ee_orienta
             _smooth_state["vx"] *= 1 - SMOOTH_ALPHA
             _smooth_state["vy"] *= 1 - SMOOTH_ALPHA
             base_robot.apply_action(holo_forward(_smooth_state["vx"], _smooth_state["vy"], _smooth_state["wz"]))
-            sync_rmp_base()
-            actions = controller.forward(
-                target_end_effector_position=ee_target_pos, target_end_effector_orientation=ee_orientation,
-            )
-            m0609_robot.apply_action(actions)
+            if joint_trajectory is not None:
+                # 재생 모드의 감속 꼬리 - IK를 다시 부르지 않고 마지막으로 재생한 관절값을
+                # 그대로 유지한다(RMPflow를 부르면 이 마지막 몇 스텝에서 새삼 다른 branch로
+                # 튈 여지를 다시 열어주는 셈이라 의미가 없다).
+                m0609_robot.apply_action(ArticulationAction(joint_positions=last_replay_q))
+            else:
+                sync_rmp_base()
+                actions = controller.forward(
+                    target_end_effector_position=ee_target_pos, target_end_effector_orientation=ee_orientation,
+                )
+                m0609_robot.apply_action(actions)
             if hold_gripper_closed:
                 m0609_robot.gripper.close()
             set_lift_height(lift_state["h"])
@@ -3235,13 +3274,34 @@ for _box_num, (picked_prim_path, picked_placement) in enumerate(pick_order):
                   f"리프트={lift_state['h']:.3f} joint2={q[1]:.3f} joint3={q[2]:.3f} "
                   f"ee=({ee_pos[0]:.3f},{ee_pos[1]:.3f},{ee_pos[2]:.3f})", flush=True)
 
+        # 사용자 질문("Link3이 아래로 접히는 자세, RMPflow라서 방향 제어 못 하나?") 대응 -
+        # 이 정방향 통과(펴기)의 실제 관절 궤적을 리프트 높이를 키로 기록해둔다. STAGE4-4
+        # (이 단계의 역방향, 접기)에서 RMPflow에게 다시 풀게 하는 대신 이 기록을 그대로
+        # 재생하면, 이번에 실제로 밟은 solution branch를 후퇴할 때도 그대로 되짚으므로
+        # 다른 branch로 튈 여지가 없어진다(retreat_and_raise의 joint_trajectory 문서 참고).
+        _stage3_2_0_joint_record = []
+
         _, _stage3_2_0_ee_final, _stage3_2_0_ee_err, stage3_2_0_met, stage3_2_0_aborted = retreat_and_raise(
             STAGE3_2_0_RETREAT_X, STAGE3_2_0_LIFT_TARGET, _stage3_2_0_fixed_ee,
             condition_fn=_stage3_2_0_joint_flat, max_speed=0.06, lift_speed=0.002,
             hold_gripper_closed=True, abort_fn=_stage3_2_0_broken, hard_stop_on_condition=True,
             label="STAGE3.2.0: 그리퍼 위치 고정 + 섀시 후진/리프트 상승(팔 펴기)",
-            debug_interval=10, debug_fn=_stage3_2_0_debug,
+            debug_interval=10, debug_fn=_stage3_2_0_debug, record_into=_stage3_2_0_joint_record,
         )
+        # (heights_array, joints_matrix) 형태로 미리 정리해둔다 - np.interp가 요구하는
+        # x축(heights)이 오름차순이어야 하므로 정렬한다(리프트가 항상 증가하는 방향으로만
+        # 움직이므로 이미 정렬돼 있을 것이지만, 부동소수점 동률/역전에 대비해 명시적으로
+        # 정렬한다). 최소 2개 표본이 없으면(펴기 시작 즉시 조건이 충족돼 한 스텝도 기록
+        # 못 한 극단적인 경우) 재생 자체를 못 하므로 None으로 둔다 - STAGE4-4가 이 경우
+        # 자동으로 기존 RMPflow 방식으로 되돌아간다(아래 참고).
+        if len(_stage3_2_0_joint_record) >= 2:
+            _stage3_2_0_heights = np.array([h for h, _ in _stage3_2_0_joint_record])
+            _stage3_2_0_joints_matrix = np.array([q for _, q in _stage3_2_0_joint_record])
+            _sort_idx = np.argsort(_stage3_2_0_heights)
+            _stage3_2_0_joint_trajectory = (
+                _stage3_2_0_heights[_sort_idx], _stage3_2_0_joints_matrix[_sort_idx])
+        else:
+            _stage3_2_0_joint_trajectory = None
         if stage3_2_0_aborted:
             pause_for_inspection("[중단] STAGE 3.2.0 도중 자세 붕괴가 감지돼 즉시 중단했습니다.")
         if _stage3_2_0_ee_err > 0.05:
@@ -3782,16 +3842,34 @@ for _box_num, (picked_prim_path, picked_placement) in enumerate(pick_order):
         _ee_now_4_4, _ = m0609_robot.end_effector.get_world_pose()
         _stage4_4_fixed_ee = tuple(float(v) for v in _ee_now_4_4)
 
+        # 사용자 질문 대응(재생 모드) - _stage3_2_0_joint_trajectory가 있으면(정상적인 경우
+        # 거의 항상 있음) RMPflow에게 다시 풀게 하는 대신 정방향(STAGE3.2.0)이 기록해둔
+        # 관절 궤적을 리프트 높이 기준으로 그대로 재생한다 - 그때 실제로 밟은 solution
+        # branch를 그대로 되짚으므로 다른 branch로 튈 여지가 없다. 기록이 없었다면(극단적
+        # 예외 상황) 기존 RMPflow 추종 방식으로 자동 대체된다.
+        _stage4_4_replay_kwargs = (
+            {"joint_trajectory": _stage3_2_0_joint_trajectory}
+            if _stage3_2_0_joint_trajectory is not None else {}
+        )
         _, _, stage4_4_ee_err, _, stage4_4_aborted = retreat_and_raise(
             _stage3_0_end_chassis_x, STAGE3_1_END_LIFT_H, _stage4_4_fixed_ee,
             max_speed=0.06, lift_speed=0.002, hold_gripper_closed=False,
             abort_fn=_stage4_4_broken, hard_stop_on_condition=True,
             label="STAGE4-4(3.2.0 역): ee 고정, 섀시 전진+리프트 하강으로 3.1 종료 지점 복귀",
+            **_stage4_4_replay_kwargs,
         )
         if stage4_4_aborted:
             pause_for_inspection("[중단] STAGE4-4 도중 천장 클리어런스 또는 link_2 좌우여유 부족이 감지돼 즉시 중단했습니다.")
-        if stage4_4_ee_err > 0.05:
-            pause_for_inspection(f"[중단] STAGE4-4 - ee가 고정 목표에서 너무 벗어났습니다(err={stage4_4_ee_err:.3f}m).")
+        if _stage3_2_0_joint_trajectory is None:
+            # RMPflow 추종 모드일 때만 ee_err가 "목표에 도달했는지"를 뜻한다.
+            if stage4_4_ee_err > 0.05:
+                pause_for_inspection(f"[중단] STAGE4-4 - ee가 고정 목표에서 너무 벗어났습니다(err={stage4_4_ee_err:.3f}m).")
+        else:
+            # 재생 모드에서는 ee_target_pos를 추종한 게 아니므로(관절값을 직접 재생) 이
+            # 오차는 참고용일 뿐 성공 기준이 아니다 - 실제 검증은 abort_fn(천장/link_2)과
+            # 이후 STAGE4-5가 재확인하는 3.0 종료 자세 도달 여부로 이뤄진다.
+            print(f"[STAGE4-4 재생 모드] 참고용 ee_err={stage4_4_ee_err:.4f}m "
+                  "(관절 궤적을 그대로 재생했으므로 이 오차는 성공 기준이 아님)", flush=True)
         print("[성공] STAGE4-4 - 3.1 종료 지점(섀시/리프트)으로 복귀 완료.", flush=True)
 
         _stage4_5_counter = {"n": 0}
