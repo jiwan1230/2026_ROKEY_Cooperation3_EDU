@@ -114,11 +114,11 @@ def test_object3d_to_box_carries_rests_on_id_through():
     assert box.rests_on_id == "Cart_Green"
 
 
-def test_load_boxes_from_vision_json_leaves_rests_on_id_unset_for_now(tmp_path):
+def test_load_boxes_from_vision_json_leaves_rests_on_id_none_when_no_parent(tmp_path):
     """
-    실제 샘플의 support_candidate_id 필드가 정확히 무슨 의미인지(진짜 '깔린 박스
-    id'가 맞는지) 아직 지완/준형님 확인 전이라, 지금은 잘못 매핑해서 조용히 틀린
-    픽업 순서 제약을 만드는 것보다 안 채우는 쪽이 안전하다 - 확인되면 여기를 고치면 됨.
+    카트 바닥에 직접 놓인(다른 어떤 박스의 윗면과도 안 맞닿는) 박스는 rests_on_id가
+    None이어야 한다 - 부모 후보가 없으면 그대로 None(픽업 순서 제약 없음, 기존 동작과
+    동일)이라는 폴백 경로를 확인한다.
     """
     data = {
         "coordinate_frame": "m0609_base_link",
@@ -129,3 +129,57 @@ def test_load_boxes_from_vision_json_leaves_rests_on_id_unset_for_now(tmp_path):
     boxes = load_boxes_from_vision_json(path)
 
     assert boxes[0].rests_on_id is None
+
+
+def test_load_boxes_infers_rests_on_id_from_geometry_when_box_sits_on_another(tmp_path):
+    """
+    실제로 발견된 문제(Cart2Trunk 3박스 적층 스캔): support_candidate_id는 트라이얼마다
+    새로 매겨지는 임시 번호라 믿을 수 없어서(서로 다른 두 박스가 같은
+    top_candidate_id를 가진 사례 실측 확인) rests_on_id를 못 채웠는데, 그 결과
+    ⑥(decide_loading_order)이 "맨 밑에 깔린 큰 박스를 1번으로" 고르는 물리적으로
+    불가능한 순서를 냈었다. support_candidate_id 대신 corners_m(실제 3D 좌표)로
+    "바닥 z가 다른 박스 윗면과 거의 맞닿고 XY가 겹치는지"를 직접 계산해서
+    rests_on_id를 채우면 이 문제가 해결되는지 확인한다.
+
+    Large(바닥, z=[0.0, 0.12])의 윗면 위에 Small(z=[0.12, 0.19])이 XY로 완전히
+    겹치게 얹혀 있다 - Small.rests_on_id는 "Large"여야 한다.
+    """
+    data = {
+        "coordinate_frame": "m0609_base_link",
+        "boxes": [
+            _box_entry("Large", (0.0, 0.3), (0.0, 0.2), (0.0, 0.12)),
+            _box_entry("Small", (0.05, 0.15), (0.05, 0.15), (0.12, 0.19)),
+        ],
+    }
+    path = _write_json(tmp_path, data)
+
+    boxes = load_boxes_from_vision_json(path)
+    by_id = {b.id: b for b in boxes}
+
+    assert by_id["Small"].rests_on_id == "Large"
+    assert by_id["Large"].rests_on_id is None
+
+
+def test_load_boxes_does_not_link_boxes_that_only_barely_touch_xy(tmp_path):
+    """
+    두 박스가 같은 높이에 나란히(옆으로만 살짝 겹치거나 거의 안 겹치는 정도로)
+    놓여 있으면 - 같은 물리적 박스가 아니라 서로 다른 두 박스이므로 - rests_on_id로
+    엮이면 안 된다. XY 겹침 비율이 REST_MIN_XY_OVERLAP_RATIO(0.3) 미만이면 부모로
+    보지 않는다는 임계값을 확인한다.
+    """
+    data = {
+        "coordinate_frame": "m0609_base_link",
+        "boxes": [
+            _box_entry("A", (0.0, 0.3), (0.0, 0.2), (0.0, 0.12)),
+            # B는 A와 같은 높이(z 겹침 없음 - 둘 다 바닥)에서 XY도 거의 안 겹침(A의
+            # 오른쪽 끝을 살짝 스치는 정도) - 부모 관계가 아니어야 한다.
+            _box_entry("B", (0.29, 0.5), (0.0, 0.2), (0.0, 0.10)),
+        ],
+    }
+    path = _write_json(tmp_path, data)
+
+    boxes = load_boxes_from_vision_json(path)
+    by_id = {b.id: b for b in boxes}
+
+    assert by_id["A"].rests_on_id is None
+    assert by_id["B"].rests_on_id is None
