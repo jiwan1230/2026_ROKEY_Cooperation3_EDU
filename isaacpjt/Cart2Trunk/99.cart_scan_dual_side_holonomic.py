@@ -605,7 +605,7 @@ _cart_large_dx = (CART_LARGE_SIZE_XY + CART_LARGE_GAP_M) / 2.0  # 각 Large 중�
 # 그대로 노출되어 있어 둘 다 Large1처럼 안정적으로 검출된다. 위치는 안정성/검출
 # 둘 다를 위해 각자의 부모 Large 중심에 그대로 올린다(모든 방향 마진이
 # (0.18-자식폭)/2 이상으로 넉넉함 - flush/타이트한 배치로 되돌아가지 않는다).
-_medium_size = (0.080, 0.085, 0.11)
+_medium_size = (0.085, 0.085, 0.11)
 _small_size = (0.07, 0.08, 0.07)
 CART_STACK_BASE_NAMES = ["Large1", "Large2"]
 _STACK_PARENT = {"Medium": "Large1", "Small": "Large2"}  # 자식이 어느 Large 위에 앉는지
@@ -622,6 +622,12 @@ _CART_STACK_TOP_SPAWN_MARGIN_M = 0.05
 # +X/차량에 가까운 쪽)으로 조금씩 옮긴다. CART_BOX_SPECS 안의 dx는 그대로 두고
 # (박스끼리 상대 배치 유지), 스폰 위치에서만 이 값을 더해 그룹 전체를 평행이동한다.
 CART_BOX_FRONT_SHIFT_M = 0.07
+# [사용자 실측 확인 - 2026-07-27] Large1이 카트 손잡이쪽(-X) 턱에 살짝 걸린다.
+# Large2/Small은 문제 없으니 그대로 두고, Large1과 그 위에 얹힌 Medium(같은 dx를
+# 씀)만 추가로 조금 더 앞(+X, 손잡이 반대/입구 방향)으로 옮긴다 - 그룹 전체를
+# 옮기는 CART_BOX_FRONT_SHIFT_M과는 별개로, 이 두 박스에만 얹어서 더한다.
+CART_LARGE1_EXTRA_FRONT_SHIFT_M = 0.04
+_extra_front_shift_by_name = {"Large1": CART_LARGE1_EXTRA_FRONT_SHIFT_M, "Medium": CART_LARGE1_EXTRA_FRONT_SHIFT_M}
 _cart_box_size_by_name = {name: size for name, size, _off, _m in CART_BOX_SPECS}
 _cart_large_spawn_z = CART_BASKET_FLOOR_Z + CART_BOX_DROP_HEIGHT_ABOVE_FLOOR
 for name, size, (dx, dy), mass_kg in CART_BOX_SPECS:
@@ -639,7 +645,7 @@ for name, size, (dx, dy), mass_kg in CART_BOX_SPECS:
         prim_path=f"/World/Box_{name}",
         name=name.lower(),
         position=np.array([
-            cart_center_xy[0] + dx + CART_BOX_FRONT_SHIFT_M,
+            cart_center_xy[0] + dx + CART_BOX_FRONT_SHIFT_M + _extra_front_shift_by_name.get(name, 0.0),
             cart_center_xy[1] + dy,
             spawn_z,
         ]),

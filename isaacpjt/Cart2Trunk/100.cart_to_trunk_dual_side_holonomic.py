@@ -1023,7 +1023,7 @@ _cart_large_dx = (CART_LARGE_SIZE_XY + CART_LARGE_GAP_M) / 2.0  # 각 Large 중�
 # 가까이)는 그대로 노출되어 있어 둘 다 Large1처럼 안정적으로 검출된다. 위치는
 # 각자의 부모 Large 중심에 그대로 올린다(모든 방향 마진이 넉넉함 - flush/타이트한
 # 배치로 되돌아가지 않는다).
-_medium_size = (0.080, 0.085, 0.11)
+_medium_size = (0.085, 0.085, 0.11)
 _small_size = (0.07, 0.08, 0.07)
 CART_STACK_BASE_NAMES = ["Large1", "Large2"]
 _STACK_PARENT = {"Medium": "Large1", "Small": "Large2"}  # 자식이 어느 Large 위에 앉는지
@@ -1041,6 +1041,12 @@ _CART_STACK_TOP_SPAWN_MARGIN_M = 0.05
 # 두고(Large1/Large2/Medium/Small 서로간 상대 배치 유지), 스폰 위치에서만 이 값을
 # 더해 그룹 전체를 평행이동시킨다.
 CART_BOX_FRONT_SHIFT_M = 0.07
+# [사용자 실측 확인 - 2026-07-27, 99번과 동일] Large1이 카트 손잡이쪽(-X) 턱에
+# 살짝 걸린다. Large2/Small은 문제 없으니 그대로 두고, Large1과 그 위에 얹힌
+# Medium(같은 dx를 씀)만 추가로 조금 더 앞(+X, 손잡이 반대/입구 방향)으로 옮긴다 -
+# 그룹 전체를 옮기는 CART_BOX_FRONT_SHIFT_M과는 별개로, 이 두 박스에만 얹어서 더한다.
+CART_LARGE1_EXTRA_FRONT_SHIFT_M = 0.04
+_extra_front_shift_by_name = {"Large1": CART_LARGE1_EXTRA_FRONT_SHIFT_M, "Medium": CART_LARGE1_EXTRA_FRONT_SHIFT_M}
 _cart_box_size_by_name = {name: size for name, size, _off, _m in CART_BOX_SPECS}
 _cart_large_spawn_z = CART_BASKET_FLOOR_Z + CART_BOX_DROP_HEIGHT_ABOVE_FLOOR
 cart_box_objects = {}  # prim_path -> DynamicCuboid 래퍼(PICK 뒤 test_box로 재사용하기 위해 저장)
@@ -1058,7 +1064,9 @@ for _box_name, _box_size, (_dx, _dy), _mass_kg in CART_BOX_SPECS:
     _box_prim_path = f"/World/Box_{_box_name}"
     cart_box_objects[_box_prim_path] = DynamicCuboid(
         prim_path=_box_prim_path, name=_box_name.lower(),
-        position=np.array([cart_center_xy[0] + _dx + CART_BOX_FRONT_SHIFT_M, cart_center_xy[1] + _dy, _spawn_z]),
+        position=np.array([
+            cart_center_xy[0] + _dx + CART_BOX_FRONT_SHIFT_M + _extra_front_shift_by_name.get(_box_name, 0.0),
+            cart_center_xy[1] + _dy, _spawn_z]),
         scale=np.array(_box_size), color=np.array([0.85, 0.55, 0.15]), mass=_mass_kg,
         physics_material=box_material,
     )
@@ -1216,10 +1224,27 @@ def set_lift_height(h):
     lift_translate_op.Set(Gf.Vec3d(float(chassis_pos[0]), float(chassis_pos[1]), column_base_z + column_len / 2.0))
 
 
+# [사용자 실측 확인 - 2026-07-27] PICK 하강/PLACE 입구 통과/Y축 정렬 구간에서 렉이
+# 심하다는 제보 - 이 세 구간은 전부 스텝 수가 많은 저속 폐루프(drive_until의
+# step_hold(), move_link6_smooth())라 공통점이 있다: 매 스텝 world.step(render=True)
+# 로 "물리 스텝 + 화면 렌더링"을 항상 같이 했다. 물리는 결과/조건 판정에 필요해서
+# 매 스텝 반드시 진행해야 하지만, 렌더링(화면 그리기)은 그렇지 않다 - 화면 갱신
+# 빈도를 줄여도 물리 상태나 조건 충족 타이밍은 전혀 안 바뀐다. 그래서 물리는 계속
+# 매 스텝 진행하되(world.step() 자체는 매번 호출) 렌더링만 RENDER_EVERY_N_STEPS
+# 스텝에 한 번으로 줄여서 렉의 실제 원인(과도한 프레임 그리기)만 줄인다.
+RENDER_EVERY_N_STEPS = 4
+_render_step_counter = {"n": 0}
+
+
+def sim_step():
+    _render_step_counter["n"] += 1
+    world.step(render=(_render_step_counter["n"] % RENDER_EVERY_N_STEPS == 0))
+
+
 def step_hold(n=1):
     for _ in range(n):
         set_lift_height(lift_state["h"])
-        world.step(render=True)
+        sim_step()
 
 
 def move_lift_to(target_h, steps=90):
@@ -1693,7 +1718,7 @@ def move_link6_smooth(target_tip_pos, tolerance=0.004, max_speed=0.01, kp=3.0, m
         if try_grasp or hold_gripper_closed:
             m0609_robot.gripper.close()
         set_lift_height(lift_state["h"])
-        world.step(render=True)
+        sim_step()
     tip_pos = measure_tip_world_pos()
     err = float(np.linalg.norm(tip_pos - target_tip_pos))
     ee_pos, _ = m0609_robot.end_effector.get_world_pose()
