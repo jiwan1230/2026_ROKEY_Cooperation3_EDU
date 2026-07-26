@@ -2,15 +2,17 @@
 routes/scenarios.py
 POST /api/scenarios/<scenario_id>/plan - 산업 현장 시나리오 4종
 (algorism/industry_scenarios/) 미리보기. 각 시나리오 파일에 이미 있는
-데모 트렁크/박스 데이터로 실제 시나리오 알고리즘을 호출해서 배치 결과를
-반환한다. algorism/ 파일은 이 프로젝트에서 수정 금지라 기존 함수를
-import해서 호출만 한다(algorism_bridge.py와 동일한 원칙).
+데모 트렁크/박스 데이터(또는 요청 시 그 시나리오 성격에 맞는 무작위
+박스)로 실제 시나리오 알고리즘을 호출해서 배치 결과를 반환한다.
+algorism/ 파일은 이 프로젝트에서 수정 금지라 기존 함수를 import해서
+호출만 한다(algorism_bridge.py와 동일한 원칙).
 """
+import random
 import sys
 import pathlib
 from importlib import import_module
 
-from flask import Blueprint, jsonify
+from flask import Blueprint, jsonify, request
 
 from routes.plan import ApiError
 
@@ -39,6 +41,69 @@ def _lifo_delivery_order(boxes):
     return [b.id for b in ordered]
 
 
+def _round(v):
+    return round(v, 2)
+
+
+def _delivery_truck_boxes(randomize=False):
+    if not randomize:
+        return [
+            Box("정류장1_박스", 0.3, 0.25, 0.2, delivery_stop=1),
+            Box("정류장2_박스", 0.3, 0.25, 0.2, delivery_stop=2),
+            Box("정류장3_박스", 0.3, 0.25, 0.2, delivery_stop=3),
+            Box("정류장4_박스", 0.3, 0.25, 0.2, delivery_stop=4),
+        ]
+    return [
+        Box(f"정류장{i}_박스", _round(random.uniform(0.2, 0.35)), _round(random.uniform(0.18, 0.3)),
+            _round(random.uniform(0.15, 0.25)), delivery_stop=i)
+        for i in range(1, random.randint(3, 6) + 1)
+    ]
+
+
+def _warehouse_boxes(randomize=False):
+    if not randomize:
+        return (
+            [Box(f"소{i}", 0.1, 0.1, 0.1) for i in range(6)]
+            + [Box(f"대{i}", 0.3, 0.2, 0.2) for i in range(2)]
+        )
+    return (
+        [Box(f"소{i}", _round(random.uniform(0.08, 0.14)), _round(random.uniform(0.08, 0.14)),
+             _round(random.uniform(0.08, 0.14))) for i in range(random.randint(4, 8))]
+        + [Box(f"대{i}", _round(random.uniform(0.25, 0.35)), _round(random.uniform(0.18, 0.25)),
+               _round(random.uniform(0.18, 0.25))) for i in range(random.randint(1, 3))]
+    )
+
+
+def _cold_chain_boxes(randomize=False):
+    if not randomize:
+        return [Box(f"냉동박스{i}", 0.3, 0.25, 0.2) for i in range(3)]
+    return [
+        Box(f"냉동박스{i}", _round(random.uniform(0.2, 0.35)), _round(random.uniform(0.2, 0.3)),
+            _round(random.uniform(0.15, 0.25)))
+        for i in range(random.randint(2, 5))
+    ]
+
+
+def _hazmat_boxes(randomize=False):
+    if not randomize:
+        return [
+            Box("산화제_드럼1", 0.3, 0.3, 0.3, hazard_class="oxidizer"),
+            Box("인화물_드럼1", 0.3, 0.3, 0.3, hazard_class="flammable"),
+            Box("일반박스1", 0.3, 0.3, 0.3),
+        ]
+    boxes = []
+    for i in range(random.randint(1, 2)):
+        boxes.append(Box(f"산화제_드럼{i + 1}", _round(random.uniform(0.25, 0.35)), _round(random.uniform(0.25, 0.35)),
+                          _round(random.uniform(0.25, 0.35)), hazard_class="oxidizer"))
+    for i in range(random.randint(1, 2)):
+        boxes.append(Box(f"인화물_드럼{i + 1}", _round(random.uniform(0.25, 0.35)), _round(random.uniform(0.25, 0.35)),
+                          _round(random.uniform(0.25, 0.35)), hazard_class="flammable"))
+    for i in range(random.randint(0, 3)):
+        boxes.append(Box(f"일반박스{i + 1}", _round(random.uniform(0.2, 0.35)), _round(random.uniform(0.2, 0.35)),
+                          _round(random.uniform(0.2, 0.35))))
+    return boxes
+
+
 scenarios_bp = Blueprint("scenarios", __name__)
 
 # 각 시나리오의 "우선순위"(ControlPanel의 입구↔깊은위치/공간활용↔안정성/
@@ -49,12 +114,7 @@ SCENARIO_DEFS = {
     "delivery_truck": {
         "label": "택배 배송 트럭",
         "trunk_kwargs": {"width": 1.2, "depth": 0.8, "height": 0.6},
-        "make_boxes": lambda: [
-            Box("정류장1_박스", 0.3, 0.25, 0.2, delivery_stop=1),
-            Box("정류장2_박스", 0.3, 0.25, 0.2, delivery_stop=2),
-            Box("정류장3_박스", 0.3, 0.25, 0.2, delivery_stop=3),
-            Box("정류장4_박스", 0.3, 0.25, 0.2, delivery_stop=4),
-        ],
+        "make_boxes": _delivery_truck_boxes,
         # 나중 배송지 박스부터 고정 순서로 실어서 LIFO(문 열자마자 첫
         # 배송지가 바로 손에 닿음)를 재현. entrance_preference는 기본값
         # (1.0=깊은 자리 우선)으로 충분 - fixed_order 자체가 "먼저 놓이는
@@ -66,10 +126,7 @@ SCENARIO_DEFS = {
     "warehouse": {
         "label": "창고/물류센터",
         "trunk_kwargs": {"width": 0.6, "depth": 0.4, "height": 0.45},
-        "make_boxes": lambda: (
-            [Box(f"소{i}", 0.1, 0.1, 0.1) for i in range(6)]
-            + [Box(f"대{i}", 0.3, 0.2, 0.2) for i in range(2)]
-        ),
+        "make_boxes": _warehouse_boxes,
         # 공간활용 최대화 - count_first 모드(개수 우선) + 마진을 기본(2cm)보다
         # 타이트하게(1cm) 줘서 최대한 빽빽하게 채운다.
         "generate": lambda boxes, trunk: generate_loading_plan(boxes, trunk, mode="count_first", margin=0.01),
@@ -77,7 +134,7 @@ SCENARIO_DEFS = {
     "cold_chain": {
         "label": "냉동/냉장 물류",
         "trunk_kwargs": {"width": 1.2, "depth": 0.6, "height": 0.5},
-        "make_boxes": lambda: [Box(f"냉동박스{i}", 0.3, 0.25, 0.2) for i in range(3)],
+        "make_boxes": _cold_chain_boxes,
         # 냉기 순환 - 마진을 기본(2cm)보다 훨씬 크게(5cm, 팀이 실측 검증한
         # 냉동/냉장 컨테이너 기준값) 줘서 박스 사이 공기 흐름을 확보한다.
         "generate": lambda boxes, trunk: generate_loading_plan(boxes, trunk, margin=0.05),
@@ -85,11 +142,7 @@ SCENARIO_DEFS = {
     "hazmat": {
         "label": "위험물 창고",
         "trunk_kwargs": {"width": 1.5, "depth": 1.0, "height": 0.5},
-        "make_boxes": lambda: [
-            Box("산화제_드럼1", 0.3, 0.3, 0.3, hazard_class="oxidizer"),
-            Box("인화물_드럼1", 0.3, 0.3, 0.3, hazard_class="flammable"),
-            Box("일반박스1", 0.3, 0.3, 0.3),
-        ],
+        "make_boxes": _hazmat_boxes,
         "generate": _generate_hazmat,
     },
 }
@@ -104,8 +157,14 @@ def compute_scenario_plan(scenario_id):
             "지원하는 시나리오 id(delivery_truck/warehouse/cold_chain/hazmat)인지 확인하세요.",
         )
 
+    # randomize=true면 고정 데모 박스 대신 그 시나리오 성격에 맞는 범위 안에서
+    # 무작위 박스 세트를 새로 만든다 - "무작위로 다시 생성" 버튼용. 트렁크/
+    # 알고리즘 파라미터는 시나리오 정체성이라 그대로 유지하고 박스만 바뀐다.
+    body = request.get_json(silent=True) or {}
+    randomize = bool(body.get("randomize"))
+
     trunk = Trunk(**scenario_def["trunk_kwargs"])
-    boxes = scenario_def["make_boxes"]()
+    boxes = scenario_def["make_boxes"](randomize=randomize)
     plans, unloadable = scenario_def["generate"](boxes, trunk)
 
     total = len(boxes)
