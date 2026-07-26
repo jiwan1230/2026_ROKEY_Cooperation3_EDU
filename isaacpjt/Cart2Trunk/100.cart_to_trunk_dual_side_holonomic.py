@@ -994,25 +994,56 @@ box_material = PhysicsMaterial(
 # 물리 박스가 없어 그 박스는 조용히 건너뛰어진다.
 # 오프셋 축 매핑은 99번과 동일 - 88번은 dx=폭(옛 X)/dy=길이(옛 Y)였는데, 100번(회전
 # 후)은 dx=길이(X)/dy=폭(Y)이므로 88번의 (dx, dy)를 (dy, dx)로 맞바꿔서 옮긴다.
-CART_STACK_BASE_NAME = "Large"
+# 사용자 요청(Large 2개+Medium 1개+Small 1개로 확장, 기존 코드 형식 유지) - 기존
+# CART_STACK_BASE_NAME(문자열 하나)/CART_BOX_SPECS(4튜플: name, size, 카트 중심
+# 기준 offset, mass) 형식을 그대로 두고, 바닥 이름만 리스트(CART_STACK_BASE_NAMES)
+# 로 늘렸다. Medium/Small이 이제 서로 다른 Large 위에 얹히므로 "이 자식이 어느
+# Large 위에 앉는지"만 별도의 작은 매핑(_STACK_PARENT)으로 추가했다 - 그 외
+# CART_BOX_SPECS의 offset은 기존과 동일하게 전부 "카트 중심 기준 절대 offset"
+# 이다(Medium/Small의 오프셋도 Large1/Large2의 위치를 미리 더해 카트 중심 기준
+# 값으로 환산해뒀음).
+# Large 사이 간격(0.06m)은 88번에서 실측 확인된 교훈이다 - 형제 박스끼리 간격이
+# 너무 좁으면(실측: 2cm) 착지 충격에 서로 부딪혀 밀려날 수 있었다(88번 5박스
+# 확장 실험, CART2TRUNK_MARGIN_GROWTH_M>=0.03에서 재현) - Large는 훨씬 크고
+# 무거워 그 정도로 불안정하진 않겠지만, 안전 마진으로 넉넉히 6cm를 둔다.
+# 사용자 요청(트렁크 적재 제약) - 트렁크에 들어가려면 각 박스의 모든 변이 0.21m
+# 미만이어야 한다. 기존 Large(0.30x0.22)는 길이(0.30)/폭(0.22) 둘 다 이 기준을
+# 넘어서 0.20x0.20으로 줄인다. Medium/Small은 이미 전부 0.21 미만이었지만(사용자
+# 추가 요청) Large가 줄어든 비율(x축 2/3, y축 약 91%)에 맞춰 크기와 offset을
+# 동일한 비율로 같이 축소한다 - 절대 좌표/크기를 다시 고르지 않고 기존 검증된
+# 배치의 상대 비율을 유지해야, 이미 물리적으로 안정적이라고 확인된 "Large 위
+# 어디에 얼마나 큰 자식이 앉는가" 형태가 그대로 보존된다.
+_LARGE_SIZE_OLD = (0.30, 0.22)
+LARGE_SIZE = (0.19, 0.19, 0.12)
+_large_scale_x = LARGE_SIZE[0] / _LARGE_SIZE_OLD[0]
+_large_scale_y = LARGE_SIZE[1] / _LARGE_SIZE_OLD[1]
+MEDIUM_SIZE = (0.13 * _large_scale_x, 0.10 * _large_scale_y, 0.11)
+SMALL_SIZE = (0.11 * _large_scale_x, 0.09 * _large_scale_y, 0.07)
+
+CART_LARGE_GAP_M = 0.06
+_cart_large_dx = (LARGE_SIZE[0] + CART_LARGE_GAP_M) / 2.0  # 각 Large 중심이 카트 중심에서 떨어질 거리
+CART_STACK_BASE_NAMES = ["Large1", "Large2"]
+_STACK_PARENT = {"Medium": "Large1", "Small": "Large2"}  # 자식이 어느 Large 위에 앉는지
 CART_BOX_SPECS = [
-    # (name, size(x,y,z), Large 중심 기준 offset(dx=길이축, dy=폭축), mass_kg)
-    ("Large", (0.19, 0.19, 0.12), (0.0, 0.0), 1.2),
-    ("Medium", (0.085, 0.10, 0.11), (-0.0525, 0.0), 0.6),
-    ("Small", (0.085, 0.09, 0.07), (0.0425, 0.03), 0.3),
+    # (name, size(x,y,z), 카트 중심 기준 offset(dx=길이축, dy=폭축), mass_kg)
+    ("Large1", LARGE_SIZE, (-_cart_large_dx, 0.0), 1.2),
+    ("Large2", LARGE_SIZE, (_cart_large_dx, 0.0), 1.2),
+    ("Medium", MEDIUM_SIZE, (-_cart_large_dx + 0.045 * _large_scale_x, -0.075 * _large_scale_y), 0.6),
+    ("Small", SMALL_SIZE, (_cart_large_dx + 0.045 * _large_scale_x, 0.085 * _large_scale_y), 0.3),
 ]
 CART_BOX_DROP_HEIGHT_ABOVE_FLOOR = 0.10
 _CART_STACK_TOP_SPAWN_MARGIN_M = 0.05
-_cart_large_size = next(size for name, size, _off, _m in CART_BOX_SPECS if name == CART_STACK_BASE_NAME)
 _cart_large_spawn_z = CART_BASKET_FLOOR_Z + CART_BOX_DROP_HEIGHT_ABOVE_FLOOR
+_cart_box_size_by_name = {name: size for name, size, _off, _m in CART_BOX_SPECS}
 cart_box_objects = {}  # prim_path -> DynamicCuboid 래퍼(PICK 뒤 test_box로 재사용하기 위해 저장)
 for _box_name, _box_size, (_dx, _dy), _mass_kg in CART_BOX_SPECS:
-    if _box_name == CART_STACK_BASE_NAME:
+    if _box_name in CART_STACK_BASE_NAMES:
         _spawn_z = _cart_large_spawn_z
     else:
+        _parent_size = _cart_box_size_by_name[_STACK_PARENT[_box_name]]
         _spawn_z = (
             _cart_large_spawn_z
-            + _cart_large_size[2] / 2.0
+            + _parent_size[2] / 2.0
             + _box_size[2] / 2.0
             + _CART_STACK_TOP_SPAWN_MARGIN_M
         )
@@ -1024,7 +1055,7 @@ for _box_name, _box_size, (_dx, _dy), _mass_kg in CART_BOX_SPECS:
         physics_material=box_material,
     )
 print(f"[박스 배치] 카트 안에 적층 구조 {len(CART_BOX_SPECS)}개 낙하 예정 "
-      f"(바닥={CART_STACK_BASE_NAME}, 그 위에 Medium+Small 나란히)", flush=True)
+      f"(바닥=Large1/Large2, Large1 위에 Medium, Large2 위에 Small)", flush=True)
 # prim_path -> (sx, sy, sz) 스폰 시점의 진짜 크기(91번과 동일 이유 - bbox_of()로 매번 다시
 # 재면 박스가 기울어졌을 때 신뢰할 수 없다).
 BOX_KNOWN_SIZE = {f"/World/Box_{name}": size for name, size, _off, _m in CART_BOX_SPECS}
