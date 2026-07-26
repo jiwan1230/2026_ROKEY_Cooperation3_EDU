@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { scenarioBoxColor, scenarioTrunkColor, SCENARIOS } from "./scenarioTheme.js";
+import { scenarioBoxColor, scenarioParams, scenarioTrunkColor, SCENARIOS } from "./scenarioTheme.js";
+import { DEFAULT_STRATEGY_PARAMS } from "../state/plannerReducer.js";
 
 describe("SCENARIOS", () => {
   it("4개의 시나리오 id/label을 갖는다", () => {
@@ -30,5 +31,24 @@ describe("scenarioBoxColor", () => {
     expect(scenarioBoxColor("delivery_truck", "정류장1_박스")).toBe("#5A6472");
     expect(scenarioBoxColor("delivery_truck", "정류장4_박스")).toBe("#5A6472");
     expect(scenarioBoxColor("cold_chain", "냉동박스0")).toBe("#56CCF2");
+  });
+});
+
+describe("scenarioParams", () => {
+  it("delivery_truck은 fixedOrder만 켜고 나머지는 기본값 그대로다", () => {
+    expect(scenarioParams("delivery_truck")).toEqual({ ...DEFAULT_STRATEGY_PARAMS, fixedOrder: true });
+  });
+
+  it("warehouse는 count_first 모드 + 마진 1cm다", () => {
+    expect(scenarioParams("warehouse")).toEqual({ ...DEFAULT_STRATEGY_PARAMS, mode: "count_first", margin: 0.01 });
+  });
+
+  it("cold_chain은 마진 5cm만 다르고 나머지는 기본값이다", () => {
+    expect(scenarioParams("cold_chain")).toEqual({ ...DEFAULT_STRATEGY_PARAMS, margin: 0.05 });
+  });
+
+  it("hazmat과 알 수 없는 id는 기본값 그대로다", () => {
+    expect(scenarioParams("hazmat")).toEqual(DEFAULT_STRATEGY_PARAMS);
+    expect(scenarioParams("nonexistent")).toEqual(DEFAULT_STRATEGY_PARAMS);
   });
 });

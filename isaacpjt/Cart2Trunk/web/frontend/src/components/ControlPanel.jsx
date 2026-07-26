@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { usePlannerDispatch, usePlannerState } from "../state/PlannerContext.jsx";
 import { postApprove, postSend } from "../api/client.js";
+import { SCENARIOS, scenarioParams } from "./scenarioTheme.js";
 import VisionDataLoader from "./VisionDataLoader.jsx";
 import styles from "./ControlPanel.module.css";
 
@@ -31,12 +32,18 @@ const PREFERENCE_FIELDS = [
   { key: "heightPreference", label: "바닥부터 채우기 강도", min: 0, max: 2, step: 0.1 },
 ];
 
-export default function ControlPanel() {
+export default function ControlPanel({ activeScenarioId }) {
   const state = usePlannerState();
   const dispatch = usePlannerDispatch();
   // 무작위 생성 개수는 계산에 쓰이는 파라미터가 아니라(생성 시점에만 쓰는
   // 입력값) 전역 리듀서가 아닌 이 컴포넌트 로컬 상태로 둔다.
   const [randomBoxCount, setRandomBoxCount] = useState(6);
+
+  // 시나리오 미리보기 중엔 실시간 계획 파라미터(state.params) 대신 그
+  // 시나리오가 실제로 쓰는 고정값을 보여주고 전부 잠근다 - "우선순위
+  // 슬라이더가 그대로라 파라미터가 적용된 게 안 보인다"는 피드백 반영.
+  const activeScenario = SCENARIOS.find((s) => s.id === activeScenarioId);
+  const params = activeScenario ? scenarioParams(activeScenarioId) : state.params;
 
   const setParam = (key, value) => dispatch({ type: "SET_PARAM", payload: { key, value } });
 
@@ -86,9 +93,18 @@ export default function ControlPanel() {
   };
 
   const locked = state.planState === "APPROVED";
+  // 전략 파라미터(모드/마진/우선순위/체크박스)만 시나리오 미리보기 중엔
+  // 추가로 잠근다 - 트렁크/박스 목록 선택은 실시간 계획 전용이라 시나리오
+  // 미리보기와 무관하게 계속 조작 가능해야 한다.
+  const paramsLocked = locked || Boolean(activeScenario);
 
   return (
     <div className={styles.panel}>
+      {activeScenario && (
+        <div className={styles.scenarioBanner} data-testid="scenario-banner">
+          🔎 지금 <strong>{activeScenario.label}</strong> 시나리오를 보고 있어서, 아래 모드/마진/우선순위는 그 시나리오 전용 고정값이에요(수정하려면 3D 뷰어에서 "실시간 계획으로 돌아가기"를 누르세요).
+        </div>
+      )}
       <section className={styles.section}>
         <label className={styles.label}>트렁크 스캔 파일</label>
         <select
@@ -118,8 +134,8 @@ export default function ControlPanel() {
             <button
               key={value}
               type="button"
-              disabled={locked}
-              className={state.params.mode === value ? styles.segmentActive : styles.segment}
+              disabled={paramsLocked}
+              className={params.mode === value ? styles.segmentActive : styles.segment}
               onClick={() => setParam("mode", value)}
             >
               {text}
@@ -137,8 +153,8 @@ export default function ControlPanel() {
               type="text"
               inputMode="decimal"
               className={styles.input}
-              disabled={locked}
-              value={state.params[key]}
+              disabled={paramsLocked}
+              value={params[key]}
               onChange={(e) => setParam(key, e.target.value)}
             />
           </div>
@@ -149,12 +165,12 @@ export default function ControlPanel() {
         <label className={styles.label}>우선순위</label>
         {PREFERENCE_FIELDS.map(({ key, label, min, max, step }) => (
           <div key={key} className={styles.fieldRow}>
-            <span className={styles.fieldLabel}>{label} ({Number(state.params[key]).toFixed(1)})</span>
+            <span className={styles.fieldLabel}>{label} ({Number(params[key]).toFixed(1)})</span>
             <input
               type="range"
               min={min} max={max} step={step}
-              disabled={locked}
-              value={state.params[key]}
+              disabled={paramsLocked}
+              value={params[key]}
               onChange={(e) => setParam(key, Number(e.target.value))}
             />
           </div>
@@ -163,17 +179,17 @@ export default function ControlPanel() {
 
       <section className={styles.section}>
         <label className={styles.toggleRow}>
-          <input type="checkbox" disabled={locked} checked={state.params.allowStacking}
+          <input type="checkbox" disabled={paramsLocked} checked={params.allowStacking}
                  onChange={(e) => setParam("allowStacking", e.target.checked)} />
           2층 이상 쌓기 허용
         </label>
         <label className={styles.toggleRow}>
-          <input type="checkbox" disabled={locked} checked={state.params.allowRotation}
+          <input type="checkbox" disabled={paramsLocked} checked={params.allowRotation}
                  onChange={(e) => setParam("allowRotation", e.target.checked)} />
           90도 회전 허용
         </label>
         <label className={styles.toggleRow}>
-          <input type="checkbox" disabled={locked} checked={state.params.fixedOrder}
+          <input type="checkbox" disabled={paramsLocked} checked={params.fixedOrder}
                  onChange={(e) => setParam("fixedOrder", e.target.checked)} />
           적재 순서 고정 (박스 목록 순서 그대로)
         </label>

@@ -44,4 +44,19 @@ describe("ControlPanel", () => {
     const boxes = JSON.parse(editor.value);
     expect(boxes).toHaveLength(3);
   });
+
+  it("시나리오가 활성화되면 그 시나리오의 실제 파라미터(개수 우선 모드 + 마진 1cm)를 보여주고 잠근다", () => {
+    render(<PlannerProvider><ControlPanel activeScenarioId="warehouse" /></PlannerProvider>);
+
+    expect(screen.getByTestId("scenario-banner").textContent).toContain("창고/물류센터");
+    expect(screen.getByDisplayValue("0.01")).toBeInTheDocument(); // 박스 간격 마진
+    expect(screen.getByText("큰 것 우선")).toBeDisabled();
+    expect(screen.getByText("개수 우선")).toBeDisabled();
+  });
+
+  it("시나리오가 활성화 안 됐으면 배너 없이 실시간 계획 파라미터를 그대로 조작할 수 있다", () => {
+    render(<PlannerProvider><ControlPanel /></PlannerProvider>);
+    expect(screen.queryByTestId("scenario-banner")).not.toBeInTheDocument();
+    expect(screen.getByText("개수 우선")).not.toBeDisabled();
+  });
 });

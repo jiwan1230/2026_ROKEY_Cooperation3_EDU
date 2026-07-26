@@ -3,6 +3,7 @@
 // Scene3DViewer.jsx(<Canvas> 포함, jsdom 미검증)와 분리해서 여기서 직접
 // 테스트한다. id는 백엔드 routes/scenarios.py의 SCENARIO_DEFS 키와 정확히
 // 일치해야 한다.
+import { DEFAULT_STRATEGY_PARAMS } from "../state/plannerReducer.js";
 // description은 SummaryCard의 시나리오 안내 영역에 그대로 표시된다 - 문구
 // 자체를 web/backend/routes/scenarios.py의 SCENARIO_DEFS 파라미터 선택과
 // 짝 맞춰서 써둔다(값이 바뀌면 여기 설명도 같이 바꿔야 함).
@@ -48,4 +49,27 @@ export function scenarioBoxColor(scenarioId, boxId) {
   if (scenarioId === "cold_chain") return "#56CCF2";
   if (scenarioId === "delivery_truck") return "#5A6472";
   return "#4A90D9";
+}
+
+// ControlPanel의 우선순위 슬라이더/마진/모드가 시나리오 미리보기 중에도
+// 실시간 계획 값(state.params)만 계속 보여줘서 "파라미터가 진짜 적용된
+// 건지 안 보인다"는 피드백을 받았다 - web/backend/routes/scenarios.py의
+// SCENARIO_DEFS가 실제로 쓰는 값과 정확히 같은 값을 여기 적어두고,
+// ControlPanel이 시나리오 활성화 중엔 state.params 대신 이 값을 보여주며
+// 잠그게 한다(값이 바뀌면 여기도 같이 바꿔야 함 - 백엔드가 유일한 소스,
+// 여긴 화면 표시용 사본).
+const SCENARIO_PARAM_OVERRIDES = {
+  // LIFO는 fixed_order로 구현 - "적재 순서 고정" 체크박스가 실제로 켜진
+  // 상태를 반영한다. 나머지(우선순위/마진)는 기본값 그대로.
+  delivery_truck: { fixedOrder: true },
+  // 개수 우선 모드 + 마진 1cm(기본 2cm보다 타이트).
+  warehouse: { mode: "count_first", margin: 0.01 },
+  // 마진만 5cm(기본 2cm)로 확대, 나머지는 기본값 그대로.
+  cold_chain: { margin: 0.05 },
+  // 전용 안전거리 함수만 추가로 쓰고 순서/마진/모드는 기본값 그대로.
+  hazmat: {},
+};
+
+export function scenarioParams(scenarioId) {
+  return { ...DEFAULT_STRATEGY_PARAMS, ...(SCENARIO_PARAM_OVERRIDES[scenarioId] || {}) };
 }

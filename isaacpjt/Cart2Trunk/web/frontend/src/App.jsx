@@ -22,7 +22,7 @@ function SimulatorBody() {
 
   return (
     <div className={styles.body}>
-      <ControlPanel />
+      <ControlPanel activeScenarioId={scenario.activeScenarioId} />
       <div className={styles.resultArea}>
         {/* 사용자 손그림 피드백 - 요약 카드("화면 1")는 좁게, 3D 뷰어("메인
             화면 - 2")는 넓게 나란히 배치한다. 예전엔 세로로 쌓아서 요약
