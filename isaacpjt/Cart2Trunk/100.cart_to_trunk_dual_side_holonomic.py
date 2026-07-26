@@ -1013,13 +1013,26 @@ box_material = PhysicsMaterial(
 CART_LARGE_SIZE_XY = 0.18  # Large의 x/y 한 변 - 아래 간격 계산과 CART_BOX_SPECS가 항상 같은 값을 보게 여기서 한 번만 정의
 CART_LARGE_GAP_M = 0.15
 _cart_large_dx = (CART_LARGE_SIZE_XY + CART_LARGE_GAP_M) / 2.0  # 각 Large 중심이 카트 중심에서 떨어질 거리
+# [실측으로 확인된 버그 - 2026-07-27, 99번과 동일] Medium/Small을 둘 다 Large2 위에
+# 올렸더니(마진을 아무리 균등하게 나눠도) 둘이 Large2 폭의 ~90%를 차지해서 노출된
+# 윗면이 얇은 테두리 조각들로만 남았고, RANSAC이 그 조각을 매번 다른 위치에서
+# 우연히만 잡아서(10회/1회/1회 관측) 사각형 하나로 안정적으로 못 잡히고 전부
+# 필터링됐다(Large1은 반대로 완전히 노출돼 있어서 151/150회 전부 검출됨 - 노출
+# 면적 문제임을 확인). 그래서 Medium은 Large1 위에, Small은 Large2 위에 하나씩만
+# 올린다 - 이러면 각 Large가 자식 하나(0.08~0.085m)만 갖고 나머지(0.18m 중 절반
+# 가까이)는 그대로 노출되어 있어 둘 다 Large1처럼 안정적으로 검출된다. 위치는
+# 각자의 부모 Large 중심에 그대로 올린다(모든 방향 마진이 넉넉함 - flush/타이트한
+# 배치로 되돌아가지 않는다).
+_medium_size = (0.080, 0.085, 0.11)
+_small_size = (0.07, 0.08, 0.07)
 CART_STACK_BASE_NAMES = ["Large1", "Large2"]
+_STACK_PARENT = {"Medium": "Large1", "Small": "Large2"}  # 자식이 어느 Large 위에 앉는지
 CART_BOX_SPECS = [
     # (name, size(x,y,z), 카트 중심 기준 offset(dx=길이축, dy=폭축), mass_kg)
     ("Large1", (CART_LARGE_SIZE_XY, CART_LARGE_SIZE_XY, 0.12), (-_cart_large_dx, 0.0), 1.2),
     ("Large2", (CART_LARGE_SIZE_XY, CART_LARGE_SIZE_XY, 0.12), (_cart_large_dx, 0.0), 1.2),
-    # ("Medium", (0.085, 0.10, 0.11), (-_cart_large_dx - 0.0525, 0.0), 0.6),
-    # ("Small", (0.085, 0.09, 0.07), (-_cart_large_dx + 0.0425, 0.03), 0.3),
+    ("Medium", _medium_size, (-_cart_large_dx, 0.0), 0.6),  # Large1 중심에 그대로(centered)
+    ("Small", _small_size, (_cart_large_dx, 0.0), 0.3),  # Large2 중심에 그대로(centered)
 ]
 CART_BOX_DROP_HEIGHT_ABOVE_FLOOR = 0.07
 _CART_STACK_TOP_SPAWN_MARGIN_M = 0.05
@@ -1028,16 +1041,17 @@ _CART_STACK_TOP_SPAWN_MARGIN_M = 0.05
 # 두고(Large1/Large2/Medium/Small 서로간 상대 배치 유지), 스폰 위치에서만 이 값을
 # 더해 그룹 전체를 평행이동시킨다.
 CART_BOX_FRONT_SHIFT_M = 0.07
-_cart_large1_size = next(size for name, size, _off, _m in CART_BOX_SPECS if name == "Large1")
+_cart_box_size_by_name = {name: size for name, size, _off, _m in CART_BOX_SPECS}
 _cart_large_spawn_z = CART_BASKET_FLOOR_Z + CART_BOX_DROP_HEIGHT_ABOVE_FLOOR
 cart_box_objects = {}  # prim_path -> DynamicCuboid 래퍼(PICK 뒤 test_box로 재사용하기 위해 저장)
 for _box_name, _box_size, (_dx, _dy), _mass_kg in CART_BOX_SPECS:
     if _box_name in CART_STACK_BASE_NAMES:
         _spawn_z = _cart_large_spawn_z
     else:
+        _parent_size = _cart_box_size_by_name[_STACK_PARENT[_box_name]]
         _spawn_z = (
             _cart_large_spawn_z
-            + _cart_large1_size[2] / 2.0
+            + _parent_size[2] / 2.0
             + _box_size[2] / 2.0
             + _CART_STACK_TOP_SPAWN_MARGIN_M
         )
@@ -1049,7 +1063,7 @@ for _box_name, _box_size, (_dx, _dy), _mass_kg in CART_BOX_SPECS:
         physics_material=box_material,
     )
 print(f"[박스 배치] 카트 안에 적층 구조 {len(CART_BOX_SPECS)}개 낙하 예정 "
-      f"(바닥=Large1/Large2, Large1 위에 Medium+Small 나란히, Large2는 단독)", flush=True)
+      f"(바닥=Large1/Large2, Large1 위에 Medium, Large2 위에 Small)", flush=True)
 # prim_path -> (sx, sy, sz) 스폰 시점의 진짜 크기(91번과 동일 이유 - bbox_of()로 매번 다시
 # 재면 박스가 기울어졌을 때 신뢰할 수 없다).
 BOX_KNOWN_SIZE = {f"/World/Box_{name}": size for name, size, _off, _m in CART_BOX_SPECS}
@@ -2295,6 +2309,22 @@ for _box_num, (picked_prim_path, picked_placement) in enumerate(pick_order):
     hover_target = np.array([scan_top_x, scan_top_y, hover_z])
     print(f"\n===== PICK 시작 {picked_prim_path} (스캔 박스상단={np.round(scan_box_top[picked_prim_path], 3)}) =====",
           flush=True)
+
+    # [진단 - PICK 흡착 실패 원인 조사] scan_box_top은 99번 스캔 세션에서 base_to_
+    # camera_transform.json으로 재투영한 "스캔 당시" 위치다. 100번은 카트/박스를
+    # CART_BOX_SPECS로 이 세션에서 새로 떨어뜨리므로, 물리 낙하 결과(특히 Medium이
+    # Large1 위에 새로 얹히게 된 뒤)가 스캔 시점과 미세하게 달라질 수 있다 - 그
+    # 차이가 GRASP_STANDOFF/DESCENT_OVERTRAVEL 여유(각각 0.01m/0.06m)보다 크면
+    # 흡착 시도가 박스 표면을 완전히 놓치거나 잘못된 위치에서 접촉한다. 흡착 실패
+    # 시 바로 확인할 수 있도록, 흡착 시도 직전에 박스의 "지금 이 시뮬레이션의" 실제
+    # world 위치/윗면 Z를 재서 스캔값과 함께 찍는다.
+    _live_box_pos, _ = cart_box_objects[picked_prim_path].get_world_pose()
+    _live_box_top_z = float(_live_box_pos[2]) + float(BOX_KNOWN_SIZE[picked_prim_path][2]) / 2.0
+    _pos_delta = np.array([scan_top_x, scan_top_y, scan_top_z]) - np.array(
+        [_live_box_pos[0], _live_box_pos[1], _live_box_top_z])
+    print(f"[진단 스캔-실측 위치차] 실측 박스중심={np.round(_live_box_pos, 3)} 실측윗면Z={_live_box_top_z:.3f} "
+          f"스캔값과의 차이(XYZ)={np.round(_pos_delta, 3)} (|Z차이|={abs(_pos_delta[2]):.3f}m, "
+          f"GRASP_STANDOFF+DESCENT_OVERTRAVEL 여유={GRASP_STANDOFF + DESCENT_OVERTRAVEL:.3f}m)", flush=True)
 
     move_link6_smooth(hover_target, label="박스 위 호버")
 
