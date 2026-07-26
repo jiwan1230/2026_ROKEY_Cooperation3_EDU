@@ -997,9 +997,9 @@ box_material = PhysicsMaterial(
 CART_STACK_BASE_NAME = "Large"
 CART_BOX_SPECS = [
     # (name, size(x,y,z), Large 중심 기준 offset(dx=길이축, dy=폭축), mass_kg)
-    ("Large", (0.20, 0.20, 0.12), (0.0, 0.0), 1.2),
-    ("Medium", (0.085, 0.10, 0.11), (-0.0525, 0.0), 0.6),
-    ("Small", (0.085, 0.09, 0.07), (0.0425, 0.0), 0.3),
+    ("Large", (0.19, 0.19, 0.12), (0.0, 0.0), 1.2),
+    # ("Medium", (0.085, 0.10, 0.11), (-0.0525, 0.0), 0.6),
+    # ("Small", (0.085, 0.09, 0.07), (0.0425, 0.03), 0.3),
 ]
 CART_BOX_DROP_HEIGHT_ABOVE_FLOOR = 0.10
 _CART_STACK_TOP_SPAWN_MARGIN_M = 0.05
@@ -2264,6 +2264,24 @@ for _box_num, (picked_prim_path, picked_placement) in enumerate(pick_order):
     picked_grasped = bool(m0609_robot.gripper.is_closed())
     if not picked_grasped:
         pause_for_inspection(f"[중단] PICK 실패 - {picked_prim_path} 흡착이 안 됐습니다.")
+
+    # [진단 - 2번째 박스 Y축 정렬 붕괴 조사, 사용자 지적] DOWN_QUAT=euler([0,pi,0])는
+    # Y축 180도 회전만 지정하고 Z축(그리퍼 자기축 회전=joint_6과 직결)은 전혀 구속하지
+    # 않는다 - "아래를 본다"는 조건은 만족해도 "어느 방향으로 돌아서 아래를 보는지"는
+    # RMPflow가 시작 시드(=_pick_fold, solution space별로 다름)에 따라 알아서 정한다.
+    # solution space 1/2가 이 남는 자유도(joint_6)를 다르게 수렴시키면, 흡착 FixedJoint가
+    # "부착 순간의 상대 회전을 그대로 고정"하므로 박스가 매번 다른 각도로 붙들려서 이후
+    # Y축 정렬이 흔들릴 수 있다(사용자 가설) - 정확한 오프셋을 추측 대신 실측으로 확인한다.
+    if "joint_6" in m0609_robot.dof_names:
+        _diag_joint6_rad = float(m0609_robot.get_joint_positions()[m0609_robot.dof_names.index("joint_6")])
+    else:
+        _diag_joint6_rad = float("nan")
+    _diag_box_pos, _diag_box_quat = cart_box_objects[picked_prim_path].get_world_pose()
+    _diag_box_yaw_deg = float(np.degrees(quat_to_euler_angles(np.asarray(_diag_box_quat, dtype=float))[2]))
+    print(f"[진단 PICK 흡착 자세] solution_space={'2(반전)' if _need_space2 else '1(표준)'} "
+          f"joint_6={np.degrees(_diag_joint6_rad):.1f}deg({_diag_joint6_rad:.4f}rad) "
+          f"박스yaw={_diag_box_yaw_deg:.1f}deg 박스pos={np.round(np.asarray(_diag_box_pos, dtype=float), 3)}",
+          flush=True)
 
     # 91번과 달리 여기서 gripper.open()을 부르지 않는다 - 계속 붙잡은 채로 다음 단계(안전 운송
     # 자세)로 넘어간다.
@@ -3622,6 +3640,23 @@ for _box_num, (picked_prim_path, picked_placement) in enumerate(pick_order):
         print(f"[STAGE3.3 종료] 박스=({_stage3_3_final_box_center[0]:.3f},{_stage3_3_final_box_center[1]:.3f}) "
               f"목표=({STAGE3_3_TARGET_X:.3f},{STAGE3_3_TARGET_Y:.3f})", flush=True)
         _log_clearance("STAGE3.3 종료(X/Y 정렬 후)")
+
+        # [진단 - PICK 시점 로그(solution_space/joint_6/박스yaw)와 직접 비교하기 위한
+        # 동일 형식 - 사용자 지적한 "place 정렬하면서 박스를 돌려버린다"를 실측으로
+        # 확인한다. PICK 직후엔 joint_6이 달라도(-96.5도 vs +92.4도) 박스yaw는
+        # 거의 동일(0.2도)했다 - 여기서 값이 달라져 있으면 STAGE3.3(또는 그 사이
+        # 어느 단계)에서 joint_6이 다시 움직이며 박스를 같이 돌렸다는 뜻이다.
+        if "joint_6" in m0609_robot.dof_names:
+            _diag2_joint6_rad = float(
+                m0609_robot.get_joint_positions()[m0609_robot.dof_names.index("joint_6")])
+        else:
+            _diag2_joint6_rad = float("nan")
+        _diag2_box_pos, _diag2_box_quat = cart_box_objects[picked_prim_path].get_world_pose()
+        _diag2_box_yaw_deg = float(np.degrees(quat_to_euler_angles(np.asarray(_diag2_box_quat, dtype=float))[2]))
+        print(f"[진단 STAGE3.3 종료 흡착 자세] solution_space={'2(반전)' if _need_space2 else '1(표준)'} "
+              f"joint_6={np.degrees(_diag2_joint6_rad):.1f}deg({_diag2_joint6_rad:.4f}rad) "
+              f"박스yaw={_diag2_box_yaw_deg:.1f}deg 박스pos={np.round(np.asarray(_diag2_box_pos, dtype=float), 3)}",
+              flush=True)
 
         chassis_pos0, _ = base_robot.get_world_pose()
         snapshot(eye=[chassis_pos0[0] - 0.8, chassis_pos0[1] - 1.6, chassis_pos0[2] + 0.9],
