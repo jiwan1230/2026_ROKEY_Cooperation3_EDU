@@ -3,11 +3,26 @@
 // Scene3DViewer.jsx(<Canvas> 포함, jsdom 미검증)와 분리해서 여기서 직접
 // 테스트한다. id는 백엔드 routes/scenarios.py의 SCENARIO_DEFS 키와 정확히
 // 일치해야 한다.
+// description은 SummaryCard의 시나리오 안내 영역에 그대로 표시된다 - 문구
+// 자체를 web/backend/routes/scenarios.py의 SCENARIO_DEFS 파라미터 선택과
+// 짝 맞춰서 써둔다(값이 바뀌면 여기 설명도 같이 바꿔야 함).
 export const SCENARIOS = [
-  { id: "delivery_truck", label: "택배 배송 트럭" },
-  { id: "warehouse", label: "창고/물류센터" },
-  { id: "cold_chain", label: "냉동/냉장 물류" },
-  { id: "hazmat", label: "위험물 창고" },
+  {
+    id: "delivery_truck", label: "택배 배송 트럭",
+    description: "여러 배송지를 도는 택배 트럭 - 문을 열자마자 첫 배송지 물건이 바로 손에 닿아야 합니다. 그래서 나중 배송지 박스부터 먼저 싣는 순서(LIFO)를 고정으로 적용했습니다.",
+  },
+  {
+    id: "warehouse", label: "창고/물류센터",
+    description: "입고된 박스를 최대한 많이 쟁여두는 창고 - 입구 접근성보다 공간활용이 우선이라 개수 우선(count_first) 모드 + 마진 1cm(기본 2cm보다 타이트)로 최대한 빽빽하게 채웠습니다.",
+  },
+  {
+    id: "cold_chain", label: "냉동/냉장 물류",
+    description: "냉동/냉장 컨테이너 - 박스 사이·벽 사이로 찬 공기가 순환해야 전체가 고르게 냉각됩니다. 그래서 마진을 기본(2cm)보다 훨씬 넓은 5cm로 고정했습니다.",
+  },
+  {
+    id: "hazmat", label: "위험물 창고",
+    description: "산화제·인화물처럼 서로 반응하면 위험한 물질을 함께 보관하는 창고 - 공간활용보다 안전이 최우선이라, 비호환 물질끼리는 최소 안전거리 이상 떨어뜨리는 하드 규칙을 적용했습니다.",
+  },
 ];
 
 const TRUNK_COLORS = {

@@ -101,12 +101,14 @@ export async function postPickAndPlace() {
   return handleResponse(resp);
 }
 
-// 산업현장 시나리오 미리보기 - routes/scenarios.py 참고. 요청 바디는 필요 없다.
-export async function postScenarioPlan(scenarioId) {
+// 산업현장 시나리오 미리보기 - routes/scenarios.py 참고. options.randomize를
+// true로 주면 고정 데모 박스 대신 그 시나리오 성격에 맞는 무작위 박스로
+// 다시 계산한다("무작위로 다시 생성" 버튼용).
+export async function postScenarioPlan(scenarioId, options = {}) {
   const resp = await fetch(`${BASE}/scenarios/${scenarioId}/plan`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({}),
+    body: JSON.stringify(options),
   });
   return handleResponse(resp);
 }

@@ -71,4 +71,15 @@ describe("SummaryCard", () => {
     await userEvent.click(screen.getByText("load"));
     expect(screen.queryByText(/점수 등급:/)).not.toBeInTheDocument();
   });
+
+  it("shows the scenario description when activeScenarioId is given", () => {
+    render(<PlannerProvider><SummaryCard activeScenarioId="hazmat" /></PlannerProvider>);
+    expect(screen.getByText(/위험물 창고 시나리오/)).toBeInTheDocument();
+    expect(screen.getByText(/비호환 물질끼리는 최소 안전거리/)).toBeInTheDocument();
+  });
+
+  it("shows no scenario note when activeScenarioId is not given", () => {
+    render(<PlannerProvider><SummaryCard /></PlannerProvider>);
+    expect(screen.queryByText(/시나리오$/)).not.toBeInTheDocument();
+  });
 });

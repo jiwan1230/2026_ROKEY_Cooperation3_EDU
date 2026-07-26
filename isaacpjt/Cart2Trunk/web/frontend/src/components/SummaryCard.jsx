@@ -1,6 +1,7 @@
 // src/components/SummaryCard.jsx
 import { usePlannerState } from "../state/PlannerContext.jsx";
 import { gradeBoxScore, gradeUtilization } from "../utils/scoreGrading.js";
+import { SCENARIOS } from "./scenarioTheme.js";
 import styles from "./SummaryCard.module.css";
 
 const STATUS_LABEL = {
@@ -10,8 +11,9 @@ const STATUS_LABEL = {
   APPROVED: "승인됨 - 파라미터 잠김 - MSI2로 전송할 수 있습니다",
 };
 
-export default function SummaryCard() {
+export default function SummaryCard({ activeScenarioId }) {
   const state = usePlannerState();
+  const activeScenario = SCENARIOS.find((s) => s.id === activeScenarioId);
   const summary = state.result?.summary;
   const placed = state.result?.placed || [];
   // 평균 점수 등급은 모든 박스가 "같은" 채점 공식을 썼을 때만 의미가 있다 -
@@ -69,6 +71,12 @@ export default function SummaryCard() {
           <div className={styles.criteriaNote}>
             (박스를 전부 실어도 트렁크 규모상 활용률이 높게 나오기 어려움 - 실측 기준)
           </div>
+        </div>
+      )}
+      {activeScenario && (
+        <div className={styles.scenarioNote}>
+          <div className={styles.scenarioNoteTitle}>📋 {activeScenario.label} 시나리오</div>
+          <div>{activeScenario.description}</div>
         </div>
       )}
     </div>

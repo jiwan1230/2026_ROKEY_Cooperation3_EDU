@@ -3,6 +3,7 @@ import { useState } from "react";
 import { PlannerProvider } from "./state/PlannerContext.jsx";
 import { useResourceLoader } from "./hooks/useResourceLoader.js";
 import { useDebouncedPlan } from "./hooks/useDebouncedPlan.js";
+import { useScenarioPreview } from "./hooks/useScenarioPreview.js";
 import Header from "./components/Header.jsx";
 import TabBar from "./components/TabBar.jsx";
 import ControlPanel from "./components/ControlPanel.jsx";
@@ -14,6 +15,11 @@ import RobotControlPanel from "./components/RobotControlPanel.jsx";
 import styles from "./App.module.css";
 
 function SimulatorBody() {
+  // SummaryCard(시나리오 안내 문구)와 Scene3DViewer(3D 미리보기)가 둘 다
+  // 필요해서 공통 부모인 여기서 한 번만 만들어 내려준다 - PlannerContext
+  // (state.result)와는 별개라 지금 작업 중인 실시간 계획은 안 건드린다.
+  const scenario = useScenarioPreview();
+
   return (
     <div className={styles.body}>
       <ControlPanel />
@@ -27,10 +33,10 @@ function SimulatorBody() {
             같이 쌓는다. */}
         <div className={styles.topRow}>
           <div className={styles.leftColumn}>
-            <SummaryCard />
+            <SummaryCard activeScenarioId={scenario.activeScenarioId} />
             <LogPanel />
           </div>
-          <Scene3DViewer />
+          <Scene3DViewer scenario={scenario} />
         </div>
         <BoxDetailPanel />
       </div>
