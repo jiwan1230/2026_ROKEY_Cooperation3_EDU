@@ -1,0 +1,22 @@
+{
+  "snapshot_id": "dummy_rotation_scan",
+  "frame_id": "m0609_base_link",
+  "quality_score": 0.95,
+  "boxes": [
+    {
+      "box_id": "WideBox",
+      "center": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "size": [
+        0.9,
+        0.3,
+        0.15
+      ],
+      "yaw": 0.0,
+      "confidence": 0.95
+    }
+  ]
+}
