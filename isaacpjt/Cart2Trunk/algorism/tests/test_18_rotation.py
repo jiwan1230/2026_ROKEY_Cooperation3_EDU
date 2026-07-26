@@ -40,6 +40,15 @@ def test_rotate_box_swaps_width_and_depth_only():
     assert rotated.rests_on_id == "Base"
 
 
+def test_rotate_box_preserves_initial_yaw():
+    # ⑦ target_yaw 계산이 initial_yaw + (회전했으면 90도)로 되는데, rotate_box가
+    # 이 필드를 떨어뜨리면(과거 delivery_stop/hazard_class처럼 명시적으로 안
+    # 옮겨서 기본값 0.0으로 리셋되면) target_yaw가 조용히 틀려진다.
+    box = Box("A", width=0.65, depth=0.30, height=0.15, initial_yaw=0.35)
+    rotated = rotate_box(box)
+    assert rotated.initial_yaw == 0.35
+
+
 def test_fits_dims_any_rotation_true_when_only_rotated_fits():
     trunk = Trunk(width=0.6, depth=0.73, height=0.5)
     box = Box("Wide", width=0.65, depth=0.30, height=0.15)  # 정자세 폭 0.65 > 트렁크 폭 0.6

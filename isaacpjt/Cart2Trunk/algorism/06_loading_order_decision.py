@@ -27,7 +27,7 @@
 """
 
 import sys, pathlib
-from typing import List
+from typing import List, Optional
 from importlib import import_module
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
@@ -35,11 +35,13 @@ _m03 = import_module("03_extreme_point_candidates")
 Box = _m03.Box
 
 
-def decide_loading_order(boxes: List["Box"], mode: str = "large_first") -> List["Box"]:
+def decide_loading_order(
+    boxes: List["Box"], mode: str = "large_first", fixed_order: Optional[List[str]] = None,
+) -> List["Box"]:
     """
-    "지금 위에 아무것도 안 얹혀서 픽업 가능한 박스들 중" 부피 기준으로 정렬한다
-    (픽업 순서 제약은 두 모드 다 동일하게 지킴 - 모드가 바꾸는 건 그 안에서
-    "큰 것부터"냐 "작은 것부터"냐뿐).
+    "지금 위에 아무것도 안 얹혀서 픽업 가능한 박스들 중" 정해진 기준으로 정렬한다
+    (픽업 순서 제약은 항상 동일하게 지킴 - mode/fixed_order가 바꾸는 건 그 안에서
+    "무엇을 먼저 고를지"뿐).
 
     mode="large_first"(기본값): 부피 큰 것부터 (BR-09 원래 원칙 - 안정적인 배치
     우선). rests_on_id가 전부 없으면 순수 부피 내림차순과 동일하게 동작한다.
@@ -50,8 +52,21 @@ def decide_loading_order(boxes: List["Box"], mode: str = "large_first") -> List[
     의 같은 이름 mode와 짝을 이뤄서, 점수 기준(⑤)까지 같이 바꿔야 실제 효과가
     난다(순서만 바꿔서는 효과가 약함 - industry_scenarios/scenario2_warehouse_
     density.py에서 실측 확인).
+
+    [fixed_order] "HMI 화면 설계 가이드라인" 문서의 "적재 순서 고정 여부" -
+    박스 id 리스트를 주면 mode의 부피 정렬 대신 이 순서를 우선한다(None이면
+    기본 동작, 하위 호환). 다만 픽업 순서 제약(rests_on_id)은 사용자가 지정한
+    순서보다 항상 우선한다 - 물리적으로 불가능한 순서(밑에 깔린 걸 먼저 집기)는
+    사용자가 그렇게 지정해도 따르지 않는다(안전 > 사용자 지정).
     """
-    picker = max if mode == "large_first" else min
+    if fixed_order is not None:
+        rank = {box_id: i for i, box_id in enumerate(fixed_order)}
+        picker = min
+        key = lambda b: rank.get(b.id, len(fixed_order))  # 목록에 없는 id는 맨 뒤로
+    else:
+        picker = max if mode == "large_first" else min
+        key = lambda b: b.volume
+
     remaining = {b.id: b for b in boxes}
     order: List["Box"] = []
 
@@ -60,7 +75,7 @@ def decide_loading_order(boxes: List["Box"], mode: str = "large_first") -> List[
         blocked_ids = {b.rests_on_id for b in remaining.values() if b.rests_on_id is not None}
         available = [b for b in remaining.values() if b.id not in blocked_ids]
 
-        next_box = picker(available, key=lambda b: b.volume)
+        next_box = picker(available, key=key)
         order.append(next_box)
         del remaining[next_box.id]
 
