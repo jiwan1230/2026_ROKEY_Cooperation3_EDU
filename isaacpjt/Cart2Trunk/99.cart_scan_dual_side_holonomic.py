@@ -581,7 +581,7 @@ CART_BOX_SPECS = [
     # (name, size(x,y,z), Large 중심 기준 offset(dx=길이축, dy=폭축), mass_kg)
     ("Large", (0.20, 0.20, 0.12), (0.0, 0.0), 1.2),
     ("Medium", (0.085, 0.10, 0.11), (-0.0525, 0.0), 0.6),
-    ("Small", (0.085, 0.09, 0.07), (0.0525, 0.0), 0.3),
+    ("Small", (0.085, 0.09, 0.07), (0.0425, 0.03), 0.3),
 ]
 CART_BOX_DROP_HEIGHT_ABOVE_FLOOR = 0.10
 _CART_STACK_TOP_SPAWN_MARGIN_M = 0.05
