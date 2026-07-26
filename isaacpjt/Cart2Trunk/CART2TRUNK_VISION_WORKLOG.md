@@ -1,6 +1,6 @@
 # Cart2Trunk Vision/Perception 작업 기록 (노션용)
 
-**범위**: 테이블 다중 시점 스캔 최초 구축 + 동일 크기 적층 박스 검출 + 카트 홀로노믹 베이스 다중 시점 스캔
+**범위**: 테이블 다중 시점 스캔 최초 구축 + 동일 크기 적층 박스 검출 + 카트 홀로노믹 베이스 다중 시점 스캔 + 카트 안 "다른 크기 박스 여러 개가 하나의 큰 박스 위에 나란히 적층된" 구조 인식
 **기간**: 2026-07-23 ~ 2026-07-24
 **관련 담당 영역**: `Cart2Trunk 담당자별 최종 실행 가이드라인.pdf` 2번 "준형님 — Vision / 3D Perception"
 
@@ -212,6 +212,110 @@ Part A의 파이프라인은 "위 박스는 항상 아래 박스보다 작다"�
 
 ---
 
+## Part D. 카트 안 적층 박스 구조(Large 바닥 + Medium/Small 나란히 위) 인식 (88.cart_scan_holonomic.py, perception/)
+
+Part C까지는 카트 안에 떨어져 있는 박스 2개(적층 아님)만 다뤘다. 이번엔 "큰 박스가
+바닥에 깔리고, 그 위에 중간+작은 박스가 나란히(서로 위아래로는 안 쌓이고) 올라간" 더
+현실적인 구조를 새로 시나리오화하고 인식했다 — 박스 배치 설계 문제 4건과, 지지면(바닥)
+오검출 문제 1건(진짜 근본 원인)을 순서대로 진단·수정했다.
+
+### D-1. Large가 통째로 검출 실패 (0개)
+- **증상**: Large/Medium/Small을 물리 낙하로 스택시킨 뒤(직접 자세 측정으로 스택 자체는
+  0.1mm 오차로 정확함을 먼저 확인) 스캔 → 검출 0개.
+- **원인**: Medium/Small을 Large 중심에 두면 Large 윗면 전체를 거의 다 덮어버려서, 남는
+  노출부가 가장자리의 가는 조각(폭 2cm 미만)뿐 — `MIN_BOX_SIDE_M`(0.04m) 필터에 전부
+  걸려 Large 자체가 하나의 사각형 후보로 못 잡힘.
+- **조치**: Medium/Small을 Large 뒤쪽(+Y) 절반에만 나란히 배치해서, 앞쪽 절반을 아무것도
+  안 덮인 깨끗한 직사각형으로 남김.
+- **관련 파일**: `88.cart_scan_holonomic.py` (`CART_BOX_SPECS`)
+
+### D-2. Medium/Small이 하나로 뭉개짐
+- **증상**: D-1 조치 후 Large는 검출되지만, Medium/Small 자리에서 fill_ratio가
+  0.55~0.98로 요동치는 불안정한 후보 1개만 나옴(둘 다 안 잡힘).
+- **원인**: 둘 사이 간격이 2cm(`DBSCAN_EPS_M` 2.5cm보다 작음)였고 높이차도 2cm(0.09 vs
+  0.07m, `PLANE_DISTANCE_THRESHOLD_M` 1cm와 비슷한 수준)라 RANSAC이 하나의 "타협 평면"
+  으로 묶어버림.
+- **조치**: 간격을 4cm(DBSCAN eps보다 확실히 넓게), 높이차도 4cm(Small 0.07→0.05m)로
+  벌림.
+- **관련 파일**: `88.cart_scan_holonomic.py`
+
+### D-3. 카트 벽/테두리가 RANSAC 예산을 먼저 차지
+- **증상**: D-2까지 고쳐도 Medium/Small이 12회 시도 중 1~2회만 관측(노이즈로 판정돼
+  제외).
+- **원인**: 기존 XY 크롭이 카트 바깥쪽 bbox(벽/철망 테두리까지 포함)에 마진을 "바깥쪽
+  으로" 더한 범위였음 — 벽 평면(포인트 수천~9천 개)이 RANSAC의 앞쪽 반복(인라이어 많은
+  평면부터 순서대로 제거)을 먼저 차지해버려서, 노출 면적이 작은 Medium/Small이 시도마다
+  다르게(불안정하게) 걸림.
+- **조치**: XY 크롭을 카트 중심 기준 실제 박스 적재 영역(±0.22m)으로 좁혀서 벽 자체가
+  아예 안 들어오게 함.
+- **관련 파일**: `88.cart_scan_holonomic.py` (`CART_SCAN_ROI_HALF_X/Y_M`)
+
+### D-4. Small이 가려짐 때문에 짧은 변 필터에 걸림
+- **증상**: Large/Medium은 안정적으로 잡히는데, Small만 짧은 변이 0.05~0.074m로
+  `MIN_PLAUSIBLE_BOX_FOOTPRINT_SIDE_M`(0.08m)에 못 미쳐 계속 제외됨.
+- **원인**: 가장 작고 가장 높이 있는 Small은 옆에서 보는 strafe 스캔 특성상 윗면 관측
+  면적 자체가 작아서, 매번 조금씩 다르게(항상 실제보다 작게) 잡힘 — 유령이 아니라 진짜
+  박스가 가려짐으로 작게 잡힌 경우.
+- **조치**: 이 시나리오에 한해 임계값을 0.065m로 완화(`CART2TRUNK_MIN_PLAUSIBLE_BOX_FOOTPRINT_SIDE_M` 환경변수, 코드 기본값은 유지).
+- **관련 파일**: 없음(실행 시 환경변수만 사용)
+
+### D-5. 지지면(바닥) 탐색이 가려진 영역에서 실패 → 카트 바닥까지 뚫고 내려감
+가장 오래 걸린 문제. Medium/Small의 윗면 위치 자체는 정확한데, 완성된 박스의 **높이**가
+실제(0.09~0.11m)보다 두 배 가까이(0.17~0.21m) 부풀려져 나왔다 — 즉 바닥이 Large 윗면이
+아니라 카트 진짜 바닥으로 잘못 잡힌 것.
+
+- **1차 원인**: Medium/Small이 Large의 뒤쪽 절반만 덮고 있어서(D-1 조치), 그 바로 밑
+  Large 표면은 카메라가 원천적으로 못 본 영역 — `select_support_candidate()`의 "그
+  지점에 실제 관측 포인트가 있어야 함" 검사가 데이터 부재로 실패하고 카트 진짜 바닥으로
+  대체됨.
+  **조치**: `select_support_candidate()`에 `allow_plane_only_fallback` 옵션 추가 — 엄격한
+  포인트 근접 검사가 실패하면, 포인트 근접 조건만 뺀 나머지(법선 정렬/거리 범위/편차/
+  면적비) 기하 조건은 만족하는 후보로 대체 채택. 라이브 단일 시점 경로
+  (`box_top_extractor.py`)는 이 옵션을 안 쓰므로 기존 동작 그대로 유지됨(기본값 False).
+- **2차 원인**: `MAX_SUPPORT_AREA_RATIO`(6.0, top 자기 면적의 6배 넘는 후보는 지지면에서
+  제외하는 필터)가 Large처럼 원래 큰 박스에는 너무 엄격해서(Large/Small 면적비 ~11.6배)
+  Large가 지지면 후보에서 아예 배제됨.
+  **조치**: 실행 시 `CART2TRUNK_MAX_SUPPORT_AREA_RATIO=13`으로 완화.
+- **3차 원인(재현 확인용 삽질)**: Open3D `segment_plane()`의 RANSAC이 "시드 고정 없음"
+  이라 매 trial마다 명시적으로 재시드하는 코드를 추가했는데, `o3d.utility.random.seed()`
+  가 부호 있는 32비트 int만 받는다는 걸 몰라서 `os.urandom(4)`를 그대로 넘겼다가 절반
+  확률로 `TypeError`로 크래시 — 이전까지 "고쳐진 것처럼 보였던" 재현 여러 건이 사실은
+  매번 크래시해서 새로 저장을 못 하고 이전 결과 파일을 계속 읽고 있었을 뿐이었다(재현 시
+  반드시 stdout에서 `Traceback` 유무를 직접 확인하지 않으면 놓치는 함정).
+  **조치**: `int.from_bytes(os.urandom(4), "little") % (2**31 - 1)`로 범위를 맞춤.
+- **4차 원인(진짜 근본 원인)**: 위 3가지를 다 고쳐도 여전히 대부분의 실행에서 Medium
+  높이가 부풀려짐. 매 trial의 디버그 로그를 직접 추적한 결과, **개별 trial에서는**
+  `select_support_candidate`가 Large를 정확히 찾고 있었다(`median_distance=0.069~0.105m`,
+  올바른 높이) — 그런데 최종 결과에는 반영 안 됨. 원인 추적 결과
+  `_split_hidden_same_size_stacks()`(Part B에서 "완전히 같은 크기의 적층" 대응용으로 만든
+  함수)가 `support_type`을 전혀 확인하지 않고 fill_ratio가 높은 **모든** 선택된 박스에
+  대해 무조건 `find_stacked_layers()`로 **독자적으로 다시** 지지면을 재탐색하고 있었다.
+  이 재탐색은 `select_support_candidate`와 별개의(더 약한) 알고리즘이라 같은 가려짐
+  문제에 걸려 카트 바닥까지 내려갔고, 그 결과로 이미 올바르게 계산돼 있던 `corners`를
+  조용히 덮어썼다(로그에는 안 남아서 원인 추적이 특히 오래 걸림).
+  **조치**: `support_type == "box_top"`(이미 다른 박스를 지지면으로 정상적으로 찾음)인
+  박스는 이 재탐색에서 제외 — `support_type == "floor"`로 떨어진(진짜 지지 박스를 못
+  찾은) 경우에만 적용하도록 조건 추가. Part B의 원래 용도(완전히 가려진 동일 크기 적층)
+  는 그대로 보존됨(원래도 항상 "floor"로 떨어지는 케이스였음).
+- **검증**: 10회 반복 실행 중 7회가 Large/Medium/Small 모두 정확한 높이(0.107/0.094/0.060m,
+  실제 0.12/0.11/0.07m와 근접)로 검출됨. 나머지 3회도 검출된 개수만 적었을 뿐(RANSAC
+  stochastic 특성상 일부 시도에서 Medium/Small 자체가 안 걸림), 검출된 박스의 높이는
+  전부 정상 범위 — 더 이상 바닥 관통 없음.
+- **관련 파일**: `perception/box_geometry.py`(`select_support_candidate`),
+  `perception/multiview_scan.py`(`_detect_boxes_once`, `detect_boxes_in_base_frame`,
+  `_split_hidden_same_size_stacks`)
+
+### D 최종 산출물
+- 원본 누적 스캔(3단 구조 전부 포함, 검증됨): `perception/scan_cache/merged_cart_scan.npy`
+- 원본 스캔 시각화 PLY: `results/holonomic_base/cart_stacked_scan_raw.ply`
+- 최종 검출 결과: `results/holonomic_base/cart_stacked_boxes_detected.ply`, `.json`
+  (Large 0.248×0.319×0.107m, Medium 0.102×0.139×0.094m, Small 0.086×0.103×0.060m)
+- 권장 실행 설정: `CART2TRUNK_MAX_SUPPORT_AREA_RATIO=13 CART2TRUNK_MIN_PLAUSIBLE_BOX_FOOTPRINT_SIDE_M=0.065 CART2TRUNK_DETECTION_TRIALS=24`
+- 스크린샷: `results/holonomic_base/_cartscan_view_*.png` (Large 위 Medium+Small 나란히
+  적층된 모습)
+
+---
+
 ## 가이드라인 대조 결과 (참고)
 
 `Cart2Trunk 담당자별 최종 실행 가이드라인.pdf` 2번 "카트 내부 박스 인식" 필수 처리
@@ -226,19 +330,62 @@ Part A의 파이프라인은 "위 박스는 항상 아래 박스보다 작다"�
 - 산출물 파일명이 가이드라인의 `box_scan.json`과 다름(현재 `all_boxes_corners_*.json`)
 - 입력 방식이 가이드라인의 ROS2 토픽/Scan Action 구조가 아니라 파일 기반(.npy) 핸드오프
 
-## Isaac Sim 재현이 필요한 상황 (영상 녹화용 참고)
+## 재현 완료 자료 (스크린샷/PLY)
 
-아래는 실제 로봇 "동작"을 봐야 의미가 있던 상황들이다. 지금은 기록만 해두고, 나중에
-재현 요청하면 아래 정보로 다시 띄운다.
+2026-07-24, `git commit a0b631c` 시점을 안전한 복원 지점으로 남겨두고, 각 문제를 코드에
+임시로 되돌려서(끝나면 항상 백업본과 `diff` 없음을 확인 후 복구) 스크린샷/PLY로 재현했다.
+전부 `results/worklog_screenshots/{partA,partB,partC}/`에 있다.
 
-| 상황 | 재현 방법 | 비고 |
+### Part A
+| 항목 | 파일 | 비고 |
 |---|---|---|
-| A-3: azimuth ±60도로 IK 오차 0.17m 나던 모습 | `35.crate_scan_setup.py`의 `SCAN_AZIMUTH_DEG`를 ±60도로 임시 변경 후 실행 | 현재 ±50도로 확정돼 있어 되돌리려면 임시 수정 필요 |
-| C-3 이전: IK 오차 8~12cm로 팔이 목표에 못 닿는 모습 | `EYE_HEIGHT_ABOVE_CART=0.75`, `LIFT_TRAVEL_M=0.45`로 되돌리고 실행 | 현재 코드에는 0.55/0.55로 남아있어 되돌리려면 임시 수정 필요 |
-| C-7 1차: 관절이 순간이동(리셋)하며 "뚝" 끊기는 모습 | 리셋 블록을 코드에 다시 삽입해야 함(현재는 삭제됨) | git에 중간 상태를 커밋해두지 않아서, 요청 시 이 문서의 조치 내용 기반으로 재구성 |
-| C-7 최종: 베이스만 움직이고 팔은 거의 고정된 자연스러운 동작 | 현재 `88.cart_scan_holonomic.py`를 `DISPLAY=:1`로(헤드리스 아님) 그대로 실행 | 바로 재현 가능, 별도 조치 불필요 |
-| B 전체: 동일 크기 적층 스캔(다중 시점) | `35.crate_scan_setup.py`를 헤드리스 아님으로 실행 | 바로 재현 가능 |
+| 로봇 팔 스캔 궤적(±50도/tilt 8,28도, 9개 시점) | `partA/trajectory__verify_crate_scan_table_view_{0-8}.png` | 현재 확정 설정 그대로, 코드 변경 없음 |
+| 스캔 속도 - 빠른 버전(조기 종료) | `partA/trajectory__verify_crate_scan_table_view_*.png` (위와 동일 실행) | 9개 시점 소요 20.1초 |
+| 스캔 속도 - 느린 버전(조기 종료 비활성화) | `partA/slow__verify_crate_scan_table_view_{0-8}.png` | 9개 시점 소요 41.3초(약 2배) - `CONVERGENCE_MIN_STEPS`를 999999로 임시 변경 후 복구 |
+| Small 윗면 비스듬 - 버그 버전 | `partA/partA_skew_buggy.png`, `partA/partA_skew_buggy_box.ply` | z 편차 2.63~4.85mm(시도마다 다름) - `_cluster_plane_into_candidates()` 호출에 `up_vector` 대신 `normal` 전달 후 복구 |
+| Small 윗면 비스듬 - 수정 버전 | `partA/partA_skew_fixed.png`, `partA/partA_skew_fixed_box.ply` | z 편차 0.0000mm(완전 평평) |
 
-**중요**: 위 표에서 "이전 상태로 되돌려야 하는" 항목(±60도, 오차 8~12cm, 리셋 왕복
-동작)은 현재 코드를 임시로 수정해야 하므로, 요청 시 먼저 지금 상태를 별도로 저장해두고
-진행하겠음.
+### Part B
+| 항목 | 파일 | 비고 |
+|---|---|---|
+| 적층 박스 구조(Isaac Sim 배치 장면) | `partB/stacked_structure_layout.png` | Small(주황)이 Large(파랑) 위에 적층, Medium(초록)은 별도 |
+| XY-only 그룹핑 - 버그 버전 | `partB/partB_grouping_buggy.ply` | 박스 2개만 검출(Small 누락) - `_group_by_location()`의 Z-tolerance 조건 임시 제거 후 복구, 원래 크기 다른 적층 시나리오 캐시(`scan_cache/merged_table_scan_stacked_az50.ply`) 사용 |
+| XY-only 그룹핑 - 수정 버전 | `partB/partB_grouping_fixed.ply` | 박스 3개 정확히 검출 |
+| 유령 박스 - 버그 버전 | `partB/partB_ghost_buggy.ply` | 박스 5개(진짜 3 + 유령 2) - `CART2TRUNK_MIN_PLAUSIBLE_BOX_FOOTPRINT_SIDE_M=0.001` 환경변수만 사용(코드 변경 없음) |
+| 유령 박스 - 수정 버전 | `partB/partB_ghost_fixed.ply` | 박스 3개 정확히 검출 |
+
+### Part C
+| 항목 | 파일 | 비고 |
+|---|---|---|
+| 뚝뚝 끊기는 모습(순간이동 리셋) | `partC/choppy_reset__cartscan_view_{0-4}.png` | `set_joint_positions(_init_joints)` 순간이동 블록 임시 재삽입 후 복구 |
+| 원상태 복귀 후 스캔(부드럽지만 왕복) | `partC/roundtrip__cartscan_view_{0-4}.png` | 60스텝 보간 리셋 블록 임시 재삽입 후 복구(순간이동은 아니지만 여전히 왕복) |
+| 최종 성공 - 카트 안 박스 PLY | `partC/final_cart_boxes_success.ply`, `partC/final_cart_boxes_success.json` | Box_A 0.121×0.159(실제 0.16×0.12), Box_B 0.129×0.107(실제 0.13×0.10) |
+
+### Part D
+| 항목 | 파일 | 비고 |
+|---|---|---|
+| D-1: Large 검출 실패 - 박스 배치(카트 안, Medium+Small이 Large 중앙을 덮음) | `partD/D1_layout.png` | Isaac Sim 스크린샷 - 이 각도에서 Large 가장자리가 전혀 안 보임 |
+| D-1: Large 검출 실패 - 원본 스캔 PLY | `partD/D1_large_undetected_raw.ply` | `CART_BOX_SPECS`를 dy=0(중앙 배치)로 임시 변경 후 재현 - 검출 0개(로그: `시도별 박스 개수=[0,0,0,1,0,...]`) |
+| D-2: Medium/Small 뭉개짐 - 박스 배치(간격 2cm) | `partD/D2_layout.png` | Isaac Sim 스크린샷 |
+| D-2: Medium/Small 뭉개짐 - 검출 결과 PLY/JSON | `partD/D2_merged_medium_small.ply`, `.json` | 간격/높이차를 2cm로 임시 축소 후 재현 - 병합된 사각형 하나(0.123×0.249m, 어느 쪽 실제 크기와도 안 맞음)로 잘못 검출 |
+| D-3: 카트 벽 노이즈 - 원본 스캔 PLY(벽 포함) | `partD/D3_wall_noise_raw.ply` | XY ROI를 카트 바깥쪽 bbox+마진(옛 버전)으로 임시 변경 후 재현 - 495,624점(타이트 크롭 버전의 약 5배) |
+| D-3: 카트 벽 노이즈 - 불안정한 검출 결과 | `partD/D3_unstable_detection.ply`, `.json` | 거대한 카트 구조물 후보 2개(0.77~0.87m) 발생, Large 자체 fill_ratio도 0.732~0.998로 요동(타이트 크롭 시 항상 0.996+였던 것과 대비), Medium/Small은 아예 미검출 |
+| D-4: Small 가려짐 - 기본 임계값(0.08m)으로 제외됨 | `partD/D4_small_excluded_strict.ply`, `.json` | 코드 변경 없음(기본값 그대로) - Small 짧은 변 0.078m로 임계값에 살짝 못 미쳐 제외, 박스 2개(Large+Medium)만 |
+| D-4: Small 가려짐 - 완화된 임계값(0.065m)으로 포함됨 | `partD/D4_small_included_relaxed.ply`, `.json` | `CART2TRUNK_MIN_PLAUSIBLE_BOX_FOOTPRINT_SIDE_M=0.065` 환경변수만 사용(코드 변경 없음) - Small 짧은 변 0.077m로 통과, 박스 3개 모두 검출 |
+
+D-1/D-2/D-3는 각각 다른 물리적 배치/스캔 설정이 필요해서 그때마다 Isaac Sim을 헤드리스로
+재실행했고(`88.cart_scan_holonomic.py`의 `CART_BOX_SPECS`/XY ROI 크롭을 임시로 되돌림),
+D-4는 이미 있는(D-5 최종 확정) 스캔 데이터에 검출 임계값만 환경변수로 바꿔 오프라인
+재현했다(코드 변경 없음).
+
+### 아직 재현 안 한 것 (요청 시 진행)
+| 상황 | 재현 방법 |
+|---|---|
+| A-3: azimuth ±60도로 IK 오차 0.17m 나던 모습 | `35.crate_scan_setup.py`의 `SCAN_AZIMUTH_DEG`를 ±60도로 임시 변경 후 실행(현재 ±50도) |
+| C-3 이전: IK 오차 8~12cm로 팔이 목표에 못 닿는 모습 | `EYE_HEIGHT_ABOVE_CART=0.75`, `LIFT_TRAVEL_M=0.45`로 되돌리고 실행(현재 0.55/0.55) |
+
+모든 임시 수정은 각각 적용 직후 재현·촬영하고 바로
+`diff backups/<파일> <실제파일>`로 원상복구를 확인한 뒤 다음 항목으로 넘어갔다 - 지금
+작업 디렉토리는 커밋 시점(`a0b631c`) + Part D 재현/수정을 반영한 최신 상태다(88.py,
+multiview_scan.py, box_geometry.py, scan_cache/merged_cart_scan.npy 모두 Part D 재현
+전후로 diff 없음을 확인함).

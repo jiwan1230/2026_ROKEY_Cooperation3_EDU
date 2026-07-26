@@ -561,33 +561,58 @@ cart_half_y = (cart_max[1] - cart_min[1]) / 2.0
 print(f"[카트 bbox] min={cart_min} max={cart_max} center_xy={cart_center_xy} "
       f"(회전후 half_x=길이/2={cart_half_x:.3f} half_y=너비/2={cart_half_y:.3f})", flush=True)
 
-# ---- 카트 안에 박스 2개 배치 (84.py와 동일 패턴, 오프셋 축만 100번과 동일하게 변경) ----
+# ---- 카트 안에 적층 박스 3개 배치 (88.cart_scan_holonomic.py 3b061bd에서 이식,
+# 오프셋 축만 100번/99번과 동일하게 변경) ----
+# 시나리오: 큰 박스(Large)가 바닥에 깔리고, 그 위에 중간(Medium)+작은(Small) 박스가
+# Large의 윗면에 나란히(서로 위아래로 쌓이지 않고) 올라간 구조. 88번에서 실측으로
+# 확인한 3가지 설계 원칙(자세한 근거는 88.py 해당 위치 주석 참고)을 축만 바꿔 그대로
+# 재사용한다: (1) 자식을 부모 중심(dy=0 조건에 해당하는 축)에 두면 부모 윗면이
+# 거의 다 덮여 부모 자체가 검출 실패하므로 부모의 한쪽 절반에만 배치, (2) 형제
+# 박스(Medium-Small) 간격은 DBSCAN_EPS_M(2.5cm)보다 확실히 넓게(4cm), (3) 자식-부모
+# 높이차는 DEDUP_OVERLAP_Z_TOLERANCE_M(0.05m)보다 확실히 크게.
+# 88번은 dx=폭(옛 X)/dy=길이(옛 Y) offset이었는데, 99번은 회전 후 dx=길이(X)/dy=폭(Y)
+# 이므로(위 cart_half_x/y 주석 참고) 88번의 (dx, dy)를 (dy, dx)로 맞바꿔서 옮긴다.
 box_material = PhysicsMaterial(
     prim_path="/World/Physics_Materials/box_material",
     static_friction=1.2, dynamic_friction=1.0, restitution=0.0,
 )
-# 사용자 설계(100번과 완전히 동일) - 박스 오프셋을 Y축(옛 길이축)에서 X축(회전 후
-# 길이축)으로 옮긴다. Box_A는 A단(-X, 손잡이/먼 쪽), Box_B는 B단(+X, 입구/차량쪽).
+CART_STACK_BASE_NAME = "Large"
 CART_BOX_SPECS = [
-    ("Box_A", (0.16, 0.12, 0.11), (-cart_half_x * 0.35, 0.0)),
-    ("Box_B", (0.13, 0.10, 0.09), (cart_half_x * 0.35, 0.0)),
+    # (name, size(x,y,z), Large 중심 기준 offset(dx=길이축, dy=폭축), mass_kg)
+    ("Large", (0.30, 0.22, 0.12), (0.0, 0.0), 1.2),
+    ("Medium", (0.13, 0.10, 0.11), (0.045, -0.075), 0.6),
+    ("Small", (0.11, 0.09, 0.07), (0.045, 0.085), 0.3),
 ]
 CART_BOX_DROP_HEIGHT_ABOVE_FLOOR = 0.10
-for name, size, (dx, dy) in CART_BOX_SPECS:
+_CART_STACK_TOP_SPAWN_MARGIN_M = 0.05
+_cart_large_size = next(size for name, size, _off, _m in CART_BOX_SPECS if name == CART_STACK_BASE_NAME)
+_cart_large_spawn_z = CART_BASKET_FLOOR_Z + CART_BOX_DROP_HEIGHT_ABOVE_FLOOR
+for name, size, (dx, dy), mass_kg in CART_BOX_SPECS:
+    if name == CART_STACK_BASE_NAME:
+        spawn_z = _cart_large_spawn_z
+    else:
+        spawn_z = (
+            _cart_large_spawn_z
+            + _cart_large_size[2] / 2.0
+            + size[2] / 2.0
+            + _CART_STACK_TOP_SPAWN_MARGIN_M
+        )
     DynamicCuboid(
-        prim_path=f"/World/{name}",
+        prim_path=f"/World/Box_{name}",
         name=name.lower(),
         position=np.array([
             cart_center_xy[0] + dx,
             cart_center_xy[1] + dy,
-            CART_BASKET_FLOOR_Z + CART_BOX_DROP_HEIGHT_ABOVE_FLOOR,
+            spawn_z,
         ]),
         scale=np.array(size),
         color=np.array([0.85, 0.55, 0.15]),
-        mass=0.3,
+        mass=mass_kg,
         physics_material=box_material,
     )
-print(f"[박스 배치] 카트 안에 {len(CART_BOX_SPECS)}개 낙하 예정: {[s[0] for s in CART_BOX_SPECS]}", flush=True)
+print(f"[박스 배치] 카트 안에 적층 구조 {len(CART_BOX_SPECS)}개 낙하 예정 "
+      f"(바닥={CART_STACK_BASE_NAME}, 그 위에 Medium+Small 나란히): "
+      f"{[s[0] for s in CART_BOX_SPECS]}", flush=True)
 
 # 사용자 설계(100번과 동일 - 카트 옆 접근이 이제 폭(Y) 방향) - STANDOFF_X를 카트의
 # 너비(cart_half_y, 회전 후 의미)에 여유를 더하는 것으로 바꾼다. 스캔은 방향 구분이
@@ -920,8 +945,17 @@ snapshot(
 # 중앙(기준 위치)으로 돌아온 뒤 base_link를 딱 한 번만 측정해서 전체 누적
 # point cloud를 그 기준 프레임으로 한 번에 변환한다.
 CART_SCAN_STRAFE_X_OFFSETS = [-0.28, -0.14, 0.0, 0.14, 0.28]
-CART_SCAN_ROI_MARGIN_M = 0.15
 CART_SCAN_ROI_MAX_HEIGHT_M = 0.40  # CART_BASKET_FLOOR_Z 위로 이만큼까지만(카트 손잡이/배경 배제)
+# 88.cart_scan_holonomic.py(3b061bd)에서 이식 - 적층 시나리오 실측 확인(중요 버그):
+# 기존 XY 크롭은 cart_min/max(카트 바깥쪽 bbox, 철망 벽/테두리까지 포함)에 마진을
+# "바깥쪽으로" 더한 범위라 카트 벽/테두리 자체가 통째로 point cloud에 들어왔다. 이
+# 벽 평면이 RANSAC segment_plane()의 앞쪽 반복을 먼저 차지해버려서 Medium/Small처럼
+# 노출 면적이 작은 박스 윗면 검출이 불안정해졌다(88번 실측: 12회 중 1~2회만 관측).
+# 카트 중심 기준 실제 박스 적재 영역보다 넉넉하되 카트 벽(cart_half_x/y)보다는
+# 확실히 안쪽인 반경으로 크롭하면 벽이 아예 안 들어와서 문제가 사라진다. 값은 88번과
+# 동일(0.22/0.22, 대칭이라 축이 바뀌어도 그대로 이식 가능).
+CART_SCAN_ROI_HALF_X_M = 0.22
+CART_SCAN_ROI_HALF_Y_M = 0.22
 
 OPTICAL_TO_USD_CAMERA_AXES = np.diag([1.0, -1.0, -1.0])
 
@@ -991,10 +1025,10 @@ for i, x_offset in enumerate(CART_SCAN_STRAFE_X_OFFSETS):
         continue
 
     keep = (
-        (pts_world_i[:, 0] >= cart_min[0] - CART_SCAN_ROI_MARGIN_M)
-        & (pts_world_i[:, 0] <= cart_max[0] + CART_SCAN_ROI_MARGIN_M)
-        & (pts_world_i[:, 1] >= cart_min[1] - CART_SCAN_ROI_MARGIN_M)
-        & (pts_world_i[:, 1] <= cart_max[1] + CART_SCAN_ROI_MARGIN_M)
+        (pts_world_i[:, 0] >= cart_center_xy[0] - CART_SCAN_ROI_HALF_X_M)
+        & (pts_world_i[:, 0] <= cart_center_xy[0] + CART_SCAN_ROI_HALF_X_M)
+        & (pts_world_i[:, 1] >= cart_center_xy[1] - CART_SCAN_ROI_HALF_Y_M)
+        & (pts_world_i[:, 1] <= cart_center_xy[1] + CART_SCAN_ROI_HALF_Y_M)
         # 실측 확인: CART_BASKET_FLOOR_Z(0.68)가 하드코딩된 추정값이라, 처리된
         # point cloud에 바스켓 철망 테두리만 잡히고 바닥/박스가 전혀 안 보였다 -
         # 진짜 바닥이 이 추정치보다 낮은 곳에 있을 가능성이 커서, 실제 위치를

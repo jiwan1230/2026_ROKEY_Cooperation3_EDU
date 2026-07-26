@@ -985,30 +985,49 @@ box_material = PhysicsMaterial(
     prim_path="/World/Physics_Materials/box_material",
     static_friction=1.2, dynamic_friction=1.0, restitution=0.0,
 )
-# 사용자 설계 - 박스 오프셋을 (기존) Y축에서 (회전 후 길이축인) X축으로 옮긴다. Box_A는
-# 카트의 A단(-X, 손잡이/먼 쪽)에, Box_B는 B단(+X, 입구/차량에 가까운 쪽)에 치우치도록
-# 스폰해 "박스가 A/B 중 어느 쪽에 쏠려있는지"라는 사용자 설계의 전제를 물리적으로
-# 재현한다. Y(너비) 오프셋은 0으로 둔다 - 어느 쪽(왼쪽/오른쪽) standoff에서 접근하든
-# 팔 reach가 대칭적으로 동일하도록.
+# 88.cart_scan_holonomic.py(3b061bd)/99.cart_scan_dual_side_holonomic.py에서 이식한
+# 3박스 적층 시나리오(Large가 바닥, 그 위에 Medium+Small이 나란히) - 스캔/검출
+# 파이프라인이 이제 이 구조로 카트를 채우므로(all_boxes_corners_*.json이 3개
+# box_id를 담음), PICK&PLACE 데모 씬도 물리적으로 동일한 배치를 재현해야 비전
+# 매칭(scan_by_box_id/match_physical_prim)이 실제 스폰된 박스와 맞아떨어진다 -
+# 이전처럼 2개(Box_A/Box_B, 나란히 배치)만 스폰하면 3번째 비전 검출 결과와 매칭될
+# 물리 박스가 없어 그 박스는 조용히 건너뛰어진다.
+# 오프셋 축 매핑은 99번과 동일 - 88번은 dx=폭(옛 X)/dy=길이(옛 Y)였는데, 100번(회전
+# 후)은 dx=길이(X)/dy=폭(Y)이므로 88번의 (dx, dy)를 (dy, dx)로 맞바꿔서 옮긴다.
+CART_STACK_BASE_NAME = "Large"
 CART_BOX_SPECS = [
-    ("Box_A", (0.16, 0.12, 0.11), (-cart_half_x * 0.35, 0.0)),
-    ("Box_B", (0.13, 0.10, 0.09), (cart_half_x * 0.35, 0.0)),
+    # (name, size(x,y,z), Large 중심 기준 offset(dx=길이축, dy=폭축), mass_kg)
+    ("Large", (0.30, 0.22, 0.12), (0.0, 0.0), 1.2),
+    ("Medium", (0.13, 0.10, 0.11), (0.045, -0.075), 0.6),
+    ("Small", (0.11, 0.09, 0.07), (0.045, 0.085), 0.3),
 ]
 CART_BOX_DROP_HEIGHT_ABOVE_FLOOR = 0.10
+_CART_STACK_TOP_SPAWN_MARGIN_M = 0.05
+_cart_large_size = next(size for name, size, _off, _m in CART_BOX_SPECS if name == CART_STACK_BASE_NAME)
+_cart_large_spawn_z = CART_BASKET_FLOOR_Z + CART_BOX_DROP_HEIGHT_ABOVE_FLOOR
 cart_box_objects = {}  # prim_path -> DynamicCuboid 래퍼(PICK 뒤 test_box로 재사용하기 위해 저장)
-for _box_name, _box_size, (_dx, _dy) in CART_BOX_SPECS:
-    _box_prim_path = f"/World/{_box_name}"
+for _box_name, _box_size, (_dx, _dy), _mass_kg in CART_BOX_SPECS:
+    if _box_name == CART_STACK_BASE_NAME:
+        _spawn_z = _cart_large_spawn_z
+    else:
+        _spawn_z = (
+            _cart_large_spawn_z
+            + _cart_large_size[2] / 2.0
+            + _box_size[2] / 2.0
+            + _CART_STACK_TOP_SPAWN_MARGIN_M
+        )
+    _box_prim_path = f"/World/Box_{_box_name}"
     cart_box_objects[_box_prim_path] = DynamicCuboid(
         prim_path=_box_prim_path, name=_box_name.lower(),
-        position=np.array([cart_center_xy[0] + _dx, cart_center_xy[1] + _dy,
-                            CART_BASKET_FLOOR_Z + CART_BOX_DROP_HEIGHT_ABOVE_FLOOR]),
-        scale=np.array(_box_size), color=np.array([0.85, 0.55, 0.15]), mass=0.3,
+        position=np.array([cart_center_xy[0] + _dx, cart_center_xy[1] + _dy, _spawn_z]),
+        scale=np.array(_box_size), color=np.array([0.85, 0.55, 0.15]), mass=_mass_kg,
         physics_material=box_material,
     )
-print(f"[박스 배치] 카트 안에 {len(CART_BOX_SPECS)}개 낙하 예정", flush=True)
+print(f"[박스 배치] 카트 안에 적층 구조 {len(CART_BOX_SPECS)}개 낙하 예정 "
+      f"(바닥={CART_STACK_BASE_NAME}, 그 위에 Medium+Small 나란히)", flush=True)
 # prim_path -> (sx, sy, sz) 스폰 시점의 진짜 크기(91번과 동일 이유 - bbox_of()로 매번 다시
 # 재면 박스가 기울어졌을 때 신뢰할 수 없다).
-BOX_KNOWN_SIZE = {f"/World/{name}": size for name, size, _ in CART_BOX_SPECS}
+BOX_KNOWN_SIZE = {f"/World/Box_{name}": size for name, size, _off, _m in CART_BOX_SPECS}
 
 # 사용자 설계(카트 양쪽 접근 재설계) - 카트 옆 standoff가 이제 "폭(Y) 방향 양쪽 2곳"이다.
 # CART_STANDOFF_DIST는 91번의 CART_STANDOFF_X와 완전히 동일한 계산이되, 카트의 길이가

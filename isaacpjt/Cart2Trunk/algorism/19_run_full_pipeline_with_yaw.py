@@ -104,7 +104,15 @@ def load_boxes_from_vision_json_with_yaw(path):
     axis-aligned bounding box(min/max) 대신 _oriented_footprint()의 변 길이로
     계산한다 - 회전된 박스에서도 정확한 크기를 낸다. 반환값: (Object3D 리스트,
     {box_id: source_yaw_deg} dict) - yaw는 Object3D/Box 스키마에 없는 필드라 별도로
-    반환한다."""
+    반환한다.
+
+    실제로 발생한 문제: 이 함수는 m01.load_boxes_from_vision_json()을 안 쓰고 vision
+    JSON을 독자적으로 파싱하는 복사본이라, m01 쪽에 나중에 추가된 rests_on_id
+    자동 판정(⑥ 픽업 순서 제약용 - 카트 위에서 다른 박스에 얹힌 박스는 먼저 못 집게
+    막는 로직)이 여기엔 반영이 안 돼 있었다 - 그래서 이 진입점으로 돌리면 맨 밑에
+    깔린 박스가 그대로 1번으로 나오는 문제가 재현됐다. m01._infer_rests_on_ids()를
+    그대로 재사용해서(로직 중복 방지 - AABB는 yaw와 무관하게 이미 정확하므로 회전
+    보정과 무관하게 그대로 쓸 수 있다) 같은 판정을 여기서도 적용한다."""
     data = json.loads(pathlib.Path(path).read_text())
 
     frame = data.get("coordinate_frame")
@@ -115,35 +123,43 @@ def load_boxes_from_vision_json_with_yaw(path):
             f"요청해야 함 (카메라 좌표계 그대로 쓰면 엉뚱한 자리에 배치됨)"
         )
 
-    boxes = []
+    parsed = []
+    box_aabbs = {}
     source_yaw_by_id = {}
     for entry in data.get("boxes", []):
         corners = entry["corners_m"]
         xs = [c[0] for c in corners]
         ys = [c[1] for c in corners]
         zs = [c[2] for c in corners]
+        x_min, x_max = min(xs), max(xs)
+        y_min, y_max = min(ys), max(ys)
+        z_min, z_max = min(zs), max(zs)
         # 중심 위치는 AABB 중점으로 계산해도 정확하다 - 회전된 직사각형도 자기 중심에
         # 대해 점대칭이라 AABB 역시 그 같은 중심에 대해 대칭이기 때문(크기만 부풀지,
         # 중심 좌표는 회전과 무관하게 그대로 맞다).
-        center_xyz = (
-            (min(xs) + max(xs)) / 2,
-            (min(ys) + max(ys)) / 2,
-            (min(zs) + max(zs)) / 2,
-        )
+        center_xyz = ((x_min + x_max) / 2, (y_min + y_max) / 2, (z_min + z_max) / 2)
         width, depth, yaw_deg = _oriented_footprint(corners)
-        height = max(zs) - min(zs)
+        height = z_max - z_min
         size_xyz = (width, depth, height)
         volume = size_xyz[0] * size_xyz[1] * size_xyz[2]
 
         box_id = str(entry["box_id"])
+        box_aabbs[box_id] = (x_min, x_max, y_min, y_max, z_min, z_max)
+        parsed.append((box_id, center_xyz, size_xyz, volume))
+        source_yaw_by_id[box_id] = yaw_deg
+
+    rests_on_by_id = m01._infer_rests_on_ids(box_aabbs)
+
+    boxes = []
+    for box_id, center_xyz, size_xyz, volume in parsed:
         boxes.append(Object3D(
             id=box_id,
             center_xyz=center_xyz,
             size_xyz=size_xyz,
             volume=volume,
             confidence=1.0,
+            rests_on_id=rests_on_by_id.get(box_id),
         ))
-        source_yaw_by_id[box_id] = yaw_deg
     return boxes, source_yaw_by_id
 
 
