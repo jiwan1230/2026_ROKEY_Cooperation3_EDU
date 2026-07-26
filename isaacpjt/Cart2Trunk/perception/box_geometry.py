@@ -502,6 +502,7 @@ def select_support_candidate(
     support_min_area_ratio: Optional[float] = None,
     max_support_area_ratio: Optional[float] = None,
     allow_plane_only_fallback: bool = False,
+    plane_only_bounds_margin_m: Optional[float] = None,
     debug: bool = False,
     debug_log: DebugLog = None,
 ) -> Optional[PlaneClusterCandidate]:
@@ -536,7 +537,20 @@ def select_support_candidate(
     0.21m로 나옴). 여러 박스가 하나의 큰 아래 박스를 나눠서 가리는 배치라면 이
     시나리오에 국한되지 않고 재현되는 일반적인 문제라, live 경로에는 아직 없는
     검증(오프라인 다중 시점 배치에서만 우선 적용 - 시점을 여러 번 합쳐 이미
-    노이즈에 강하다는 전제가 있어야 안전하다)으로 분리해 켠다."""
+    노이즈에 강하다는 전제가 있어야 안전하다)으로 분리해 켠다.
+
+    plane_only_bounds_margin_m(기본 None=비활성, 하위호환 유지)이 주어지면
+    plane_only_ranked 후보에 한해 추가 조건을 건다: ray-plane 교점이 그 후보
+    자신의 관측된 사각형 XY 범위(+margin) 안에 들어야 한다. 실측 확인(88.py 5개
+    적층 시나리오): allow_plane_only_fallback은 거리(ray_distance)만으로 순위를
+    매겨서, 특정 trial에서 진짜 부모(M2)가 아예 후보로 안 잡히면 전혀 무관한 다른
+    박스(M1 - 다른 부모 밑, 카트 반대편)의 평면이 "우연히 비슷한 ray_distance"라는
+    이유만으로 지지면으로 잘못 채택되는 사례가 있었다(실측: 서로 다른 위치의 두
+    자식(XS1, XS2)이 같은 trial에서 완전히 동일한 지지면 z값을 받음 - 사실은 둘
+    다 XS2의 진짜 부모(M2) 대신 M1으로 스킵 매칭된 것이었다). candidate 자신의
+    관측 범위 안에 교점이 있는지 보면 "위에 있는 척 하는 좁은 남의 박스"는
+    걸러지면서도, Base처럼 실제로 그 아래를 넓게 받치는 진짜 지지 박스는(자기
+    범위가 넓으므로) 그대로 통과한다."""
     top_corners = order_rectangle_corners(top.corners_3d.copy())
     down_direction = _normalize(down_direction)
     top_area = top.width * top.height
@@ -575,9 +589,20 @@ def select_support_candidate(
         if spread > max_ray_distance_spread_m:
             continue
 
+        intersections = top_corners + ray_distances[:, None] * down_direction[None, :]
+
+        if plane_only_bounds_margin_m is not None:
+            cand_corners_2d = candidate.corners_3d[:, :2]
+            cand_min = cand_corners_2d.min(axis=0) - plane_only_bounds_margin_m
+            cand_max = cand_corners_2d.max(axis=0) + plane_only_bounds_margin_m
+            within_bounds = np.all(
+                (intersections[:, :2] >= cand_min) & (intersections[:, :2] <= cand_max), axis=1
+            )
+            if not np.any(within_bounds):
+                continue
+
         plane_only_ranked.append((median_distance, spread, candidate))
 
-        intersections = top_corners + ray_distances[:, None] * down_direction[None, :]
         candidate_points = np.asarray(candidate.points, dtype=np.float64)
         if len(candidate_points) == 0:
             continue

@@ -118,6 +118,44 @@ STACKED_HEIGHT_PLAUSIBILITY_CEILING_M = float(
 # 한다는 물리적 사실로 바닥 후보를 아예 배제한다 - 이 데모의 가장 큰 박스(Large)
 # 높이(0.12m)보다는 넉넉하게, 카트 바닥까지의 실제 거리(~0.21m)보다는 확실히 작게.
 MAX_SUPPORT_RAY_DISTANCE_M = float(os.environ.get("CART2TRUNK_MAX_SUPPORT_RAY_DISTANCE_M", str(bg.MAX_RAY_DISTANCE_M)))
+# 실측 확인(88.py 5개 적층 시나리오): allow_plane_only_fallback이 거리만으로 순위를
+# 매겨서, 특정 trial에서 진짜 부모가 안 잡히면 카트 반대편의 무관한 박스로 스킵
+# 매칭되는 사례가 있었다(box_geometry.select_support_candidate 문서 참고) -
+# candidate 자신의 관측 범위 밖 교점은 후보에서 제외해 이를 막는다.
+PLANE_ONLY_BOUNDS_MARGIN_M = float(os.environ.get("CART2TRUNK_PLANE_ONLY_BOUNDS_MARGIN_M", "0.05"))
+
+# 88.cart_scan_holonomic.py 5개 적층(2단 피라미드) 시나리오에서 실측 확인: 박스가
+# Base+M1+M2+XS1+XS2(5개)+바닥으로 늘어나면서, RANSAC이 한 번의 검출 시도 안에서
+# 순회하는 평면 개수 상한(box_geometry.MAX_PLANES=12)을 다 쓰기 전에 작은 박스들
+# (M1/M2/XS1/XS2)까지 도달하지 못하는 경우가 잦아졌다(실측: 24회 시도 중 1회만
+# 관측). 벽/바닥 조각들(up_alignment 낮아 거절되지만 그 자체로 반복 횟수를 소모)이
+# 앞쪽 인덱스를 차지하는 구조라, 박스 개수가 늘수록 더 여유 있는 상한이 필요하다.
+MAX_PLANES = int(os.environ.get("CART2TRUNK_MAX_PLANES", str(bg.MAX_PLANES)))
+# 실측 확인(88.py 5개 적층 시나리오, margin_growth=0.015): 기본 DBSCAN_EPS_M(2.5cm)이
+# 희박한 "다리" 포인트 몇 개만으로도 M1의 실제 표면과 전혀 무관한, 우연히 같은 높이인
+# 다른 평평한 영역을 하나의 클러스터로 이어붙였다(60회 시도 중 86%가 실제 크기(0.19m)
+# 보다 눈에 띄게 큰 풋프린트로 나옴 - 지지면 매칭에서 XS1/XS2가 잘못된 부모로 스킵
+# 매칭되는 근본 원인 중 하나). 1.5cm로 좁히면 과대추정 비율이 86%->29%로 줄고
+# 평균 풋프린트도 실측값에 훨씬 가까워진다(더 좁히면(<=1cm) 이번엔 진짜 표면까지
+# 조각나서 검출 자체가 실패하기 시작함 - 1.5cm가 실측으로 확인한 최적 지점).
+DBSCAN_EPS_M = float(os.environ.get("CART2TRUNK_DBSCAN_EPS_M", "0.015"))
+
+# 5개 적층 시나리오 실측 확인: M1/M2(중간 높이, 옆에서 strafe로 보는 각도)의 RANSAC
+# 피팅 평면은 up_alignment가 0.03~0.83으로 기본 임계값(0.94)에 크게 못 미친다 -
+# 옆에서 보는 시점 특성상 윗면 점과 옆면 점이 섞여서 법선이 순수 수직에서 벗어난다.
+# Small(3개 시나리오의 가장 작은/가장 높은 박스)에서 이미 관측된 문제와 같은
+# 계열인데, 박스 개수가 늘고 중간 높이 박스까지 생기면서 더 자주 나타난다.
+# 낮추면 벽 등 진짜 옆면까지 섞여 들어올 위험이 있으므로 기본값은 그대로 두고,
+# 이 시나리오에서만 환경변수로 완화해서 쓴다.
+UP_FACING_NORMAL_DOT_MIN = float(
+    os.environ.get("CART2TRUNK_UP_FACING_NORMAL_DOT_MIN", str(bg.UP_FACING_NORMAL_DOT_MIN))
+)
+
+# 완화 패스(strict가 못 찾은 나머지 점에서 UP_FACING_NORMAL_DOT_MIN 기준으로
+# 추가 검출) 전용 max_planes - strict보다 훨씬 크게 잡아서, 한 번의 RANSAC 호출
+# 안에서 중간 크기 박스(strict가 놓친 M1/M2)부터 가장 작은 박스(XS1/XS2)까지
+# 순서대로 다 걷어낼 여유를 준다(자세한 이유는 _detect_boxes_once 참고).
+RELAXED_MAX_PLANES = int(os.environ.get("CART2TRUNK_RELAXED_MAX_PLANES", str(MAX_PLANES * 3)))
 
 
 def _debug_log(message: str) -> None:
@@ -140,15 +178,183 @@ def load_merged_cloud(path: Path) -> np.ndarray:
     return points
 
 
+def _remove_used_points(scene_pcd, used_points_list, tol_m=1e-4):
+    """scene_pcd에서 이미 다른 후보에 쓰인 점들을 뺀 나머지만 담은 새 PointCloud를
+    반환한다. 실측 확인(중요 버그): candidate.points는 float32로 저장되는데
+    scene_pcd는 float64라, 값이 실제로는 같아도(거리 0) 튜플 해시 집합으로 빼면
+    dtype이 달라 해시가 안 맞아서 대부분(실측: 6177개 중 556개만) 못 뺐다 -
+    KDTree 거리 기반(허용오차 이내는 같은 점으로 취급)으로 바꿔서 dtype과 무관하게
+    정확히 뺀다."""
+    used_pts = np.vstack([np.asarray(pts, dtype=np.float64) for pts in used_points_list])
+    used_pcd = o3d.geometry.PointCloud()
+    used_pcd.points = o3d.utility.Vector3dVector(used_pts)
+    used_tree = o3d.geometry.KDTreeFlann(used_pcd)
+
+    scene_pts = np.asarray(scene_pcd.points)
+    keep_mask = np.ones(len(scene_pts), dtype=bool)
+    for i, p in enumerate(scene_pts):
+        k, _idx, _dist2 = used_tree.search_radius_vector_3d(p, tol_m)
+        if k > 0:
+            keep_mask[i] = False
+
+    remaining = o3d.geometry.PointCloud()
+    remaining.points = o3d.utility.Vector3dVector(scene_pts[keep_mask])
+    return remaining
+
+
+RELAXED_TOP_Z_PERCENTILE = float(os.environ.get("CART2TRUNK_RELAXED_TOP_Z_PERCENTILE", "95"))
+# 실측 확인(88.cart_scan_holonomic.py 5개 적층 시나리오, M1 위에 XS1이 얹힌 경우):
+# UP_FACING_NORMAL_DOT_MIN을 0.78까지 완화하면 최대 ~38.7도 기울어진 평면도 "위를
+# 향한다"고 통과된다 - 진짜 박스 윗면(수평)이 아니라, M1의 노출 스트립과 그 위
+# XS1 가장자리를 동시에 스치는 기울어진(bridging) 평면이 이 관용도 안에서 RANSAC
+# 거리 임계값(1cm)을 만족해버릴 수 있다(실측: 풋프린트 대각선 ~0.21m에 걸쳐 높이가
+# 최대 11cm까지 변하는 후보가 반복적으로 나왔음). 단순 percentile 보정은 이걸
+# "옆면 오염"과 구분 못 해서 XS1의 높이로 통째로 잘못 수렴시켰다(실측: 40회 시도 중
+# 진짜 M1 높이(~0.11m)로 잡힌 건 단 1회뿐). 높이 히스토그램의 밀도 골짜기로 구분해
+# 보려 했지만, 두 표면이 옆면 점들로 완만하게 이어져 있어(뚜렷한 이봉 분포가
+# 아니라 연속된 경사면) 골짜기 자체가 안 잡혔다.
+# 대신 점들의 3D 공간적 연결성(DBSCAN)으로 구분한다: 진짜 같은 표면의 점들은
+# 서로 가깝게 붙어 있지만(반경 RELAXED_SPLIT_DBSCAN_EPS_M 이내), M1의 노출
+# 스트립과 XS1의 오버행 가장자리는 그 사이에 점이 거의 없는 수직 옆면(진짜 gap)으로
+# 분리돼 있어 서로 다른 클러스터가 된다 - 높이만 보는 방식과 달리 XY 연결성까지
+# 같이 보므로 "완만한 경사면처럼 보이지만 실제로는 끊긴" 경우도 잡아낸다. 여러
+# 클러스터로 갈리면 점이 가장 많은(=이 시야에서 가장 안정적으로 관측된, 보통은
+# 의도한 자기 자신의 표면) 클러스터만 남기고 나머지는 오염으로 보고 버린 뒤,
+# box_geometry.make_candidate()로 그 부분점들만으로 사각형을 다시 피팅한다
+# (풋프린트도 오염된 채로 부풀려져 있었으므로 같이 교정됨).
+RELAXED_SPLIT_DBSCAN_EPS_M = float(os.environ.get("CART2TRUNK_RELAXED_SPLIT_DBSCAN_EPS_M", "0.02"))
+RELAXED_SPLIT_MIN_POINTS = int(os.environ.get("CART2TRUNK_RELAXED_SPLIT_MIN_POINTS", "5"))
+# 실측 확인(위 DBSCAN 분리로도 못 잡던 진짜 원인): 이 기울어진 브리징 평면은 M1의
+# 노출 스트립과 XS1 오버행 가장자리 사이에 진짜 3D gap이 없다 - 깊이 카메라가
+# 전경/배경 경계(실루엣 엣지)에서 흔히 만드는 "flying pixel"(두 깊이값 사이를
+# 보간한 유령 점) 노이즈가 그 사이를 연속적으로 채워서, 공간적으로도 끊기지 않은
+# 완만한 경사면처럼 보인다 - DBSCAN이 못 가르는 이유. RANSAC 평면 거리 임계값
+# (기본 1cm)이 이 브리징을 허용할 만큼 느슨했다 - 실측: 임계값을 6mm로 좁히자
+# M1이 20회 시도 중 19회 자기 자신의 진짜 높이(-0.007m)로 정확히 분리되어 나왔다
+# (1cm일 때는 20회 중 7회만, 나머지는 XS1 높이로 오검출). strict pass(엄격한
+# up_facing_dot)는 원래도 문제없었으므로 건드리지 않고, 완화 패스에만 별도로
+# 더 좁은 임계값을 쓴다.
+RELAXED_PLANE_DISTANCE_THRESHOLD_M = float(
+    os.environ.get("CART2TRUNK_RELAXED_PLANE_DISTANCE_THRESHOLD_M", "0.006")
+)
+
+
+def _split_to_dominant_surface(candidate):
+    """DBSCAN으로 공간적으로 끊긴 클러스터를 분리하고, 가장 큰 클러스터만으로
+    사각형을 다시 피팅한 새 candidate를 반환한다. 클러스터가 하나뿐이면(오염이
+    없거나 완만한 꼬리뿐) 원본을 그대로 반환한다. 재피팅이 실패하면(점이 너무
+    적어지는 등) 원본을 그대로 반환한다 - 통째로 버리는 것보다 안전한 쪽을 택함."""
+    points = np.asarray(candidate.points, dtype=np.float64)
+    if len(points) < RELAXED_SPLIT_MIN_POINTS * 2:
+        return candidate
+
+    cluster_pcd = o3d.geometry.PointCloud()
+    cluster_pcd.points = o3d.utility.Vector3dVector(points)
+    labels = np.asarray(
+        cluster_pcd.cluster_dbscan(
+            eps=RELAXED_SPLIT_DBSCAN_EPS_M, min_points=RELAXED_SPLIT_MIN_POINTS
+        )
+    )
+    valid_labels = labels[labels >= 0]
+    if len(valid_labels) == 0:
+        return candidate
+    unique, counts = np.unique(valid_labels, return_counts=True)
+    if len(unique) <= 1:
+        return candidate  # 끊긴 클러스터가 없음 - 오염이 아니라 하나의 표면
+
+    dominant_label = unique[int(np.argmax(counts))]
+    dominant_points = points[labels == dominant_label]
+
+    dominant_pcd = o3d.geometry.PointCloud()
+    dominant_pcd.points = o3d.utility.Vector3dVector(dominant_points)
+    refit = bg.make_candidate(
+        candidate.candidate_id,
+        dominant_pcd,
+        candidate.normal,
+        debug=False,
+    )
+    if refit is None:
+        return candidate
+    return refit
+
+
+def _refine_relaxed_top_z(candidate, up_vector, percentile: float = RELAXED_TOP_Z_PERCENTILE) -> None:
+    """DBSCAN 분리(_split_to_dominant_surface) 이후에도 남아 있는, 진짜 옆면
+    오염(하나로 이어진 표면인데 가장자리 점들이 옆면까지 살짝 걸친 경우 - 실측:
+    Z가 최대 7cm까지 퍼짐)에 대한 잔여 보정. 옆면 오염은 점을 항상 실제 윗면보다
+    "아래"로만 끌어내리므로, 관측된 점들 중 상위 percentile 값이 RANSAC 평면
+    자체보다 더 믿을 만한 윗면 추정치다."""
+    pts = np.asarray(candidate.points, dtype=np.float64)
+    if len(pts) == 0:
+        return
+    heights = pts @ up_vector
+    corrected_top = float(np.percentile(heights, percentile))
+    current_top = float(np.dot(candidate.center, up_vector))
+    shift = corrected_top - current_top
+    if shift <= 0.0:
+        return
+    candidate.center = candidate.center + shift * up_vector
+    candidate.corners_3d = candidate.corners_3d + shift * up_vector
+    normal_up_component = float(np.dot(candidate.normal, up_vector))
+    candidate.plane_d = candidate.plane_d - shift * normal_up_component
+
+
 def _detect_boxes_once(scene_pcd, debug: bool = False) -> list[dict]:
     """box_top_extractor.py의 process_scene_cloud()와 같은 흐름을, 이미 전처리된
-    point cloud 하나에 대해 검출 1회(RANSAC 시드 1개) 실행한다."""
-    candidates = bg.detect_box_top_candidates_fixed_up(
+    point cloud 하나에 대해 검출 1회(RANSAC 시드 1개) 실행한다.
+
+    2단계(strict -> relaxed) 검출: 실측 확인(88.cart_scan_holonomic.py 5개 적층
+    시나리오) - UP_FACING_NORMAL_DOT_MIN을 전역으로 완화해서 한 번에 다 찾으려
+    하면(1단계 방식), 옆에서 보는 각도 때문에 옆면이 섞이기 쉬운 작고 높은 박스
+    (XS1/XS2)는 가끔 잡히지만, 이미 잘 잡히던 크고 안정적인 박스(Base/M1/M2)의
+    평면 피팅까지 같이 노이즈에 오염돼 시도마다 크기가 들쭉날쭉해지고, 지지면
+    매칭도 불안정해져 "공중에 뜬 박스"·"다른 박스와 겹치는 박스" 같은 기하학적으로
+    말이 안 되는 조합이 나왔다(물리 배치 자체는 서브밀리미터로 정확함을 직접
+    측정해 확인 - 검출 알고리즘만의 문제).
+    그래서 항상 엄격한 기준(box_geometry 기본값)으로 먼저 찾고, 거기서 찾은 점들을
+    빼고 남은 점에서만(원래 신뢰도 높게 잡히던 큰 박스들은 이미 다 골라져서
+    없으므로 서로 간섭할 여지가 없다) UP_FACING_NORMAL_DOT_MIN이 완화값일 때만
+    2단계로 추가 검출을 한 번 더 돌린다. 완화하지 않았으면(기존 3개 시나리오
+    등) 2단계는 그냥 안 돈다 - 동작 완전히 그대로 유지."""
+    strict_candidates = bg.detect_box_top_candidates_fixed_up(
         scene_pcd,
         up_vector=UP_VECTOR,
+        max_planes=MAX_PLANES,
+        dbscan_eps_m=DBSCAN_EPS_M,
         debug=debug,
         debug_log=_debug_log,
     )
+
+    relaxed_candidates = []
+    if UP_FACING_NORMAL_DOT_MIN < bg.UP_FACING_NORMAL_DOT_MIN and strict_candidates:
+        # 실측 확인(10개 시점 스캔으로 점이 많아진 뒤): 완화 패스를 "찾은 점 다시
+        # 빼고 재호출"하는 여러 라운드로 나누면, RANSAC이 한 라운드 안에서 우연히
+        # 어떤 표면의 일부만 잡았을 때 나머지 조각이 다음 라운드에서 별개의(더
+        # 작은) 후보로 다시 잡혀 하나의 실제 표면이 여러 개로 쪼개지는 부작용이
+        # 있었다(실측 확인). 대신 한 번의 호출 안에서 RANSAC 자체가 반복하는 평면
+        # 개수 상한(max_planes)을 훨씬 크게 줘서, 같은 반복 안에서 큰 박스부터
+        # 작은 박스까지 순서대로 다 걷어낼 기회를 준다 - 회차를 나누지 않으므로
+        # 조각남 문제가 없다.
+        remaining_pcd = _remove_used_points(scene_pcd, [c.points for c in strict_candidates])
+        if len(remaining_pcd.points) >= bg.MIN_PLANE_POINTS:
+            relaxed_candidates = bg.detect_box_top_candidates_fixed_up(
+                remaining_pcd,
+                up_vector=UP_VECTOR,
+                max_planes=RELAXED_MAX_PLANES,
+                up_facing_dot_min=UP_FACING_NORMAL_DOT_MIN,
+                plane_distance_threshold_m=RELAXED_PLANE_DISTANCE_THRESHOLD_M,
+                dbscan_eps_m=DBSCAN_EPS_M,
+                debug=debug,
+                debug_log=_debug_log,
+            )
+            relaxed_candidates = [_split_to_dominant_surface(c) for c in relaxed_candidates]
+            next_id = max(c.candidate_id for c in strict_candidates) + 1
+            for c in relaxed_candidates:
+                c.candidate_id = next_id
+                next_id += 1
+                _refine_relaxed_top_z(c, UP_VECTOR)
+
+    candidates = strict_candidates + relaxed_candidates
 
     # 카메라와의 거리(단일 시점 개념) 대신 높이(Z, 내림차순) - 맨 위 박스부터 처리.
     ordered_candidates = sorted(
@@ -170,6 +376,7 @@ def _detect_boxes_once(scene_pcd, debug: bool = False) -> list[dict]:
             max_support_area_ratio=MAX_SUPPORT_AREA_RATIO,
             max_ray_distance_m=MAX_SUPPORT_RAY_DISTANCE_M,
             allow_plane_only_fallback=True,
+            plane_only_bounds_margin_m=PLANE_ONLY_BOUNDS_MARGIN_M,
             debug=debug,
             debug_log=_debug_log,
         )
@@ -253,6 +460,11 @@ def _group_by_location(
     return [g["items"] for g in groups]
 
 
+def _box_height_m(box: dict) -> float:
+    zs = box["corners"][:, 2]
+    return float(zs.max() - zs.min())
+
+
 def _footprint_aabb(box: dict) -> tuple[float, float, float, float]:
     corners = box["top"].corners_3d
     return float(corners[:, 0].min()), float(corners[:, 0].max()), float(corners[:, 1].min()), float(corners[:, 1].max())
@@ -298,6 +510,58 @@ def _dedup_overlapping_footprints(
                 f"[multiview_scan] 후보 center_xy={np.round(_rect_center_xy(box), 3).tolist()} "
                 f"z={box_z:.3f} fill_ratio={box['top'].fill_ratio:.3f}: 같은 높이의 다른(더 신뢰도 높은) "
                 f"후보와 사각형이 겹쳐서 제외", flush=True,
+            )
+            continue
+        kept.append(box)
+    return kept
+
+
+# 5개 적층(2단 피라미드) 시나리오 실측 확인: 같은 물리적 박스(M1)가 시도 그룹에
+# 따라 서로 다른 높이(0.107m vs 0.062m)로 두 번 살아남는 경우가 있었다 - 둘 다
+# STACKED_HEIGHT_PLAUSIBILITY_CEILING_M보다는 작아서(둘 다 "그럴듯해서") 그
+# 안전장치로는 못 걸렀고, XY 중심 거리(0.004m)도 DETECTION_GROUP_RADIUS_M 이내라
+# _group_by_location() 단계에서부터 다른 그룹으로 안 묶였어야 정상인데, z_tolerance
+# (0.045m 차이)가 그룹 경계를 넘어서 별개 그룹으로 갈라졌다. 두 후보의 풋프린트
+# 면적은 둘 다 0.15x0.17 안팎으로 거의 같았다 - "위 박스는 항상 아래 박스보다
+# 작다"는 설계 규칙상 진짜 다른 두 박스가 겹쳐 있다면 풋프린트 크기가 달라야
+# 하므로, 같은 위치에서 풋프린트 면적까지 거의 같은(area_ratio_max 이내) 쌍은
+# 높이가 얼마나 다르든 같은 물리적 박스의 중복 오검출로 보고 fill_ratio 높은
+# 쪽만 남긴다.
+FOOTPRINT_AREA_RATIO_DUPLICATE_MAX = float(
+    os.environ.get("CART2TRUNK_FOOTPRINT_AREA_RATIO_DUPLICATE_MAX", "1.35")
+)
+
+
+def _footprint_area(box: dict) -> float:
+    x0, x1, y0, y1 = _footprint_aabb(box)
+    return max(0.0, x1 - x0) * max(0.0, y1 - y0)
+
+
+def _dedup_same_footprint_duplicates(
+    boxes: list[dict],
+    xy_radius_m: float,
+    area_ratio_max: float = FOOTPRINT_AREA_RATIO_DUPLICATE_MAX,
+) -> list[dict]:
+    kept: list[dict] = []
+    for box in sorted(boxes, key=lambda b: -float(b["top"].fill_ratio)):
+        cx, cy = _rect_center_xy(box)
+        area = _footprint_area(box)
+        is_dup = False
+        for k in kept:
+            kx, ky = _rect_center_xy(k)
+            dist = ((cx - kx) ** 2 + (cy - ky) ** 2) ** 0.5
+            karea = _footprint_area(k)
+            if dist < xy_radius_m and area > 0 and karea > 0:
+                ratio = max(area, karea) / min(area, karea)
+                if ratio <= area_ratio_max:
+                    is_dup = True
+                    break
+        if is_dup:
+            print(
+                f"[multiview_scan] 후보 center_xy={np.round((cx, cy), 3).tolist()} "
+                f"height={_box_height_m(box):.3f} fill_ratio={box['top'].fill_ratio:.3f}: "
+                "같은 위치에 풋프린트 면적까지 거의 같은 다른 후보가 있어 같은 물리적 "
+                "박스의 중복 검출로 보고 제외", flush=True,
             )
             continue
         kept.append(box)
@@ -478,6 +742,59 @@ def _split_hidden_same_size_stacks(
     return result
 
 
+# 실측 확인(사용자 지적: 완성된 PLY에서 Medium-Small 사이에 눈에 보이는 빈 공간이
+# 있음): 각 박스 자신의 윗면(top)은 이미 mm 단위로 정확하게 검출되는데, 그 박스를
+# 받치는 지지면(support)은 별도의 ray-cast/평면 재탐색으로 얻어지는 값이라 그
+# 부모 박스 자신의(마찬가지로 정확한) 윗면과 정확히 일치한다는 보장이 없다(실측:
+# M1-XS1 사이 1.0cm, M2-XS2 사이 2.4cm 틈). 이미 최종 선택된 5개 박스는 전부
+# 신뢰도 높게 검출됐으므로, 지지면을 다시 추정하지 않고 "이 박스 바로 아래, XY가
+# 겹치는 다른 검출된 박스들 중 가장 높은 것"의 윗면 z에 바닥을 직접 스냅해서 이
+# 틈을 원천적으로 없앤다 - 윗면(첫 4개 코너)은 그대로 두고 바닥(마지막 4개 코너)
+# 만 옮기므로, 이미 정확한 윗면 위치는 전혀 건드리지 않는다.
+MIN_PARENT_OVERLAP_RATIO = float(os.environ.get("CART2TRUNK_MIN_PARENT_OVERLAP_RATIO", "0.3"))
+
+
+def _snap_bottoms_to_detected_parents(
+    boxes: list[dict], min_overlap_ratio: float = MIN_PARENT_OVERLAP_RATIO
+) -> list[dict]:
+    for box in boxes:
+        box_top_z = float(box["corners"][:4, 2].mean())
+        box_aabb = _footprint_aabb(box)
+        best_parent = None
+        best_parent_top_z = -np.inf
+        for other in boxes:
+            if other is box:
+                continue
+            other_top_z = float(other["corners"][:4, 2].mean())
+            if other_top_z >= box_top_z - 0.01:
+                continue  # 이 박스보다 위/비슷한 높이면 부모가 될 수 없음
+            if _aabb_overlap_ratio(box_aabb, _footprint_aabb(other)) < min_overlap_ratio:
+                continue
+            if other_top_z > best_parent_top_z:
+                best_parent_top_z = other_top_z
+                best_parent = other
+        if best_parent is None:
+            continue
+
+        current_bottom_z = float(box["corners"][4:, 2].mean())
+        shift = best_parent_top_z - current_bottom_z
+        if abs(shift) < 1e-6:
+            continue
+
+        corners = box["corners"].copy()
+        corners[4:, 2] += shift
+        box["corners"] = corners.astype(np.float32)
+        completed = bg.generate_completed_box_surface(box["corners"])
+        if len(completed) > 0:
+            box["completed_points"] = completed.astype(np.float32)
+        print(
+            f"[multiview_scan] box_id={box['box_id']}: 바닥을 부모(box_id={best_parent['box_id']}) "
+            f"윗면에 스냅 (이동량={shift * 1000:.1f}mm)",
+            flush=True,
+        )
+    return boxes
+
+
 def detect_boxes_in_base_frame(
     points_base: np.ndarray,
     debug: bool = DEBUG_SUPPORT,
@@ -563,10 +880,6 @@ def detect_boxes_in_base_frame(
         # 높이가 STACKED_HEIGHT_PLAUSIBILITY_CEILING_M 이내인 인스턴스를 우선하고,
         # 그 안에서 fill_ratio로 타이브레이크한다(전부 이 상한을 넘으면 어쩔 수 없이
         # 기존처럼 fill_ratio 1위를 그대로 씀).
-        def _box_height_m(b: dict) -> float:
-            zs = b["corners"][:, 2]
-            return float(zs.max() - zs.min())
-
         plausible = [b for b in items if _box_height_m(b) <= STACKED_HEIGHT_PLAUSIBILITY_CEILING_M]
         pool = plausible if plausible else items
         best = max(pool, key=lambda b: (b["top"].fill_ratio, len(b["top"].points)))
@@ -610,6 +923,14 @@ def detect_boxes_in_base_frame(
             flush=True,
         )
 
+    before_footprint_dedup = len(selected)
+    selected = _dedup_same_footprint_duplicates(selected, group_radius_m)
+    if len(selected) < before_footprint_dedup:
+        print(
+            f"[multiview_scan] 같은 풋프린트 크기 중복 정리: {before_footprint_dedup} -> {len(selected)}개",
+            flush=True,
+        )
+
     before_split = len(selected)
     selected = _split_hidden_same_size_stacks(selected, scene_pcd, debug=debug)
     if len(selected) > before_split:
@@ -622,6 +943,8 @@ def detect_boxes_in_base_frame(
     selected.sort(key=lambda b: -float(b["top"].center[2]))
     for i, box in enumerate(selected):
         box["box_id"] = i
+
+    selected = _snap_bottoms_to_detected_parents(selected)
 
     print(f"[multiview_scan] 복원된 박스 {len(selected)}개", flush=True)
     return selected

@@ -34,6 +34,7 @@ Cart2Trunk 최종 시나리오(3PC ROS2 분산 시스템) 1단계 - 카트 옆�
 from isaacsim import SimulationApp
 
 import os
+import random
 
 HEADLESS = os.environ.get("HEADLESS", "0") == "1"
 _sim_app_config = {"headless": HEADLESS}
@@ -140,7 +141,6 @@ CART_BASKET_FLOOR_Z = 0.68
 # 같이 올린 것과 합쳐서 팔 base<->목표 거리를 충분히 줄이는 게 목표.
 EYE_HEIGHT_ABOVE_CART = 0.55
 SCAN_TILT_FROM_VERTICAL_DEG = 30.0  # 35.py의 SCAN_TILT_FROM_VERTICAL_DEG와 동일
-_scan_horizontal_offset = EYE_HEIGHT_ABOVE_CART * np.tan(np.radians(SCAN_TILT_FROM_VERTICAL_DEG))
 
 DEPTH_TOPIC = "/camera/depth"
 CAMERA_INFO_TOPIC = "/camera/camera_info"
@@ -528,83 +528,168 @@ cart_half_x = (cart_max[0] - cart_min[0]) / 2.0
 cart_half_y = (cart_max[1] - cart_min[1]) / 2.0
 print(f"[카트 bbox] min={cart_min} max={cart_max} center_xy={cart_center_xy} half_x={cart_half_x:.3f}", flush=True)
 
-# ---- 카트 안에 적층 박스 3개 배치 (84.py의 단순 낙하 패턴 + 35.py의 "같은 높이차 유지"
-# 낙하 트릭을 결합) ----
-# 시나리오: 큰 박스(Large)가 바닥에 깔리고, 그 위에 중간(Medium)+작은(Small) 박스가
-# Large의 윗면에 나란히(서로 위아래로 쌓이지 않고) 올라간 구조. "위 박스는 항상 아래
-# 박스보다 작다"는 전제는 지키되(Medium/Small on Large, Small on Medium은 아님),
-# 한 박스 위에 2개가 동시에 얹힌 형태를 인식해야 하는 케이스.
-# world.reset()이 아직 호출되기 전(587행)이라 이 시점의 world.step()은 물리 타임라인을
-# 진행시키지 않는다 - 그래서 아래 spawn_z 계산은 "낙하 후 정착 높이"가 아니라
-# "spawn 시점 기준 상대 높이차"다. Medium/Small의 spawn_z를 (Large spawn_z + Large
-# 높이 + margin)으로 잡으면, world.reset() 이후 셋 다 같은 중력으로 동시에 떨어지기
-# 시작해도 이 높이차가 낙하 내내 유지되다가 Large가 먼저 바닥에 닿아 멈추면 Medium/
-# Small은 남은 差만큼만 더 떨어져 그 위에 안착한다(35.crate_scan_setup.py의
-# STACK_TOP_NAME 낙하와 동일 원리, perception/SAME_SIZE_STACK_DETECTION_LOG.md 참고).
+# ---- 카트 안에 적층 박스 5개 배치 (2단 피라미드) ----
+# 84.py의 단순 낙하 패턴 + 35.py의 "같은 높이차 유지" 낙하 트릭을, 3개(Base+2개)
+# 구조에서 검증된 뒤 부모-자식 체인으로 일반화했다. 구조:
+#   Base(바닥, 최대) - M1(Base 뒤-왼쪽) - XS1(M1 뒤쪽에 적층)
+#                    - M2(Base 뒤-오른쪽) - XS2(M2 뒤쪽에 적층)
+# "위 박스는 항상 아래 박스보다 작다"는 각 부모-자식 관계마다 개별적으로 지킨다
+# (M1/M2끼리는 서로 위아래로 안 쌓이므로 크기 비교 대상이 아님).
+#
+# 3개짜리 구조에서 실측으로 확인한 3가지 설계 원칙을 그대로 재사용한다:
+#  1) (검출 0개 버그) 자식 박스를 부모 중심에 두면 부모 윗면이 거의 다 덮여서 부모 자체가
+#     통째로 검출 실패한다 - 자식을 부모의 뒤쪽(+Y) "절반"에만 둬서 앞쪽 절반을 항상
+#     깨끗하게 남긴다. 이 원칙을 M1/M2 자신에게도(XS1/XS2를 다는 부모 입장에서) 그대로
+#     적용한다.
+#  2) (평면 병합 버그) 같은 부모를 공유하는 형제 박스(M1-M2)는 간격 4cm 이상
+#     (DBSCAN_EPS_M=2.5cm보다 확실히 넓게)로 벌린다.
+#  3) (지지면 오검출 버그, D-5) 자식의 높이는 부모와의 높이차가
+#     DEDUP_OVERLAP_Z_TOLERANCE_M(0.05m)보다 확실히 크도록(margin 포함 0.06m 이상) 잡는다.
+#
+# world.reset()이 아직 호출되기 전이라 이 시점의 world.step()은 물리 타임라인을
+# 진행시키지 않는다 - 그래서 spawn_z 계산은 "낙하 후 정착 높이"가 아니라 "spawn 시점
+# 기준 상대 높이차"다. 자식의 spawn_z를 (부모 spawn_z + 부모 높이 + margin)으로 잡으면,
+# world.reset() 이후 전부 같은 중력으로 동시에 떨어지기 시작해도 이 높이차가 낙하 내내
+# 유지되다가 부모가 먼저 바닥/조상 위에 닿아 멈추면 자식은 남은 差만큼만 더 떨어져 그
+# 위에 안착한다(35.crate_scan_setup.py의 STACK_TOP_NAME 낙하와 동일 원리) - 조상까지
+# 거슬러 올라가는 체인이어도 각 단계가 "그 직속 부모"만 기준으로 계산되면 그대로 성립한다.
 box_material = PhysicsMaterial(
     prim_path="/World/Physics_Materials/box_material",
     static_friction=1.2, dynamic_friction=1.0, restitution=0.0,
 )
-CART_STACK_BASE_NAME = "Large"
-# Medium/Small을 Large 중심(dy=0)에 두면 Large 윗면 전체를 거의 다 덮어버려서, 남는
-# 노출부가 가장자리의 가는 조각(폭 <2cm)들뿐이 된다 - RANSAC 사각형 후보로 인식되기엔
-# 너무 얇아 MIN_BOX_SIDE_M(0.04m) 필터에 전부 걸려 Large 자체가 통째로 검출 실패한다
-# (실측 확인: 검출 0개). Medium/Small을 Large 뒤쪽(+Y) 절반에만 나란히 놓아서, 앞쪽
-# 절반(약 0.28x0.10m)을 아무것도 안 덮인 하나의 깨끗한 직사각형으로 남긴다.
-# 실측 확인(2차): 위처럼 앞쪽을 비워서 Large는 검출됐지만, Medium/Small 사이 간격이
-# 2cm(<DBSCAN_EPS_M=2.5cm)였고 높이차도 2cm(0.09 vs 0.07, PLANE_DISTANCE_THRESHOLD_M
-# =1cm와 비슷한 수준)라 RANSAC이 둘을 하나의 "타협 평면"으로 묶어서 fill_ratio가
-# 0.55~0.98로 요동치는 불안정한 병합 후보 1개로만 나왔다. 간격을 4cm(DBSCAN eps보다
-# 확실히 넓게)로 벌리고, 높이차도 4cm(Small을 0.07->0.05로 낮춤, 평면 거리 임계값보다
-# 확실히 크게)로 벌려서 RANSAC/DBSCAN이 둘을 독립된 평면·클러스터로 분리하게 한다.
-# 실측 확인(3차): XY 크롭(위 CART_SCAN_ROI_HALF_X/Y_M)으로 카트 벽 노이즈를 없애자
-# Large/Medium/Small 모두 자체적으로는 안정적으로 검출됐지만, Small의 검출 높이가
-# Large 윗면(노출 앞쪽 절반)에서 겨우 0.047m(=Small 자신의 높이 0.05m) 위였는데
-# 이게 DEDUP_OVERLAP_Z_TOLERANCE_M(0.05m, multiview_scan.py)보다 작아서
-# _dedup_overlapping_footprints()가 "Small은 사실 Large와 같은 높이에서 나온 다른
-# 조각"으로 잘못 판단해(Small 중심이 Large의 큰 사각형 범위 안에 들어가 있어서 AABB가
-# 겹침) 제거해버렸다 - 진짜 적층인데 오탐으로 지워진 것. DEDUP_OVERLAP_Z_TOLERANCE_M은
-# 다른 시나리오(RANSAC이 같은 평면을 여러 조각으로 쪼개는 문제)를 잡기 위한 범용
-# 값이라 여기서 낮추지 않고, 대신 Small의 높이를 0.05->0.07로 올려 Large와의 높이차를
-# 그 임계값보다 확실히 크게(0.07>0.05) 벌린다. Medium도 0.09->0.11로 같이 올려서
-# Medium-Small 간 높이차(RANSAC 평면 분리에 필요, 2차에서 확인한 원인)를 0.04m로
-# 유지한다(Medium은 Large의 0.12보다는 작아야 하므로 0.11까지만).
-CART_BOX_SPECS = [
-    # (name, size(x,y,z), Large 중심 기준 offset(dx,dy), mass_kg)
-    ("Large", (0.30, 0.22, 0.12), (0.0, 0.0), 1.2),
-    ("Medium", (0.13, 0.10, 0.11), (-0.075, 0.045), 0.6),
-    ("Small", (0.11, 0.09, 0.07), (0.085, 0.045), 0.3),
+# 실측 확인(5개 적층 배치 후): M1 쪽은 안정적으로 검출되는데 M2 쪽은 시도마다 높이가
+# 0.045~0.13m로 들쭉날쭉했다 - M2가 M1보다 작게 설계돼서(자기 노출 깨끗한 면적이
+# M1의 약 73% 수준) RANSAC이 안정적으로 잡을 만한 면적 자체가 더 작았던 것으로 보임.
+# M2/XS2를 M1/XS1과 비슷한 크기로 키워서 노출 면적을 넓힌다(그래도 Base보다는
+# 작음 - "위 박스는 항상 아래 박스보다 작다" 유지).
+# 실측 확인(10개 시점 스캔 이후에도): XS1/XS2는 2단 위(Base->M1/M2->XS)에 있는 가장
+# 작고 가장 높은 박스라 여전히 검출이 불안정했다(150회 시도해도 둘 다 동시에 잡힌
+# 적이 없었음). M2 때와 같은 방식으로 XS1/XS2 자체를 키워서 노출 면적에 여유를 준다
+# (그래도 M1/M2보다는 작음 - "위 박스는 항상 아래 박스보다 작다" 유지). XS가 커진
+# 만큼 M1/M2의 앞쪽 깨끗한 노출 띠가 줄지 않도록 M1/M2 깊이도 같이 늘리고, 그만큼
+# Base 깊이도 늘려서 뒤쪽 배치 여유를 유지한다.
+# 실측 확인(RANSAC 완화 패스 + 지지면 매칭 정확도 검증): XS1/XS2가 부모(M1/M2)와
+# 같은 시도에서 동시에 정확히 잡혀야 지지면이 올바르게 매칭되는데, M1/M2의 "깨끗한
+# 노출 띠"(XS가 덮지 않는 부분)가 좁을수록(현재 X축 마진 약 1.5cm) 그 확률이 낮아져
+# 지지면 매칭이 종종 한 단계 건너뛰어 높이를 과소평가한다(XS2 실측 0.06m -> 검출
+# 0.031m, 48% 오차). Base/M1/M2를 XS는 그대로 둔 채 대칭으로 키워서 노출 띠
+# 마진을 넓히면 이 문제가 완화되는지 확인하기 위해 마진 증가량을 환경변수로 뺀다
+# (기본값 0 = 기존 크기 그대로, 다른 실행에 영향 없음). "위 박스는 항상 아래
+# 박스보다 작다" 규칙은 XS는 안 키우고 Base/M1/M2만 키우므로 계속 유지된다.
+#
+# [실측 확인 - 단순 균등 확대의 버그] 처음엔 M1/M2/Base를 같은 오프셋을 유지한 채
+# 크기만 키웠는데, M1과 M2 사이 간격(오프셋 차 0.195m)은 그대로인 채 두 박스의
+# 반너비 합이 그 간격을 넘어서자(약 CART2TRUNK_MARGIN_GROWTH_M=0.03부터) 두
+# 박스가 물리적으로 겹쳐 스폰되어(0.06에서는 Base 자체도 겹침) 물리 안정화가
+# 완전히 깨졌다(검출 0/3). 그래서 오프셋과 Base 크기를 M1/M2 크기에 맞춰 매번
+# 재계산해서, 성장량과 무관하게 항상 최소 간격(_MIN_CLEARANCE_M)을 유지하도록
+# 고친다.
+# 기본값 0.015 = 실측 확인된 최소 안정 크기(box-size 탐색 결론): 물리적으로
+# 안정적으로 정착하면서(단계별 낙하+정착 도입 이후) 검출 위치 정확도가 가장
+# 크게 개선된 지점 - 더 키우면(>=0.03) 이 카트 내부 공간에서 형제 박스끼리
+# 충돌하거나 착지 충격에 자식 박스가 튕기는 새로운 물리 불안정이 나타난다.
+_MARGIN_GROWTH_M = float(os.environ.get("CART2TRUNK_MARGIN_GROWTH_M", "0.015"))
+# 실측 확인(growth=0.03): 2cm 여유로는 M1/M2가 각자 Base에 착지하면서 받는 충격만으로도
+# 서로 충돌해 크게 밀려날 수 있었다(단계별 정착 자체는 정상 동작 - 문제는 형제 박스
+# 사이 여유 부족). 환경변수로 빼서 필요시 더 넓힐 수 있게 한다.
+_MIN_CLEARANCE_M = float(os.environ.get("CART2TRUNK_MIN_CLEARANCE_M", "0.02"))
+_BASE_EDGE_MARGIN_M = 0.03
+
+
+def _grown(size_xy):
+    return (size_xy[0] + 2.0 * _MARGIN_GROWTH_M, size_xy[1] + 2.0 * _MARGIN_GROWTH_M)
+
+
+_m1_size = _grown((0.16, 0.16))
+_m2_size = _grown((0.15, 0.17))
+_m1_dx = -(_m1_size[0] / 2.0 + _MIN_CLEARANCE_M / 2.0)
+_m2_dx = +(_m2_size[0] / 2.0 + _MIN_CLEARANCE_M / 2.0)
+_base_half_x = max(
+    abs(_m1_dx) + _m1_size[0] / 2.0, abs(_m2_dx) + _m2_size[0] / 2.0
+) + _BASE_EDGE_MARGIN_M
+_base_half_y = max(0.07 + _m1_size[1] / 2.0, 0.07 + _m2_size[1] / 2.0) + _BASE_EDGE_MARGIN_M
+_base_size = (2.0 * _base_half_x, 2.0 * _base_half_y)
+
+# 실측 확인(CART2TRUNK_MARGIN_GROWTH_M 박스 크기 탐색 - 물리 버그 원인 규명): 크기만
+#키우고 질량은 고정해두면(면적당 밀도가 growth=0.015에서 이미 약 33% 낮아짐) 큰
+# 박스일수록 착지 충격에 더 쉽게 밀리는데, 그 위에 얹힐 자식(XS1/XS2)은 "부모와
+# 함께 동시에 자유낙하하다가 부모가 먼저 멈추면 남은 낙차만큼만 떨어져 안착"하는
+# 트릭(548행 설명)을 쓰므로 부모가 착지 중 옆으로 밀리면 자식은 이미 정해진(부모가
+# 밀리기 전) XY로 계속 떨어져 부모를 완전히 빗나간다 - 실측: growth=0.015에서
+# XS1이 스캔 시작 전(초기 정착 직후)부터 이미 Y로 12.6cm 밀려나 있었고(안정화
+# 스텝을 60->200으로 늘려도 동일 - 정착 시간 부족이 아니라 착지 충격 자체의
+# 문제), growth=0.03에서는 아예 카트 밖으로 튕겨나갔다. 면적이 커진 만큼 질량도
+# 같이 늘려서(밀도 고정) 원래 크기에서 검증됐던 충격 반응을 그대로 유지한다.
+_base_area_0 = 0.38 * 0.34
+_m1_area_0 = 0.16 * 0.16
+_m2_area_0 = 0.15 * 0.17
+_base_density = 1.8 / _base_area_0
+_m1_density = 0.7 / _m1_area_0
+_m2_density = 0.6 / _m2_area_0
+
+# 랜덤 배치 검증(사용자 요청): "더 큰 박스가 항상 더 작은 박스 아래에 깔린다"는
+# 적층 순서(Base>M1/M2>XS1/XS2)는 그대로 고정하고, 그 안에서 각 자식이 부모 위
+# 어디에 놓이는지(offset)만 매 시드마다 무작위로 바꿔서 이번에 고친 파이프라인이
+# 특정 배치 하나에만 맞춰진 게 아닌지 확인한다. CART2TRUNK_RANDOM_SEED가 없으면
+# (기본) 지금까지 실측 검증해온 고정 offset을 그대로 쓴다 - 기존 동작 불변.
+# 범위는 형제 박스 간 최소 간격(_MIN_CLEARANCE_M)과 Base/부모 가장자리 여유를
+# 침범하지 않도록 넉넉히 보수적으로 잡았다(M1/M2 dy는 Base 안에, XS dx/dy는
+# 부모 노출 스트립이 완전히 없어지지 않을 만큼만).
+_RANDOM_SEED = os.environ.get("CART2TRUNK_RANDOM_SEED")
+if _RANDOM_SEED is not None:
+    _rng = random.Random(int(_RANDOM_SEED))
+    _m1_dy = _rng.uniform(0.05, 0.09)
+    _m2_dy = _rng.uniform(0.05, 0.09)
+    _xs1_off = (_rng.uniform(-0.015, 0.015), _rng.uniform(0.0, 0.035))
+    _xs2_off = (_rng.uniform(-0.015, 0.015), _rng.uniform(0.0, 0.035))
+    print(f"[랜덤 배치] seed={_RANDOM_SEED} M1_dy={_m1_dy:.4f} M2_dy={_m2_dy:.4f} "
+          f"XS1_off={tuple(round(v,4) for v in _xs1_off)} XS2_off={tuple(round(v,4) for v in _xs2_off)}",
+          flush=True)
+else:
+    _m1_dy, _m2_dy = 0.07, 0.07
+    _xs1_off, _xs2_off = (0.0, 0.02), (0.0, 0.02)
+
+CART_BOX_TOPOLOGY = [
+    # (name, size(x,y,z), parent_name(None=바닥), 부모 중심 기준 offset(dx,dy), mass_kg)
+    ("Base", (*_base_size, 0.12), None, (0.0, 0.0), _base_density * _base_size[0] * _base_size[1]),
+    ("M1", (*_m1_size, 0.11), "Base", (_m1_dx, _m1_dy), _m1_density * _m1_size[0] * _m1_size[1]),
+    ("M2", (*_m2_size, 0.09), "Base", (_m2_dx, _m2_dy), _m2_density * _m2_size[0] * _m2_size[1]),
+    ("XS1", (0.13, 0.10, 0.07), "M1", _xs1_off, 0.25),
+    ("XS2", (0.12, 0.11, 0.06), "M2", _xs2_off, 0.22),
 ]
+print(
+    f"[박스 크기] CART2TRUNK_MARGIN_GROWTH_M={_MARGIN_GROWTH_M} -> "
+    + ", ".join(f"{n}={sz[0]:.3f}x{sz[1]:.3f}" for n, sz, *_r in CART_BOX_TOPOLOGY),
+    flush=True,
+)
 CART_BOX_DROP_HEIGHT_ABOVE_FLOOR = 0.10
 _CART_STACK_TOP_SPAWN_MARGIN_M = 0.05
-_cart_large_size = next(size for name, size, _off, _m in CART_BOX_SPECS if name == CART_STACK_BASE_NAME)
-_cart_large_spawn_z = CART_BASKET_FLOOR_Z + CART_BOX_DROP_HEIGHT_ABOVE_FLOOR
-for name, size, (dx, dy), mass_kg in CART_BOX_SPECS:
-    if name == CART_STACK_BASE_NAME:
-        spawn_z = _cart_large_spawn_z
-    else:
-        spawn_z = (
-            _cart_large_spawn_z
-            + _cart_large_size[2] / 2.0
-            + size[2] / 2.0
-            + _CART_STACK_TOP_SPAWN_MARGIN_M
-        )
-    DynamicCuboid(
-        prim_path=f"/World/Box_{name}",
-        name=name.lower(),
-        position=np.array([
-            cart_center_xy[0] + dx,
-            cart_center_xy[1] + dy,
-            spawn_z,
-        ]),
-        scale=np.array(size),
-        color=np.array([0.85, 0.55, 0.15]),
-        mass=mass_kg,
-        physics_material=box_material,
-    )
-print(f"[박스 배치] 카트 안에 적층 구조 {len(CART_BOX_SPECS)}개 낙하 예정 "
-      f"(바닥={CART_STACK_BASE_NAME}, 그 위에 Medium+Small 나란히): "
-      f"{[s[0] for s in CART_BOX_SPECS]}", flush=True)
+
+# 실측 확인(CART2TRUNK_MARGIN_GROWTH_M 박스 크기 탐색 - 물리 버그 근본 원인): 기존
+# 방식은 전체 5개를 한 번에 스폰하고 "부모와 자식이 동시에 자유낙하하다가 부모가
+# 먼저 멈추면 자식은 남은 낙차만큼만 더 떨어져 안착"하는 트릭(자식의 spawn_z를
+# 부모 spawn_z 기준 상대값으로 계산)에 의존했다 - 이 트릭은 "부모가 착지 중 옆으로
+# 안 밀린다"는 가정이 성립해야만 맞는데, 박스가 커질수록(질량을 면적에 비례해
+# 키워도 마찬가지 - 확인 완료) 착지 충격에 더 쉽게 밀리고, 자식은 이미 스폰 시점에
+# 고정된 XY로 계속 떨어지므로 부모가 밀리면 그대로 빗나간다(실측: growth=0.015에서
+# XS1이 초기 정착 직후부터 이미 12.6cm 밀려나 있었음, growth=0.03에서는 카트 밖으로
+# 튕겨나감). 그래서 부모-자식 관계를 depth 기준으로 "레벨"별로 나눠서, 레벨 하나를
+# 스폰하고 실제 물리로 정착시킨 뒤 그 실측 위치를 읽어와 다음 레벨(자식)의 스폰
+# 좌표로 쓴다 - 부모가 얼마나 밀리든 자식은 항상 부모의 "실제" 최종 위치 위에
+# 스폰되므로 이 문제 자체가 원천적으로 사라진다.
+_cart_box_levels = []
+_remaining_topology = list(CART_BOX_TOPOLOGY)
+_placed_names = set()
+while _remaining_topology:
+    level = [t for t in _remaining_topology if t[2] is None or t[2] in _placed_names]
+    if not level:
+        raise RuntimeError("CART_BOX_TOPOLOGY에 알 수 없는 parent_name이 있습니다 (순환 참조 의심).")
+    _cart_box_levels.append(level)
+    _placed_names.update(t[0] for t in level)
+    _remaining_topology = [t for t in _remaining_topology if t not in level]
+print(f"[박스 배치] 카트 안에 적층 구조 {len(CART_BOX_TOPOLOGY)}개, "
+      f"{len(_cart_box_levels)}단계로 나눠 순차 낙하+정착 예정: "
+      f"{[[t[0] for t in lvl] for lvl in _cart_box_levels]}", flush=True)
 
 STANDOFF_X = CHASSIS_HALF_WIDTH_EFFECTIVE + cart_half_x + STANDOFF_MARGIN
 print(f"[STANDOFF] {CHASSIS_HALF_WIDTH_EFFECTIVE:.3f}(섀시 반폭) + {cart_half_x:.3f}(카트 반폭) + "
@@ -744,8 +829,52 @@ def drive_to(target_x=None, target_y=None, target_yaw_deg=None, tolerance_xy=0.0
     return final_pos, final_yaw, not stalled
 
 
-step_hold(60)
-print("\n[안정화 완료]\n", flush=True)
+_STABILIZE_STEPS = int(os.environ.get("CART2TRUNK_STABILIZE_STEPS", "60"))
+_cart_box_xy_by_name = {}
+_cart_box_top_z_by_name = {}
+_cart_box_size_by_name = {}
+for _level_idx, _level in enumerate(_cart_box_levels):
+    for name, size, parent_name, (dx, dy), mass_kg in _level:
+        if parent_name is None:
+            parent_x, parent_y = cart_center_xy[0], cart_center_xy[1]
+            spawn_z = CART_BASKET_FLOOR_Z + CART_BOX_DROP_HEIGHT_ABOVE_FLOOR
+        else:
+            parent_x, parent_y = _cart_box_xy_by_name[parent_name]
+            spawn_z = (
+                _cart_box_top_z_by_name[parent_name] + size[2] / 2.0 + _CART_STACK_TOP_SPAWN_MARGIN_M
+            )
+        abs_x, abs_y = parent_x + dx, parent_y + dy
+        _cart_box_size_by_name[name] = size
+        DynamicCuboid(
+            prim_path=f"/World/Box_{name}",
+            name=name.lower(),
+            position=np.array([abs_x, abs_y, spawn_z]),
+            scale=np.array(size),
+            color=np.array([0.85, 0.55, 0.15]),
+            mass=mass_kg,
+            physics_material=box_material,
+        )
+    # 이 레벨만 실제 물리로 정착시킨 뒤, 다음 레벨(자식)이 쓸 "실제" 위치를 읽는다 -
+    # 부모가 착지 중 밀렸어도 자식은 그 실제 위치 위에 스폰되므로 안전하다.
+    step_hold(_STABILIZE_STEPS)
+    for name, size, *_r in _level:
+        prim = stage.GetPrimAtPath(f"/World/Box_{name}")
+        actual = np.array(prim.GetAttribute("xformOp:translate").Get())
+        _cart_box_xy_by_name[name] = (float(actual[0]), float(actual[1]))
+        _cart_box_top_z_by_name[name] = float(actual[2]) + size[2] / 2.0
+    print(
+        f"[박스 배치] {_level_idx}단계({[t[0] for t in _level]}) 정착 완료: "
+        + ", ".join(f"{n}=({_cart_box_xy_by_name[n][0]:.3f},{_cart_box_xy_by_name[n][1]:.3f})" for n, *_r in _level),
+        flush=True,
+    )
+print(f"\n[안정화 완료] (레벨당 {_STABILIZE_STEPS}스텝)\n", flush=True)
+
+if os.environ.get("CART2TRUNK_GT_DEBUG", "0") == "1":
+    print("[GT_DEBUG early] 초기 낙하/정착 직후 (스캔 전, world frame) ===", flush=True)
+    for _gte_name, _gte_size, _gte_parent, _gte_off, _gte_mass in CART_BOX_TOPOLOGY:
+        _gte_prim = stage.GetPrimAtPath(f"/World/Box_{_gte_name}")
+        _gte_world = np.array(_gte_prim.GetAttribute("xformOp:translate").Get())
+        print(f"[GT_DEBUG early] {_gte_name}: world={_gte_world.tolist()} parent={_gte_parent}", flush=True)
 
 # ================= 카메라 + link6<->camera 오프셋 측정 (32/12.py와 동일 패턴) =================
 # 사용자 지적: 이전 "hover 위치 XYZ로 이동 후 joint_6만 사후에 비틀기" 방식이 계속 발산했다
@@ -905,6 +1034,39 @@ snapshot(
 # 중앙(기준 위치)으로 돌아온 뒤 base_link를 딱 한 번만 측정해서 전체 누적
 # point cloud를 그 기준 프레임으로 한 번에 변환한다.
 CART_SCAN_STRAFE_Y_OFFSETS = [-0.28, -0.14, 0.0, 0.14, 0.28]
+# 실측 확인(5개 적층 시나리오, 사용자 지적) - 1차 시도: tilt(위에서 내려다보는
+# 각도)만 30도->14도로 바꾼 시점을 추가해봤지만, 개선 폭이 기대만큼 크지 않았다.
+# 이유: eye의 수평 오프셋이 항상 순수 +X 방향 하나뿐이라(look_at과 Y는 항상 같음),
+# tilt를 아무리 바꿔도 "카메라가 서 있는 좌우 방향(방위각, azimuth)"은 한 번도
+# 안 바뀌었던 것 - M1/M2는 서로 world X 방향으로 나란히 배치돼 있는데, strafe는
+# Y만 옮기므로 M1-M2를 좌우로 갈라보는 각도 자체가 항상 동일했다(같은 축의 시점
+# 반복, 사용자 지적).
+# 2차 설계: eye 오프셋에 azimuth(방위각) 성분을 추가한다 - 기존 "eye_x = center+
+# offset, eye_y = strafe_y"(azimuth=0, 순수 X옵셋)에 더해, eye_y를 strafe_y에서
+# 벌려서(offset*sin(azimuth)) 대각선 방향에서 보는 시점을 만든다. azimuth=0일 때는
+# 기존 공식과 완전히 같아서 검증된 baseline(정면 5곳, tilt=30도)은 그대로 유지하고,
+# M1/M2/XS가 있는 Y대(0, +0.14 부근)에서만 좌우 대각선(±20도) 시점을 추가한다 -
+# 카메라 위치만 회전시키는 것이라(reach 거리는 baseline과 동일) IK 문제 재발 위험도
+# tilt 변경보다 낮다.
+# 실측 확인(3차, 사용자 지적: "가까운 쪽 Medium/Small이 붕 떠있다"): M1은 대각선
+# 시점 덕에 XS1 가장자리 너머로 설계한 노출 띠(5cm)보다 훨씬 넓게(관측: 14cm까지)
+# "돌아서 보이는" 효과를 얻는데, M2는 여전히 설계한 5cm 띠만큼만 잡혔다 - 원본
+# point cloud 자체는 M2 쪽이 오히려 더 촘촘하고 깨끗했으므로(직접 측정 확인)
+# 데이터 부족이 아니라 시야각 다양성 부족이 원인이다. M2(dx=+0.105)가 M1(dx=-0.09)
+# 보다 카메라가 접근하는 +X 방향에 더 가까워서, 같은 물리적 eye 이동량이라도 M2
+# 기준으로는 상대적으로 더 작은 각도 변화(패럴랙스)만 만든다 - 그래서 같은 ±20도로는
+# XS2 가장자리 너머를 "돌아서 보는" 효과가 M1만큼 안 났다. M2가 있는 각도 폭을
+# 더 넓혀서(±20도->±20/35도) 부족한 패럴랙스를 보충한다.
+CART_SCAN_AZIMUTH_DIAGONAL_Y_OFFSETS = [0.0, 0.14]
+CART_SCAN_AZIMUTH_DIAGONAL_DEG = [-35.0, -20.0, 20.0, 35.0]
+CART_SCAN_VIEWPOINTS = (
+    [(SCAN_TILT_FROM_VERTICAL_DEG, y_offset, 0.0) for y_offset in CART_SCAN_STRAFE_Y_OFFSETS]
+    + [
+        (SCAN_TILT_FROM_VERTICAL_DEG, y_offset, az_deg)
+        for y_offset in CART_SCAN_AZIMUTH_DIAGONAL_Y_OFFSETS
+        for az_deg in CART_SCAN_AZIMUTH_DIAGONAL_DEG
+    ]
+)
 CART_SCAN_ROI_MAX_HEIGHT_M = 0.40  # CART_BASKET_FLOOR_Z 위로 이만큼까지만(카트 손잡이/배경 배제)
 # 적층 시나리오 실측 확인(중요 버그): 기존 XY 크롭은 cart_min/max(카트 바깥쪽 bbox,
 # 철망 벽/테두리까지 포함)에 마진을 "바깥쪽으로" 더한 범위라 카트
@@ -918,16 +1080,26 @@ CART_SCAN_ROI_MAX_HEIGHT_M = 0.40  # CART_BASKET_FLOOR_Z 위로 이만큼까지�
 # 벽(cart_half_x=0.300, cart_half_y=0.448)보다는 확실히 안쪽인 반경으로 크롭하면
 # 벽이 아예 안 들어와서 문제가 사라진다(오프라인 재현으로 확인: 5회 연속 시도 중
 # 4~5회 Medium/Small 모두 fill_ratio 0.95+ 로 안정적으로 검출).
-CART_SCAN_ROI_HALF_X_M = 0.22
-CART_SCAN_ROI_HALF_Y_M = 0.22
+# 5개 적층(2단 피라미드)로 늘리면서 Base 자체가 커졌다(반폭 0.19m, 반깊이 0.16m) -
+# 카트 벽(0.300/0.448)보다는 여전히 확실히 안쪽이면서, Base 가장자리에 여유(margin
+# 0.03~0.06m)를 더 주기 위해 0.22->0.24로 소폭 확장.
+# 실측 확인(CART2TRUNK_MARGIN_GROWTH_M 박스 크기 탐색): ROI를 고정값(0.24)으로
+# 두면 Base가 그보다 커지는 순간(약 growth=0.02부터) ROI 크롭이 Base 가장자리를
+# 잘라내서 검출 오차가 커진다 - Base 실제 반폭/반깊이(_base_half_x/_base_half_y)에
+# 맞춰 자동으로 따라가게 한다.
+CART_SCAN_ROI_HALF_X_M = _base_half_x + 0.03
+CART_SCAN_ROI_HALF_Y_M = _base_half_y + 0.03
 
 OPTICAL_TO_USD_CAMERA_AXES = np.diag([1.0, -1.0, -1.0])
 
 accumulated_world_points = []
 
-for i, y_offset in enumerate(CART_SCAN_STRAFE_Y_OFFSETS):
+for i, (tilt_deg, y_offset, azimuth_deg) in enumerate(CART_SCAN_VIEWPOINTS):
     strafe_y = cart_center_xy[1] + y_offset
-    drive_to(target_x=target_xy[0], target_y=strafe_y, label=f"스캔 위치 {i}(y_offset={y_offset:+.2f})")
+    drive_to(
+        target_x=target_xy[0], target_y=strafe_y,
+        label=f"스캔 위치 {i}(tilt={tilt_deg:.0f}deg,y_offset={y_offset:+.2f},az={azimuth_deg:+.0f}deg)",
+    )
 
     # [설계 변경 - 사용자 지적] 원래는 매 시점마다 관절을 초기 자세로 리셋(보간
     # 이동)한 뒤 처음부터 다시 350스텝 수렴시켰다(IK 오차가 시점을 거칠수록
@@ -935,22 +1107,28 @@ for i, y_offset in enumerate(CART_SCAN_STRAFE_Y_OFFSETS):
     # 되돌렸다가 다시 스캔 자세로 이동"하는 불필요한 왕복 동작으로 보여서
     # 부자연스럽다는 지적을 받았다.
     #
-    # 각 시점의 목표(target_pos/target_quat)는 "베이스 기준 상대 자세"로 보면
-    # 거의 동일하다 - look_at이 strafe_y를 그대로 따라가는 순수 평행이동 관계라,
-    # 팔의 물리적 도달 거리 문제(리프트 높이/EYE_HEIGHT 조정으로 이미 해결, 3mm
-    # 수렴)만 없었다면 애초에 관절이 시점마다 크게 바뀔 이유가 없었다. 그래서
-    # 팔을 리셋하지 않고 이전 시점에서 수렴된 자세를 그대로 이어받는다 - 베이스가
-    # strafe로 이동하는 동안 팔은 가만히 있다가, 도착 후 아주 짧게만(이미 거의
-    # 맞는 자세이므로) 미세 조정한다. 첫 시점(i==0)만 초기 자세에서 출발하므로
-    # 조금 더 긴 스텝 예산을 준다.
+    # 같은 (tilt, azimuth) 조합 안에서는 목표(target_pos/target_quat)가 "베이스
+    # 기준 상대 자세"로 보면 거의 동일하다 - look_at이 strafe_y를 그대로 따라가는
+    # 순수 평행이동 관계라, 팔의 물리적 도달 거리 문제(리프트 높이/EYE_HEIGHT
+    # 조정으로 이미 해결, 3mm 수렴)만 없었다면 애초에 관절이 시점마다 크게 바뀔
+    # 이유가 없었다. 그래서 팔을 리셋하지 않고 이전 시점에서 수렴된 자세를 그대로
+    # 이어받는다 - 베이스가 strafe로 이동하는 동안 팔은 가만히 있다가, 도착 후
+    # 아주 짧게만(이미 거의 맞는 자세이므로) 미세 조정한다. 다만 tilt/azimuth
+    # 자체가 바뀌는 시점(첫 시점 포함)은 목표 자세가 실제로 크게 달라지므로
+    # 처음부터 다시 충분한 스텝을 준다.
+    horizontal_offset_i = EYE_HEIGHT_ABOVE_CART * np.tan(np.radians(tilt_deg))
+    azimuth_rad_i = np.radians(azimuth_deg)
     scan_eye_i = np.array([
-        cart_center_xy[0] + _scan_horizontal_offset,
-        strafe_y,
+        cart_center_xy[0] + horizontal_offset_i * np.cos(azimuth_rad_i),
+        strafe_y + horizontal_offset_i * np.sin(azimuth_rad_i),
         CART_BASKET_FLOOR_Z + EYE_HEIGHT_ABOVE_CART,
     ])
     scan_look_at_i = np.array([cart_center_xy[0], strafe_y, CART_BASKET_FLOOR_Z])
     target_pos, target_quat = lookat_to_link6_target(scan_eye_i, scan_look_at_i)
-    move_steps = 350 if i == 0 else 90
+    is_new_pose_family = (i == 0) or (
+        (tilt_deg, azimuth_deg) != CART_SCAN_VIEWPOINTS[i - 1][0::2]
+    )
+    move_steps = 350 if is_new_pose_family else 90
     move_link6(target_pos, steps=move_steps, label=f"스캔 위치 {i} 자세 수렴", orientation=target_quat)
 
     # 실측 확인(중요 버그): 여기서 순수 world.step()만 20번 돌리면 set_lift_height()가
@@ -993,7 +1171,8 @@ for i, y_offset in enumerate(CART_SCAN_STRAFE_Y_OFFSETS):
     )
     pts_world_i = pts_world_i[keep]
     accumulated_world_points.append(pts_world_i)
-    print(f"[카트 스캔 {i}] y_offset={y_offset:+.2f} world_points={len(pts_world_i)}", flush=True)
+    print(f"[카트 스캔 {i}] tilt={tilt_deg:.0f}deg y_offset={y_offset:+.2f} az={azimuth_deg:+.0f}deg "
+          f"world_points={len(pts_world_i)}", flush=True)
 
 # ================= 3. 기준 위치(중앙)로 복귀 + base_link 기준 변환/저장 =================
 drive_to(target_x=target_xy[0], target_y=cart_center_xy[1], label="스캔 기준 위치(중앙) 복귀")
@@ -1016,8 +1195,22 @@ merged_base_points = (R_base.T @ (merged_world_points - base_pos_final).T).T.ast
 scan_cache_path = PERCEPTION_DIR / "scan_cache" / "merged_cart_scan.npy"
 scan_cache_path.parent.mkdir(parents=True, exist_ok=True)
 np.save(scan_cache_path, merged_base_points)
-print(f"[카트 스캔] {len(CART_SCAN_STRAFE_Y_OFFSETS)}개 시점 누적, 총 {len(merged_base_points)}포인트 "
+print(f"[카트 스캔] {len(CART_SCAN_VIEWPOINTS)}개 시점 누적, 총 {len(merged_base_points)}포인트 "
       f"-> {scan_cache_path}", flush=True)
+
+# 박스 크기 탐색(CART2TRUNK_MARGIN_GROWTH_M 반복 실험)용 실측 정답 - 검출 결과와
+# 직접 대조하기 위해 각 박스의 실제 base_link 좌표를 남긴다. 끄면(기본) 기존 동작과
+# 완전히 동일 - 이후 단계(ROS2 브리지 등)까지 그대로 이어진다.
+if os.environ.get("CART2TRUNK_GT_DEBUG", "0") == "1":
+    print("\n[GT_DEBUG] 각 박스 실측 위치 (base_link 프레임 변환) ===", flush=True)
+    for _gt_name, _gt_size, _gt_parent, _gt_off, _gt_mass in CART_BOX_TOPOLOGY:
+        _gt_prim = stage.GetPrimAtPath(f"/World/Box_{_gt_name}")
+        _gt_world = np.array(_gt_prim.GetAttribute("xformOp:translate").Get())
+        _gt_base = R_base.T @ (_gt_world - base_pos_final)
+        print(f"[GT_DEBUG] {_gt_name}: base_frame_center={_gt_base.tolist()} "
+              f"top_z={_gt_base[2] + _gt_size[2] / 2.0:.4f} size={_gt_size} parent={_gt_parent}", flush=True)
+    simulation_app.close()
+    raise SystemExit(0)
 
 # ================= 4. base_to_camera_transform.json 저장 + ROS2 카메라 브리지 연결 =================
 # (레거시 단일 프레임 경로용 - box_top_extractor.py가 그대로 읽을 수 있도록 유지.
