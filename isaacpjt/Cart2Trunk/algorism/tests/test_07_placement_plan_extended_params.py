@@ -38,18 +38,19 @@ def test_allow_rotation_false_skips_rotation_retry():
 
 def test_ceiling_margin_override_is_respected():
     """ceiling_margin을 주면 15_overhead_clearance_check.OVERHEAD_CLEARANCE
-    기본값(0.20m) 대신 이 값이 쓰여야 한다."""
-    trunk = Trunk(width=1.0, depth=1.0, height=0.35)  # 기본 0.2m 여유로는 0.2m 박스가 빠듯
+    기본값(그리퍼 실측 0.12m + 안전 마진 0.03m = 0.15m, 7/25 갱신) 대신 이
+    값이 쓰여야 한다."""
+    trunk = Trunk(width=1.0, depth=1.0, height=0.35)
     state = ExtremePointState()
-    box = Box("A", width=0.2, depth=0.2, height=0.2)  # z=0에 놓으면 남는 여유 0.15m
+    box = Box("A", width=0.2, depth=0.2, height=0.25)  # z=0에 놓으면 남는 여유 0.10m
 
-    # 기본 ceiling_margin(0.20m)으로는 여유(0.15m) 부족 -> 실패
+    # 기본 ceiling_margin(0.15m)으로는 여유(0.10m) 부족 -> 실패
     plan_default = place_one_box(box, trunk, state, order=1)
     assert plan_default is None
 
-    # ceiling_margin=0.10으로 낮추면 통과해야 함
+    # ceiling_margin=0.05로 낮추면 통과해야 함
     state2 = ExtremePointState()
-    plan_relaxed = place_one_box(box, trunk, state2, order=1, ceiling_margin=0.10)
+    plan_relaxed = place_one_box(box, trunk, state2, order=1, ceiling_margin=0.05)
     assert plan_relaxed is not None
 
 

@@ -34,14 +34,16 @@ def test_allow_rotation_false_is_threaded_through():
 
 
 def test_ceiling_margin_is_threaded_through():
+    # 기본 ceiling_margin(그리퍼 실측 0.12m + 안전 마진 0.03m = 0.15m, 7/25 갱신)으로는
+    # 남는 여유(0.10m)가 부족해 실패하고, 더 작은 값으로 완화하면 통과해야 한다.
     trunk = Trunk(width=1.0, depth=1.0, height=0.35)
-    boxes = [Box("A", width=0.2, depth=0.2, height=0.2)]
+    boxes = [Box("A", width=0.2, depth=0.2, height=0.25)]
 
     plans_default, unloadable_default = generate_loading_plan(boxes, trunk)
     assert len(plans_default) == 0
     assert len(unloadable_default) == 1
 
-    plans_relaxed, _ = generate_loading_plan(boxes, trunk, ceiling_margin=0.10)
+    plans_relaxed, _ = generate_loading_plan(boxes, trunk, ceiling_margin=0.05)
     assert len(plans_relaxed) == 1
 
 

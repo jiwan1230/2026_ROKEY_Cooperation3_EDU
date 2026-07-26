@@ -5,9 +5,10 @@ test_15_overhead_clearance_check.py
 배경: 로봇이 아직 연결 전이라 실제 그리퍼 충돌 여부는 모르지만, 사용자가 첨부한
 그림(로봇 팔이 트렁크 천장에 걸리는 상황)을 미리 대비하기 위해 추가함. 저희
 알고리즘이 정밀한 IK/충돌검사를 대신하는 게 아니라(그건 나중에 모션플래너 역할),
-"박스 윗면과 트렁크 천장 사이 최소 0.2m는 비워야 한다"는 단순하고 보수적인 안전
-마진만 하드 컷으로 확인한다. z=0(바닥)이든 z>0(2층)이든 모든 후보에 똑같이 적용됨
-(키 큰 박스는 바닥에 놓아도 천장에 가까울 수 있어서).
+"박스 윗면과 트렁크 천장 사이 최소 0.15m는 비워야 한다"(그리퍼 실측 0.12m +
+안전 마진 0.03m, 7/25 갱신)는 단순하고 보수적인 안전 마진만 하드 컷으로
+확인한다. z=0(바닥)이든 z>0(2층)이든 모든 후보에 똑같이 적용됨(키 큰 박스는
+바닥에 놓아도 천장에 가까울 수 있어서).
 """
 import sys, pathlib
 from importlib import import_module
@@ -29,7 +30,7 @@ OVERHEAD_CLEARANCE = _m15.OVERHEAD_CLEARANCE
 
 
 def test_rejects_when_gap_smaller_than_clearance():
-    """트렁크 높이 0.25m에 박스 높이 0.15m면, 남는 여유는 0.10m라 0.2m 기준 미달 -> 거부."""
+    """트렁크 높이 0.25m에 박스 높이 0.15m면, 남는 여유는 0.10m라 0.15m 기준 미달 -> 거부."""
     trunk = Trunk(width=1.0, depth=1.0, height=0.25)
     box = Box("Small", width=0.3, depth=0.2, height=0.15)
     assert has_overhead_clearance(0.0, box, trunk) is False
@@ -46,27 +47,27 @@ def test_applies_to_stacked_candidates_too():
     """z>0(2층) 후보도 똑같이 확인 - 쌓인 위치에서 천장까지 남는 여유로 판단."""
     trunk = Trunk(width=1.0, depth=1.0, height=0.5)
     box = Box("Blue", width=0.1, depth=0.1, height=0.15)
-    # z=0.2에 놓으면 위쪽 끝은 0.35, 남는 여유는 0.5-0.35=0.15m -> 0.2m 미달로 거부
-    assert has_overhead_clearance(0.2, box, trunk) is False
+    # z=0.25에 놓으면 위쪽 끝은 0.40, 남는 여유는 0.5-0.40=0.10m -> 0.15m 미달로 거부
+    assert has_overhead_clearance(0.25, box, trunk) is False
     # z=0.1에 놓으면 위쪽 끝은 0.25, 남는 여유는 0.5-0.25=0.25m -> 통과
     assert has_overhead_clearance(0.1, box, trunk) is True
 
 
 def test_boundary_exactly_at_clearance_is_valid():
-    """회귀 방지 - 여유가 정확히 0.2m면(경계값) 통과해야 한다 (부동소수점 여유값 확인)."""
-    trunk = Trunk(width=1.0, depth=1.0, height=0.35)
-    box = Box("unit", width=0.2, depth=0.2, height=0.15)  # 0.35-0.15=0.20 정확히 경계
+    """회귀 방지 - 여유가 정확히 0.15m면(경계값) 통과해야 한다 (부동소수점 여유값 확인)."""
+    trunk = Trunk(width=1.0, depth=1.0, height=0.30)
+    box = Box("unit", width=0.2, depth=0.2, height=0.15)  # 0.30-0.15=0.15 정확히 경계
     assert has_overhead_clearance(0.0, box, trunk) is True
 
 
 def test_place_one_box_reports_no_placement_when_no_overhead_clearance_anywhere():
     """
-    통합 테스트: 트렁크 전체가 낮아서(높이 0.25m) 바닥에 놓아도 여유가 0.2m 미달인
+    통합 테스트: 트렁크 전체가 낮아서(높이 0.25m) 바닥에 놓아도 여유가 0.15m 미달인
     박스는, 자리가 물리적으로 남아있어도 place_one_box()가 배치하지 않아야 한다.
     """
     trunk = Trunk(width=1.0, depth=1.0, height=0.25)
     state = ExtremePointState()
-    box = Box("TooTallForClearance", width=0.2, depth=0.2, height=0.15)  # 0.25-0.15=0.10 < 0.2
+    box = Box("TooTallForClearance", width=0.2, depth=0.2, height=0.15)  # 0.25-0.15=0.10 < 0.15
 
     plan = place_one_box(box, trunk, state, order=1)
 
