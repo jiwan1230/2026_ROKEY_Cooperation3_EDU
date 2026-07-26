@@ -160,6 +160,43 @@ def score_candidate(x: float, y: float, z: float, box: "Box", trunk,
     return height_term - contact_term - wall_a_term - wall_bc_term, touches  # 낮을수록 좋은 자리
 
 
+# "개수 우선" 모드(08_unloadable_reason.generate_loading_plan(mode="count_first"))용
+# 가중치 - 입구 우대(WALL_A/BC)는 완전히 제거. 새 영역을 넓히는 데는 큰 페널티를
+# 줘서, 이미 쓰는 영역 안에 채워 넣는 걸 최우선으로 한다.
+COUNT_FIRST_HEIGHT_WEIGHT = 1.0
+COUNT_FIRST_FOOTPRINT_GROWTH_WEIGHT = 5.0
+
+
+def score_count_first(x: float, y: float, z: float, box: "Box", trunk,
+                       placed: List["PlacedBox"]) -> Tuple[float, int]:
+    """
+    "개수 우선" 모드 전용 점수 함수 (원래 industry_scenarios/scenario2_warehouse_
+    density.py의 score_density_first였던 걸 실제 운용 모드로 승격).
+
+    지금까지 놓인 박스들이 차지한 바운딩 영역(x/y 최대 범위)을 이 후보가 얼마나
+    더 밖으로 넓히는지를 점수의 핵심으로 삼는다 - 0이면 "이미 쓰던 영역 안에
+    딱 맞게 채워 넣음"(밀도 최댓값), 클수록 새 빈 영역을 여는 것(밀도 손해).
+
+    [접촉면 가중치 대신 이 방식을 쓰는 이유] 처음엔 접촉면(count_touching_faces)
+    가중치를 올리는 방식을 시도했는데, ⑰(마진)가 벽/박스 어디에도 딱 붙는 자리를
+    금지해서 접촉면이 거의 항상 0~1로 고정돼버려 후보를 구분하는 신호가 안
+    됐다(실측 확인). footprint growth는 마진이 있어도 "얼마나 가까운지"가 아니라
+    "새 영역을 여는지 아닌지"를 보므로 margin 유무와 무관하게 항상 유효하다.
+    """
+    touches = count_touching_faces(x, y, z, box, trunk, placed)
+    if placed:
+        used_max_x = max(p.x_range[1] for p in placed)
+        used_max_y = max(p.y_range[1] for p in placed)
+    else:
+        used_max_x = 0.0
+        used_max_y = 0.0
+    growth_x = max(0.0, (x + box.width) - used_max_x)
+    growth_y = max(0.0, (y + box.depth) - used_max_y)
+    footprint_growth_term = COUNT_FIRST_FOOTPRINT_GROWTH_WEIGHT * (growth_x + growth_y)
+    height_term = COUNT_FIRST_HEIGHT_WEIGHT * (z / trunk.height)
+    return height_term + footprint_growth_term, touches
+
+
 if __name__ == "__main__":
     _m02 = import_module("02_trunk_space_state")
     Trunk = _m02.Trunk

@@ -67,3 +67,22 @@ def test_multiple_boxes_resting_on_same_box_still_prefer_larger_volume_between_t
 
     assert order[-1].id == "Cart_Green"  # Green은 항상 맨 마지막(맨 아래라서 제일 늦게 집힘)
     assert [b.id for b in order[:2]] == ["Cart_Blue2", "Cart_Blue1"]  # 둘 사이에선 부피 큰 Blue2 먼저
+
+
+def test_mode_count_first_sorts_ascending():
+    """mode="count_first"면 부피 오름차순(작은 것부터) - 큰 거 우선(large_first, 기본값)과 반대."""
+    boxes = [Box("Small", 0.3, 0.2, 0.15), Box("Large", 0.5, 0.35, 0.3), Box("Medium", 0.4, 0.3, 0.25)]
+    order = decide_loading_order(boxes, mode="count_first")
+    assert [b.id for b in order] == ["Small", "Medium", "Large"]
+
+
+def test_mode_count_first_still_respects_pickup_constraint():
+    """count_first 모드에서도 rests_on_id 픽업 순서 제약(물리적으로 위부터 집기)은 그대로 지켜야 한다."""
+    bottom = Box("Bottom", width=0.1, depth=0.1, height=0.1)  # 부피 작음
+    top = Box("Top", width=0.5, depth=0.5, height=0.3, rests_on_id="Bottom")  # 부피 큼, Bottom 위에 얹힘
+
+    order = decide_loading_order([bottom, top], mode="count_first")
+
+    # count_first면 부피만 보면 Bottom(작음)이 먼저겠지만, Top이 위에 얹혀 있어서
+    # 물리적으로 Top부터 집어야 한다 - 픽업 제약이 부피 정렬보다 우선.
+    assert [b.id for b in order] == ["Top", "Bottom"]

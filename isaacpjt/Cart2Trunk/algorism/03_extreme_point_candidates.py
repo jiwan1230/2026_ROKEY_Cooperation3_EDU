@@ -37,6 +37,17 @@ class Box:
     # (support_candidate_id 등)과의 정확한 매핑은 ①에서 별도로 확정 필요.
     rests_on_id: Optional[str] = None
 
+    # 이 박스가 몇 번째 정류장에서 내려지는지 (1=첫 배송지) - 카트/트렁크 시나리오와
+    # 무관한 범용 필드라 여기 코어에 둔다. industry_scenarios/scenario1_delivery_
+    # truck.py가 "나중 정류장(숫자 큰 것)부터 트렁크 깊숙이 싣는다"(LIFO)는 정책에
+    # 씀. 없으면(None) 이 정책 대상이 아니라는 뜻.
+    delivery_stop: Optional[int] = None
+
+    # 위험물 분류(예: "oxidizer", "flammable") - industry_scenarios/scenario4_
+    # hazmat.py가 "이 분류끼리는 인접 배치 금지" 판단에 씀. 없으면(None) 위험물
+    # 아님(어떤 것과도 같이 놓여도 됨).
+    hazard_class: Optional[str] = None
+
     @property
     def volume(self) -> float:
         return self.width * self.depth * self.height

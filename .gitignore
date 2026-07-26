@@ -18,3 +18,6 @@ __pycache__/
 # box_top_extractor.py용 격리 venv (numpy<2 고정 - pip numpy 2.x가 apt cv_bridge를 깨는 문제 회피)
 # requirements.txt로 재생성 가능
 isaacpjt/Cart2Trunk/perception/.venv/
+
+# planner_gui.py가 실행할 때마다 덮어쓰는 비포/애프터 임시 이미지 (재생성 가능)
+isaacpjt/Cart2Trunk/algorism/local_test_data/_gui_output/

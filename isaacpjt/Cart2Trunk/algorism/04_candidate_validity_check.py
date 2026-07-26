@@ -80,7 +80,8 @@ def is_candidate_valid(x: float, y: float, z: float, box: "Box", trunk, placed: 
     if x < -1e-9 or y < -1e-9 or z < -1e-9:
         return False
 
-    # 경계는 통과했으니, 이미 놓인 박스들과 하나라도 겹치면 무효
+    # 경계는 통과했으니, 이미 놓인 박스들과 하나라도 겹치면 무효 (마진은 여기서
+    # 안 다룸 - ⑰ has_sufficient_margin()이 07 파이프라인에서 별도로 확인한다)
     candidate = PlacedBox(box=box, x=x, y=y, z=z)
     return not any(boxes_overlap(candidate, p) for p in placed)
 
