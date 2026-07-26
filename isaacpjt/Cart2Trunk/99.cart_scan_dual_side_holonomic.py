@@ -595,13 +595,26 @@ box_material = PhysicsMaterial(
 CART_LARGE_SIZE_XY = 0.18  # Large의 x/y 한 변 - 아래 간격 계산과 CART_BOX_SPECS가 항상 같은 값을 보게 여기서 한 번만 정의
 CART_LARGE_GAP_M = 0.15
 _cart_large_dx = (CART_LARGE_SIZE_XY + CART_LARGE_GAP_M) / 2.0  # 각 Large 중심이 카트 중심에서 떨어질 거리
+# [실측으로 확인된 버그 - 2026-07-27] Medium/Small을 둘 다 Large2 위에 올렸더니(마진을
+# 아무리 균등하게 나눠도) 둘이 Large2 폭의 ~90%를 차지해서 노출된 윗면이 얇은
+# 테두리 조각들로만 남았고, RANSAC이 그 조각을 매번 다른 위치에서 우연히만
+# 잡아서(10회/1회/1회 관측) 사각형 하나로 안정적으로 못 잡히고 전부 필터링됐다
+# (Large1은 반대로 완전히 노출돼 있어서 151/150회 전부 검출됨 - 노출 면적 문제임을
+# 확인). 그래서 Medium은 Large1 위에, Small은 Large2 위에 하나씩만 올린다 -
+# 이러면 각 Large가 자식 하나(0.08~0.085m)만 갖고 나머지(0.18m 중 절반 가까이)는
+# 그대로 노출되어 있어 둘 다 Large1처럼 안정적으로 검출된다. 위치는 안정성/검출
+# 둘 다를 위해 각자의 부모 Large 중심에 그대로 올린다(모든 방향 마진이
+# (0.18-자식폭)/2 이상으로 넉넉함 - flush/타이트한 배치로 되돌아가지 않는다).
+_medium_size = (0.080, 0.085, 0.11)
+_small_size = (0.07, 0.08, 0.07)
 CART_STACK_BASE_NAMES = ["Large1", "Large2"]
+_STACK_PARENT = {"Medium": "Large1", "Small": "Large2"}  # 자식이 어느 Large 위에 앉는지
 CART_BOX_SPECS = [
     # (name, size(x,y,z), 카트 중심 기준 offset(dx=길이축, dy=폭축), mass_kg)
     ("Large1", (CART_LARGE_SIZE_XY, CART_LARGE_SIZE_XY, 0.12), (-_cart_large_dx, 0.0), 1.2),
     ("Large2", (CART_LARGE_SIZE_XY, CART_LARGE_SIZE_XY, 0.12), (_cart_large_dx, 0.0), 1.2),
-    ("Medium", (0.085, 0.10, 0.11), (-_cart_large_dx - 0.0525, 0.0), 0.6),
-    ("Small", (0.085, 0.09, 0.07), (-_cart_large_dx + 0.0425, 0.03), 0.3),
+    ("Medium", _medium_size, (-_cart_large_dx, 0.0), 0.6),  # Large1 중심에 그대로(centered)
+    ("Small", _small_size, (_cart_large_dx, 0.0), 0.3),  # Large2 중심에 그대로(centered)
 ]
 CART_BOX_DROP_HEIGHT_ABOVE_FLOOR = 0.07
 _CART_STACK_TOP_SPAWN_MARGIN_M = 0.05
@@ -609,15 +622,16 @@ _CART_STACK_TOP_SPAWN_MARGIN_M = 0.05
 # +X/차량에 가까운 쪽)으로 조금씩 옮긴다. CART_BOX_SPECS 안의 dx는 그대로 두고
 # (박스끼리 상대 배치 유지), 스폰 위치에서만 이 값을 더해 그룹 전체를 평행이동한다.
 CART_BOX_FRONT_SHIFT_M = 0.07
-_cart_large1_size = next(size for name, size, _off, _m in CART_BOX_SPECS if name == "Large1")
+_cart_box_size_by_name = {name: size for name, size, _off, _m in CART_BOX_SPECS}
 _cart_large_spawn_z = CART_BASKET_FLOOR_Z + CART_BOX_DROP_HEIGHT_ABOVE_FLOOR
 for name, size, (dx, dy), mass_kg in CART_BOX_SPECS:
     if name in CART_STACK_BASE_NAMES:
         spawn_z = _cart_large_spawn_z
     else:
+        parent_size = _cart_box_size_by_name[_STACK_PARENT[name]]
         spawn_z = (
             _cart_large_spawn_z
-            + _cart_large1_size[2] / 2.0
+            + parent_size[2] / 2.0
             + size[2] / 2.0
             + _CART_STACK_TOP_SPAWN_MARGIN_M
         )
@@ -635,7 +649,7 @@ for name, size, (dx, dy), mass_kg in CART_BOX_SPECS:
         physics_material=box_material,
     )
 print(f"[박스 배치] 카트 안에 적층 구조 {len(CART_BOX_SPECS)}개 낙하 예정 "
-      f"(바닥=Large1/Large2, Large1 위에 Medium+Small 나란히, Large2는 단독): "
+      f"(바닥=Large1/Large2, Large1 위에 Medium, Large2 위에 Small): "
       f"{[s[0] for s in CART_BOX_SPECS]}", flush=True)
 
 # 사용자 설계(100번과 동일 - 카트 옆 접근이 이제 폭(Y) 방향) - STANDOFF_X를 카트의
