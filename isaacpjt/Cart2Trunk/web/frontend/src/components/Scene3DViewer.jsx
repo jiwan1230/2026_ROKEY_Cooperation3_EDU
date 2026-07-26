@@ -5,7 +5,7 @@ import { usePlannerState } from "../state/PlannerContext.jsx";
 import { colorForBoxId } from "../utils/color.js";
 import {
   toThreeCenter, TrunkWireframe, computeCartFootprint, CartWireframe, SceneBoxMesh, layoutStagingBoxes,
-  BoundingBoxWireframe,
+  BoundingBoxWireframe, TruckWireframe, PalletPlatform,
 } from "./sceneMeshes.jsx";
 import { SCENARIOS, scenarioTrunkColor, scenarioBoxColor } from "./scenarioTheme.js";
 import styles from "./Scene3DViewer.module.css";
@@ -258,7 +258,15 @@ export default function Scene3DViewer({ scenario }) {
                                     height={trunk.height} color={scenarioTrunkColor(activeScenarioId)} />
             : <TrunkWireframe trunk={trunk} />
         )}
-        {cartFootprint && (
+        {/* 산업현장 시나리오는 쇼핑 카트를 안 쓴다 - 택배 트럭은 트럭 모형,
+            나머지(창고/냉동/위험물)는 팔레트로 대기 구역 모양을 바꾼다. */}
+        {cartFootprint && activeScenarioId === "delivery_truck" && (
+          <TruckWireframe footprint={cartFootprint} entranceNearX={trunk.entrance_near_x !== false} />
+        )}
+        {cartFootprint && activeScenarioId && activeScenarioId !== "delivery_truck" && (
+          <PalletPlatform footprint={cartFootprint} />
+        )}
+        {cartFootprint && !activeScenarioId && (
           <CartWireframe footprint={cartFootprint} entranceNearX={trunk.entrance_near_x !== false} />
         )}
         {(effectiveResult?.obstacles || []).map((o) => (

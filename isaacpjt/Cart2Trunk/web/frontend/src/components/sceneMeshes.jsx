@@ -151,3 +151,55 @@ export function BoundingBoxWireframe({ x, y, z, width, depth, height, color = "#
     </mesh>
   );
 }
+
+// 산업현장 시나리오는 쇼핑 카트를 안 쓴다 - 택배 배송 트럭은 화물칸+운전석+
+// 바퀴가 있는 트럭 모형으로, 나머지(창고/냉동/위험물) 3개는 팔레트로
+// 대기 구역 모양을 바꾼다(CartWireframe 대신 사용).
+const TRUCK_WHEEL_RADIUS = 0.05;
+const TRUCK_CAB_LENGTH = 0.15;
+
+export function TruckWireframe({ footprint, entranceNearX }) {
+  const { minX, maxX, minY, maxY, height } = footprint;
+  const width = maxX - minX;
+  const depth = maxY - minY;
+  // 운전석(캡)은 화물칸에서 트렁크 입구 반대쪽(카트 손잡이와 같은 위치 -
+  // 사람이 미는/모는 쪽) 끝에 붙인다.
+  const cabX0 = entranceNearX ? maxX : minX - TRUCK_CAB_LENGTH;
+  const wheelY = [minY + TRUCK_WHEEL_RADIUS, maxY - TRUCK_WHEEL_RADIUS];
+  const wheelX = [minX + TRUCK_WHEEL_RADIUS, maxX - TRUCK_WHEEL_RADIUS];
+
+  return (
+    <group>
+      {/* 화물칸 */}
+      <mesh position={toThreeCenter(minX, minY, 0, width, depth, height)}>
+        <boxGeometry args={[width, height, depth]} />
+        <meshBasicMaterial color="#D8D8DC" wireframe />
+      </mesh>
+      {/* 운전석(캡) */}
+      <mesh position={toThreeCenter(cabX0, minY, 0, TRUCK_CAB_LENGTH, depth, height * 0.7)}>
+        <boxGeometry args={[TRUCK_CAB_LENGTH, height * 0.7, depth]} />
+        <meshStandardMaterial color="#5A6472" />
+      </mesh>
+      {wheelX.flatMap((x) => wheelY.map((y) => (
+        <mesh key={`${x}-${y}`} position={toThreeCenter(x, y, TRUCK_WHEEL_RADIUS, 0, 0, 0)}>
+          <sphereGeometry args={[TRUCK_WHEEL_RADIUS, 12, 12]} />
+          <meshStandardMaterial color="#2B2B2E" />
+        </mesh>
+      )))}
+    </group>
+  );
+}
+
+const PALLET_THICKNESS = 0.08;
+
+export function PalletPlatform({ footprint }) {
+  const { minX, maxX, minY, maxY } = footprint;
+  const width = maxX - minX;
+  const depth = maxY - minY;
+  return (
+    <mesh position={toThreeCenter(minX, minY, 0, width, depth, PALLET_THICKNESS)}>
+      <boxGeometry args={[width, PALLET_THICKNESS, depth]} />
+      <meshStandardMaterial color="#B08D57" roughness={0.9} />
+    </mesh>
+  );
+}

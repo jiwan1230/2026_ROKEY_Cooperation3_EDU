@@ -35,20 +35,27 @@ describe("scenarioBoxColor", () => {
 });
 
 describe("scenarioParams", () => {
-  it("delivery_truck은 fixedOrder만 켜고 나머지는 기본값 그대로다", () => {
-    expect(scenarioParams("delivery_truck")).toEqual({ ...DEFAULT_STRATEGY_PARAMS, fixedOrder: true });
+  it("delivery_truck은 fixedOrder + 안정성 우선순위(2.0)를 켠다", () => {
+    expect(scenarioParams("delivery_truck")).toEqual({
+      ...DEFAULT_STRATEGY_PARAMS, fixedOrder: true, contactPreference: 2.0,
+    });
   });
 
-  it("warehouse는 count_first 모드 + 마진 1cm다", () => {
+  it("warehouse는 count_first 모드 + 마진 1cm만 다르고 우선순위는 기본값이다", () => {
     expect(scenarioParams("warehouse")).toEqual({ ...DEFAULT_STRATEGY_PARAMS, mode: "count_first", margin: 0.01 });
   });
 
-  it("cold_chain은 마진 5cm만 다르고 나머지는 기본값이다", () => {
-    expect(scenarioParams("cold_chain")).toEqual({ ...DEFAULT_STRATEGY_PARAMS, margin: 0.05 });
+  it("cold_chain은 마진 5cm + 입구 선호(-0.3)를 쓴다", () => {
+    expect(scenarioParams("cold_chain")).toEqual({
+      ...DEFAULT_STRATEGY_PARAMS, margin: 0.05, entrancePreference: -0.3,
+    });
   });
 
-  it("hazmat과 알 수 없는 id는 기본값 그대로다", () => {
-    expect(scenarioParams("hazmat")).toEqual(DEFAULT_STRATEGY_PARAMS);
+  it("hazmat은 안정성 우선순위(1.8)만 다르다", () => {
+    expect(scenarioParams("hazmat")).toEqual({ ...DEFAULT_STRATEGY_PARAMS, contactPreference: 1.8 });
+  });
+
+  it("알 수 없는 id는 기본값 그대로다", () => {
     expect(scenarioParams("nonexistent")).toEqual(DEFAULT_STRATEGY_PARAMS);
   });
 });
