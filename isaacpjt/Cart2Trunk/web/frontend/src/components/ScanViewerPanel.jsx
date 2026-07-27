@@ -54,10 +54,15 @@ function RealTrunkPointCloud({ url }) {
   }, [url]);
 
   if (!geometry) return null;
+  // ROS/아이작심 좌표계(X 전방, Y 좌우, Z 위)로 온 PLY를 Three.js 좌표계(Y가
+  // 위)에 맞게 X축 기준 -90도 회전 - 안 하면 트렁크의 좌우 폭(Y)이 화면
+  // 세로축으로 그려져서 트렁크가 가로가 아니라 세로로 서 있는 것처럼 보인다.
   return (
-    <points geometry={geometry}>
-      <pointsMaterial size={0.01} sizeAttenuation color="#4A90D9" />
-    </points>
+    <group rotation={[-Math.PI / 2, 0, 0]}>
+      <points geometry={geometry}>
+        <pointsMaterial size={0.01} sizeAttenuation color="#4A90D9" />
+      </points>
+    </group>
   );
 }
 
