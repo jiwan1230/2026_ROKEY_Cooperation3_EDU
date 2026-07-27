@@ -10,7 +10,10 @@ setup(
         ("share/ament_index/resource_index/packages", ["resource/" + package_name]),
         ("share/" + package_name, ["package.xml"]),
         ("share/" + package_name + "/launch", ["launch/trunk_scan_server.launch.py"]),
-        ("share/" + package_name + "/config", ["config/trunk_scan_server.params.yaml"]),
+        ("share/" + package_name + "/config", [
+            "config/trunk_scan_server.params.yaml",
+            "config/cart_scan_server.params.yaml",
+        ]),
     ],
     install_requires=["setuptools"],
     zip_safe=True,
@@ -23,6 +26,8 @@ setup(
         "console_scripts": [
             "trunk_scan_action_server = cart2trunk_bridge.trunk_scan_action_server:main",
             "trunk_scan_client = cart2trunk_bridge.trunk_scan_action_client:main",
+            "cart_scan_action_server = cart2trunk_bridge.cart_scan_action_server:main",
+            "cart_scan_client = cart2trunk_bridge.cart_scan_action_client:main",
         ],
     },
 )

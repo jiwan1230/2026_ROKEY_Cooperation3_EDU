@@ -6,6 +6,7 @@ find_package(rosidl_default_generators REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "action/TrunkScan.action"
+  "action/CartScan.action"
 )
 
 ament_package()

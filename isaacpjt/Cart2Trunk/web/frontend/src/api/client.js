@@ -94,12 +94,13 @@ export async function postTrunkScan() {
   return handleResponse(resp);
 }
 
-// 트렁크 스캔 성공 응답의 url(예: "/api/robot/trunk-scan-file/xxx.ply")로 실제
-// PLY 바이너리를 받아온다 - PLYLoader.parse()에 그대로 넘길 수 있는 ArrayBuffer.
-export async function fetchTrunkScanPly(url) {
+// 트렁크/카트 스캔 성공 응답의 url(예: "/api/robot/trunk-scan-file/xxx.ply",
+// "/api/robot/cart-scan-file/xxx.ply")로 실제 파일 바이너리를 받아온다 -
+// PLYLoader.parse()에 그대로 넘길 수 있는 ArrayBuffer.
+export async function fetchScanFile(url) {
   const resp = await fetch(url);
   if (!resp.ok) {
-    throw new Error("트렁크 스캔 PLY 파일을 불러오지 못했습니다");
+    throw new Error("스캔 결과 파일을 불러오지 못했습니다");
   }
   return resp.arrayBuffer();
 }
