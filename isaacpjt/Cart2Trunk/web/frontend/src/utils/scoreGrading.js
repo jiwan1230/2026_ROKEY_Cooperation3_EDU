@@ -12,7 +12,7 @@ const WALL_BC_WEIGHT = 0.2;
 const COUNT_FIRST_HEIGHT_WEIGHT = 1.0;
 const COUNT_FIRST_FOOTPRINT_GROWTH_WEIGHT = 5.0;
 
-function labelForPct(pct) {
+export function labelForPct(pct) {
   if (pct >= 80) return "우수";
   if (pct >= 50) return "양호";
   if (pct >= 25) return "보통";
@@ -107,4 +107,38 @@ export function gradeBoxScore(formula, score, { preferences, trunk } = {}) {
     return preferences ? gradeWeightedScore(score, preferences) : null;
   }
   return null;
+}
+
+// "평균 점수가 왜 음수냐"는 강사님 피드백 - algorism의 원래 점수는 낮을수록
+// 좋은 내부 비용값이라 그대로 보여주면 직관적이지 않다. weighted/count_first_density
+// 두 공식은 원점수 단위(스케일)가 서로 달라(예: 섭씨/화씨) 원점수 그대로는
+// 평균낼 수 없지만, gradeBoxScore가 이미 각 박스를 자기 공식 기준
+// "이론상 최선(100%)~최악(0%) 범위 중 위치"로 정규화해두므로, 그 백분율끼리는
+// 공식이 섞여 있어도 평균낼 수 있다. 그 결과가 항상 0~100 사이, 높을수록
+// 좋은 값이라 "적재 점수"로 그대로 보여줄 수 있다.
+export function gradeAveragePlacementScore(placedBoxes, { preferences, trunk } = {}) {
+  const grades = placedBoxes
+    .map((p) => gradeBoxScore(p.score_breakdown.formula, p.score, { preferences, trunk }))
+    .filter(Boolean);
+  if (grades.length === 0) return null;
+  const pct = grades.reduce((sum, g) => sum + g.pct, 0) / grades.length;
+  return { label: labelForPct(pct), pct };
+}
+
+// "미적재가 있는데 왜 100점이냐"는 피드백 - gradeAveragePlacementScore는 실제로
+// 실린 박스들이 얼마나 좋은 자리에 놓였는지만 볼 뿐, 몇 개를 못 실었는지는 전혀
+// 반영하지 않는다(놓인 적이 없는 박스는 애초에 위치 채점 대상이 아님). 알고리즘의
+// "전체 적재 성능"을 하나의 점수로 보려면 완주율(적재율)까지 곱해야 한다 - 다
+// 실었지만(100%) 자리가 별로였으면(50점) 종합 50점, 절반만 실었지만(50%) 자리는
+// 완벽했으면(100점) 역시 종합 50점이 되도록 - 둘 중 하나만 나빠도 종합 점수가
+// 깎이는 구조. 완주율이 0(하나도 못 실음)이면 위치 품질 자체를 계산할 방법이
+// 없으므로(gradeAveragePlacementScore가 null) 그 경우만 별도로 0점 처리한다.
+export function gradeOverallScore(placedBoxes, totalCount, { preferences, trunk } = {}) {
+  if (!totalCount) return null;
+  const completionRate = placedBoxes.length / totalCount;
+  if (completionRate === 0) return { label: "개선 필요", pct: 0, completionRate: 0, qualityPct: null };
+  const quality = gradeAveragePlacementScore(placedBoxes, { preferences, trunk });
+  if (!quality) return null;
+  const pct = completionRate * quality.pct;
+  return { label: labelForPct(pct), pct, completionRate, qualityPct: quality.pct };
 }

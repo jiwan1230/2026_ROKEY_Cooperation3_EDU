@@ -12,9 +12,10 @@ import Scene3DViewer from "./components/Scene3DViewer.jsx";
 import BoxDetailPanel from "./components/BoxDetailPanel.jsx";
 import LogPanel from "./components/LogPanel.jsx";
 import RobotControlPanel from "./components/RobotControlPanel.jsx";
+import VerdictBanner from "./components/VerdictBanner.jsx";
 import styles from "./App.module.css";
 
-function SimulatorBody() {
+function SimulatorBody({ onGoToRobotTab }) {
   // SummaryCard(시나리오 안내 문구)와 Scene3DViewer(3D 미리보기)가 둘 다
   // 필요해서 공통 부모인 여기서 한 번만 만들어 내려준다 - PlannerContext
   // (state.result)와는 별개라 지금 작업 중인 실시간 계획은 안 건드린다.
@@ -24,6 +25,10 @@ function SimulatorBody() {
     <div className={styles.body}>
       <ControlPanel activeScenarioId={scenario.activeScenarioId} />
       <div className={styles.resultArea}>
+        {/* "처음 보는 고객도 점수만 보고 뭘 할지 알아야 한다"는 피드백 -
+            숫자표(SummaryCard)보다 먼저, 종합 점수를 한 문장 결론 + 실행
+            버튼으로 보여준다. 결과가 없으면 배너 자체가 null을 렌더링한다. */}
+        <VerdictBanner onGoToRobotTab={onGoToRobotTab} />
         {/* 사용자 손그림 피드백 - 요약 카드("화면 1")는 좁게, 3D 뷰어("메인
             화면 - 2")는 넓게 나란히 배치한다. 예전엔 세로로 쌓아서 요약
             카드가 위쪽 공간을 다 차지하고 3D 뷰어(툴바+캔버스)가 스크롤을
@@ -57,7 +62,7 @@ function PlannerLayout() {
     <div className={styles.layout}>
       <Header />
       <TabBar activeTab={activeTab} onSelect={setActiveTab} />
-      {activeTab === "simulator" && <SimulatorBody />}
+      {activeTab === "simulator" && <SimulatorBody onGoToRobotTab={() => setActiveTab("robot")} />}
       {activeTab === "robot" && <RobotControlPanel />}
     </div>
   );

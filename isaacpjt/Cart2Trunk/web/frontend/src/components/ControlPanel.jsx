@@ -38,12 +38,18 @@ export default function ControlPanel({ activeScenarioId }) {
   // 무작위 생성 개수는 계산에 쓰이는 파라미터가 아니라(생성 시점에만 쓰는
   // 입력값) 전역 리듀서가 아닌 이 컴포넌트 로컬 상태로 둔다.
   const [randomBoxCount, setRandomBoxCount] = useState(6);
+  // "처음 보는 고객도 이해할 수 있게" 피드백 - 모드/마진/우선순위/체크박스
+  // 같은 엔지니어 튜닝용 설정은 기본으로 접어둔다. 시나리오를 보는 중에는
+  // "그 시나리오가 실제로 쓰는 값"을 보여주는 게 목적이라 항상 펼쳐둔다
+  // (advancedOpen과 무관하게 showAdvanced가 true가 되도록 OR로 묶음).
+  const [advancedOpen, setAdvancedOpen] = useState(false);
 
   // 시나리오 미리보기 중엔 실시간 계획 파라미터(state.params) 대신 그
   // 시나리오가 실제로 쓰는 고정값을 보여주고 전부 잠근다 - "우선순위
   // 슬라이더가 그대로라 파라미터가 적용된 게 안 보인다"는 피드백 반영.
   const activeScenario = SCENARIOS.find((s) => s.id === activeScenarioId);
   const params = activeScenario ? scenarioParams(activeScenarioId) : state.params;
+  const showAdvanced = advancedOpen || Boolean(activeScenario);
 
   const setParam = (key, value) => dispatch({ type: "SET_PARAM", payload: { key, value } });
 
@@ -127,73 +133,87 @@ export default function ControlPanel({ activeScenarioId }) {
         </select>
       </section>
 
-      <section className={styles.section}>
-        <label className={styles.label}>적재 모드</label>
-        <div className={styles.segmented}>
-          {[["large_first", "큰 것 우선"], ["count_first", "개수 우선"]].map(([value, text]) => (
-            <button
-              key={value}
-              type="button"
-              disabled={paramsLocked}
-              className={params.mode === value ? styles.segmentActive : styles.segment}
-              onClick={() => setParam("mode", value)}
-            >
-              {text}
-            </button>
-          ))}
-        </div>
-      </section>
+      {!activeScenario && (
+        <button
+          type="button"
+          className={styles.advancedToggle}
+          onClick={() => setAdvancedOpen((v) => !v)}
+        >
+          {showAdvanced ? "🔧 고급 설정(엔지니어용) 접기 ▲" : "🔧 고급 설정(엔지니어용) 펼치기 ▼"}
+        </button>
+      )}
 
-      <section className={styles.section}>
-        <label className={styles.label}>마진 (m, 비우면 기본값)</label>
-        {MARGIN_FIELDS.map(({ key, label }) => (
-          <div key={key} className={styles.fieldRow}>
-            <span className={styles.fieldLabel}>{label}</span>
-            <input
-              type="text"
-              inputMode="decimal"
-              className={styles.input}
-              disabled={paramsLocked}
-              value={params[key]}
-              onChange={(e) => setParam(key, e.target.value)}
-            />
-          </div>
-        ))}
-      </section>
+      {showAdvanced && (
+        <>
+          <section className={styles.section}>
+            <label className={styles.label}>적재 모드</label>
+            <div className={styles.segmented}>
+              {[["large_first", "큰 것 우선"], ["count_first", "개수 우선"]].map(([value, text]) => (
+                <button
+                  key={value}
+                  type="button"
+                  disabled={paramsLocked}
+                  className={params.mode === value ? styles.segmentActive : styles.segment}
+                  onClick={() => setParam("mode", value)}
+                >
+                  {text}
+                </button>
+              ))}
+            </div>
+          </section>
 
-      <section className={styles.section}>
-        <label className={styles.label}>우선순위</label>
-        {PREFERENCE_FIELDS.map(({ key, label, min, max, step }) => (
-          <div key={key} className={styles.fieldRow}>
-            <span className={styles.fieldLabel}>{label} ({Number(params[key]).toFixed(1)})</span>
-            <input
-              type="range"
-              min={min} max={max} step={step}
-              disabled={paramsLocked}
-              value={params[key]}
-              onChange={(e) => setParam(key, Number(e.target.value))}
-            />
-          </div>
-        ))}
-      </section>
+          <section className={styles.section}>
+            <label className={styles.label}>마진 (m, 비우면 기본값)</label>
+            {MARGIN_FIELDS.map(({ key, label }) => (
+              <div key={key} className={styles.fieldRow}>
+                <span className={styles.fieldLabel}>{label}</span>
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  className={styles.input}
+                  disabled={paramsLocked}
+                  value={params[key]}
+                  onChange={(e) => setParam(key, e.target.value)}
+                />
+              </div>
+            ))}
+          </section>
 
-      <section className={styles.section}>
-        <label className={styles.toggleRow}>
-          <input type="checkbox" disabled={paramsLocked} checked={params.allowStacking}
-                 onChange={(e) => setParam("allowStacking", e.target.checked)} />
-          2층 이상 쌓기 허용
-        </label>
-        <label className={styles.toggleRow}>
-          <input type="checkbox" disabled={paramsLocked} checked={params.allowRotation}
-                 onChange={(e) => setParam("allowRotation", e.target.checked)} />
-          90도 회전 허용
-        </label>
-        <label className={styles.toggleRow}>
-          <input type="checkbox" disabled={paramsLocked} checked={params.fixedOrder}
-                 onChange={(e) => setParam("fixedOrder", e.target.checked)} />
-          적재 순서 고정 (박스 목록 순서 그대로)
-        </label>
-      </section>
+          <section className={styles.section}>
+            <label className={styles.label}>우선순위</label>
+            {PREFERENCE_FIELDS.map(({ key, label, min, max, step }) => (
+              <div key={key} className={styles.fieldRow}>
+                <span className={styles.fieldLabel}>{label} ({Number(params[key]).toFixed(1)})</span>
+                <input
+                  type="range"
+                  min={min} max={max} step={step}
+                  disabled={paramsLocked}
+                  value={params[key]}
+                  onChange={(e) => setParam(key, Number(e.target.value))}
+                />
+              </div>
+            ))}
+          </section>
+
+          <section className={styles.section}>
+            <label className={styles.toggleRow}>
+              <input type="checkbox" disabled={paramsLocked} checked={params.allowStacking}
+                     onChange={(e) => setParam("allowStacking", e.target.checked)} />
+              2층 이상 쌓기 허용
+            </label>
+            <label className={styles.toggleRow}>
+              <input type="checkbox" disabled={paramsLocked} checked={params.allowRotation}
+                     onChange={(e) => setParam("allowRotation", e.target.checked)} />
+              90도 회전 허용
+            </label>
+            <label className={styles.toggleRow}>
+              <input type="checkbox" disabled={paramsLocked} checked={params.fixedOrder}
+                     onChange={(e) => setParam("fixedOrder", e.target.checked)} />
+              적재 순서 고정 (박스 목록 순서 그대로)
+            </label>
+          </section>
+        </>
+      )}
 
       <section className={styles.section}>
         <label className={styles.label}>박스 목록 (JSON)</label>
