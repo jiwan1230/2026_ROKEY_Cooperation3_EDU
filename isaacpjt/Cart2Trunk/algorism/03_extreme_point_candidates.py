@@ -37,6 +37,20 @@ class Box:
     # (support_candidate_id 등)과의 정확한 매핑은 ①에서 별도로 확정 필요.
     rests_on_id: Optional[str] = None
 
+    # 카트에서 검출된 초기 회전각(라디안) - ①.Object3D.yaw를 그대로 옮겨온 값.
+    # ⑦ PlacementPlan.target_yaw가 "이 값 + (90도 회전했으면 90도)"로 MSI2에
+    # 넘길 최종 목표 Yaw를 계산하는 데 쓴다. 기본값 0.0(하위 호환 - 대부분의
+    # 기존 테스트/스크립트는 이 필드를 모르는 채로 Box를 만든다).
+    initial_yaw: float = 0.0
+
+    # 이 Box가 카트 물품이 아니라 트렁크 안 고정 장애물(휠하우스 등)인지 여부.
+    # "HMI 화면 설계 가이드라인" 문서가 요구하는 "장애물 간격" 슬라이더를 "박스
+    # 간격"과 별개로 다루려면(⑰ has_sufficient_margin의 obstacle_margin), 어떤
+    # PlacedBox가 장애물인지 구분할 방법이 필요해서 추가. 02_trunk_space_state.
+    # load_obstacles_from_world_map()이 True로 설정해서 만든다. 기본값 False
+    # (일반 카트 박스).
+    is_obstacle: bool = False
+
     # 이 박스가 몇 번째 정류장에서 내려지는지 (1=첫 배송지) - 카트/트렁크 시나리오와
     # 무관한 범용 필드라 여기 코어에 둔다. industry_scenarios/scenario1_delivery_
     # truck.py가 "나중 정류장(숫자 큰 것)부터 트렁크 깊숙이 싣는다"(LIFO)는 정책에
@@ -148,7 +162,9 @@ def fits_dims(box: Box, trunk) -> bool:
     return box.width <= trunk.width and box.depth <= trunk.depth and box.height <= trunk.height
 
 
-def generate_wall_flush_candidates(box: Box, trunk, candidates, margin: float = 0.0) -> Set[Tuple[float, float, float]]:
+def generate_wall_flush_candidates(
+    box: Box, trunk, candidates, margin: float = 0.0, entrance_margin: Optional[float] = None,
+) -> Set[Tuple[float, float, float]]:
     """
     "이 박스라면 벽 A/B/C에 (margin만큼 띄우고) 붙을 수 있는 자리" 후보를 추가로 만든다.
 
@@ -163,22 +179,35 @@ def generate_wall_flush_candidates(box: Box, trunk, candidates, margin: float = 
     가능하므로 state.candidates에는 저장하지 않고, ⑦(place_one_box)이 매번 그 박스에
     맞게 새로 만들어서 후보 풀에 잠깐 섞어 쓴다. margin=0.0(기본값)이면 이전과 동일하게
     완전히 벽에 붙는 자리를 만든다 - ⑰(마진 확인)가 켜졌을 때만 margin>0으로 호출된다.
+
+    [wall_entrance_x/entrance_margin - 실제로 발견된 격차] 예전엔 "가장 안쪽 벽(A)"
+    플러시만 명시적으로 만들고 입구 쪽 벽은 안 만들었다. 빈 트렁크의 첫 박스는
+    seed candidates가 {(0,0,0)}뿐이라, 입구쪽 margin 후보가 아예 후보 풀에 없는
+    경우가 있었다 - ⑤ entrance_preference로 입구를 아무리 강하게 우선해도 "첫
+    박스"는 그 자리를 고를 수조차 없었다는 뜻. 이제 입구 쪽도 대칭으로 명시
+    생성하고, entrance_margin(None이면 margin과 동일 - 하위 호환)으로 "트렁크
+    입구 여유 거리" 슬라이더를 반영한다.
     """
     extra: Set[Tuple[float, float, float]] = set()
-    wall_a_x = (trunk.width - box.width - margin) if trunk.entrance_near_x else margin
+    _entrance_margin = entrance_margin if entrance_margin is not None else margin
+    wall_a_x = (trunk.width - box.width - margin) if trunk.entrance_near_x else _entrance_margin
+    wall_entrance_x = _entrance_margin if trunk.entrance_near_x else (trunk.width - box.width - _entrance_margin)
     wall_c_y = margin
     wall_b_y = trunk.depth - box.depth - margin
 
     for (x, y, z) in candidates:
-        extra.add((wall_a_x, y, z))  # 벽 A(안쪽)에서 margin만큼 뗀 변형 - y/z는 기존 후보 그대로
-        extra.add((x, wall_c_y, z))  # 벽 C(y=0)에서 margin만큼 뗀 변형 - x/z는 기존 후보 그대로
-        extra.add((x, wall_b_y, z))  # 벽 B(y=depth쪽)에서 margin만큼 뗀 변형 - x/z는 기존 후보 그대로
+        extra.add((wall_a_x, y, z))         # 벽 A(안쪽)에서 margin만큼 뗀 변형 - y/z는 기존 후보 그대로
+        extra.add((wall_entrance_x, y, z))  # 입구 쪽 벽에서 entrance_margin만큼 뗀 변형
+        extra.add((x, wall_c_y, z))         # 벽 C(y=0)에서 margin만큼 뗀 변형 - x/z는 기존 후보 그대로
+        extra.add((x, wall_b_y, z))         # 벽 B(y=depth쪽)에서 margin만큼 뗀 변형 - x/z는 기존 후보 그대로
         # 구석(코너) 자리 - x/y 둘 다 벽에서 margin만큼 뗀 조합. margin=0이면 wall_a_x/
         # wall_c_y/wall_b_y 조합이 이미 코너와 같은 값이라 새 정보가 없지만, margin>0일
         # 땐 위 세 변형이 한쪽 축만 margin 처리해서 나머지 축(예: y=0인 채로)이 여전히
         # 벽에 붙어있는 무효 후보가 되므로, 양쪽 다 margin 처리된 진짜 코너 후보가 따로 필요하다.
         extra.add((wall_a_x, wall_c_y, z))
         extra.add((wall_a_x, wall_b_y, z))
+        extra.add((wall_entrance_x, wall_c_y, z))
+        extra.add((wall_entrance_x, wall_b_y, z))
 
     return extra
 
@@ -190,7 +219,8 @@ def _ranges_overlap(a: Tuple[float, float], b: Tuple[float, float]) -> bool:
 
 
 def generate_box_flush_candidates(
-    box: Box, trunk, candidates, placed: List["PlacedBox"], margin: float = 0.0
+    box: Box, trunk, candidates, placed: List["PlacedBox"], margin: float = 0.0,
+    obstacle_margin: Optional[float] = None,
 ) -> Set[Tuple[float, float, float]]:
     """
     "이 박스라면 이미 놓인 다른 박스 옆면에 (margin만큼 띄우고) 붙을 수 있는 자리"
@@ -224,17 +254,22 @@ def generate_box_flush_candidates(
             px0, px1 = p.x_range
             py0, py1 = p.y_range
             pz0, pz1 = p.z_range
+            # p가 장애물이면 margin 대신 obstacle_margin만큼 뗀 자리를 생성한다 - 안
+            # 그러면(버그로 실제 발견됨) obstacle_margin > margin일 때 장애물 옆 후보가
+            # 항상 margin 거리로만 생기고, ⑰ 유효성 검사는 obstacle_margin을 요구해서
+            # 그 후보가 거부되는데 대안 후보가 아예 없어 배치 전체가 실패해버린다.
+            required = obstacle_margin if (p.box.is_obstacle and obstacle_margin is not None) else margin
 
             # x축 방향: 이 박스의 y/z가 p와 겹치면, p의 가까운 면(입구 쪽)과
-            # 먼 면(안쪽)에서 각각 margin만큼 뗀 x로 바꿔치기
+            # 먼 면(안쪽)에서 각각 required만큼 뗀 x로 바꿔치기
             if _ranges_overlap((y0, y1), (py0, py1)) and _ranges_overlap((z0, z1), (pz0, pz1)):
-                extra.add((px0 - box.width - margin, y, z))  # p 바로 앞(입구 쪽), margin만큼 띄움
-                extra.add((px1 + margin, y, z))              # p를 지나 바로 뒤(안쪽), margin만큼 띄움
+                extra.add((px0 - box.width - required, y, z))  # p 바로 앞(입구 쪽), required만큼 띄움
+                extra.add((px1 + required, y, z))              # p를 지나 바로 뒤(안쪽), required만큼 띄움
 
-            # y축 방향: 이 박스의 x/z가 p와 겹치면, p의 양쪽 면에서 margin만큼 뗀 y로 바꿔치기
+            # y축 방향: 이 박스의 x/z가 p와 겹치면, p의 양쪽 면에서 required만큼 뗀 y로 바꿔치기
             if _ranges_overlap((x0, x1), (px0, px1)) and _ranges_overlap((z0, z1), (pz0, pz1)):
-                extra.add((x, py0 - box.depth - margin, z))
-                extra.add((x, py1 + margin, z))
+                extra.add((x, py0 - box.depth - required, z))
+                extra.add((x, py1 + required, z))
 
     return extra
 

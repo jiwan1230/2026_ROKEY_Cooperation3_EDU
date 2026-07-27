@@ -576,24 +576,68 @@ box_material = PhysicsMaterial(
     prim_path="/World/Physics_Materials/box_material",
     static_friction=1.2, dynamic_friction=1.0, restitution=0.0,
 )
-CART_STACK_BASE_NAME = "Large"
+# 사용자 요청(d0f2830 "Cart_Box_Specs 원상복구" 형태를 기반으로, 겹치지 않는 Large를
+# 하나 더 추가, 100번과 동일하게 적용) - 단일 Large 위에 Medium/Small이 나란히
+# 앉는 원래(검증된) 상대 배치는 그대로 보존하고, 그 Large를 "Large1"로 옮긴 뒤
+# 옆에 자식 없는 "Large2"만 하나 더 세운다(Large1/Large2 사이 간격 0.06m는
+# 이전 Large1/Large2 리팩터에서 이미 실측 검증된 값 그대로 재사용 - 새로 값을
+# 고르지 않는다). Medium/Small의 절대 offset은 "Large1 offset + 원래 Large
+# 기준 로컬 offset"으로 그대로 평행이동했을 뿐이라, Large 기준으로 봤을 때 각
+# 자식과 Large 가장자리 사이 여유(이미 물리적으로 안정적이라고 확인된 값)는
+# 전혀 바뀌지 않는다.
+# [실측으로 확인된 버그 - 2026-07-26, 100번과 동일] Large 2개만 떨어뜨렸는데 착지
+# 중 하나가 옆으로 넘어져 세로로 서버렸다 - 간격 0.06m가 너무 좁아서 낙하 중
+# 살짝만 흔들려도 서로 모서리가 닿아 토크를 받고, CART_BOX_DROP_HEIGHT_ABOVE_FLOOR=
+# 0.10m는 Large 바닥면 기준 실제 자유낙하 거리가 0.04m(0.10 - 반두께 0.06)나 돼서
+# 착지 충격/바운스가 컸다. 간격을 넉넉히 늘리고(카트 half_x=0.448m라 여유는 충분히
+# 있음, 실측 [카트 bbox] 로그 참고), 낙하 높이는 바닥에서 거의 뜨지 않을 정도
+# (바닥면 기준 약 0.01m)로 낮춰서 두 Large가 각각 조용히 내려앉게 한다.
+CART_LARGE_SIZE_XY = 0.18  # Large의 x/y 한 변 - 아래 간격 계산과 CART_BOX_SPECS가 항상 같은 값을 보게 여기서 한 번만 정의
+CART_LARGE_GAP_M = 0.15
+_cart_large_dx = (CART_LARGE_SIZE_XY + CART_LARGE_GAP_M) / 2.0  # 각 Large 중심이 카트 중심에서 떨어질 거리
+# [실측으로 확인된 버그 - 2026-07-27] Medium/Small을 둘 다 Large2 위에 올렸더니(마진을
+# 아무리 균등하게 나눠도) 둘이 Large2 폭의 ~90%를 차지해서 노출된 윗면이 얇은
+# 테두리 조각들로만 남았고, RANSAC이 그 조각을 매번 다른 위치에서 우연히만
+# 잡아서(10회/1회/1회 관측) 사각형 하나로 안정적으로 못 잡히고 전부 필터링됐다
+# (Large1은 반대로 완전히 노출돼 있어서 151/150회 전부 검출됨 - 노출 면적 문제임을
+# 확인). 그래서 Medium은 Large1 위에, Small은 Large2 위에 하나씩만 올린다 -
+# 이러면 각 Large가 자식 하나(0.08~0.085m)만 갖고 나머지(0.18m 중 절반 가까이)는
+# 그대로 노출되어 있어 둘 다 Large1처럼 안정적으로 검출된다. 위치는 안정성/검출
+# 둘 다를 위해 각자의 부모 Large 중심에 그대로 올린다(모든 방향 마진이
+# (0.18-자식폭)/2 이상으로 넉넉함 - flush/타이트한 배치로 되돌아가지 않는다).
+_medium_size = (0.085, 0.085, 0.11)
+_small_size = (0.07, 0.08, 0.07)
+CART_STACK_BASE_NAMES = ["Large1", "Large2"]
+_STACK_PARENT = {"Medium": "Large1", "Small": "Large2"}  # 자식이 어느 Large 위에 앉는지
 CART_BOX_SPECS = [
-    # (name, size(x,y,z), Large 중심 기준 offset(dx=길이축, dy=폭축), mass_kg)
-    ("Large", (0.20, 0.20, 0.12), (0.0, 0.0), 1.2),
-    ("Medium", (0.085, 0.10, 0.11), (-0.0525, 0.0), 0.6),
-    ("Small", (0.085, 0.09, 0.07), (0.0425, 0.03), 0.3),
+    # (name, size(x,y,z), 카트 중심 기준 offset(dx=길이축, dy=폭축), mass_kg)
+    ("Large1", (CART_LARGE_SIZE_XY, CART_LARGE_SIZE_XY, 0.12), (-_cart_large_dx, 0.0), 1.2),
+    ("Large2", (CART_LARGE_SIZE_XY, CART_LARGE_SIZE_XY, 0.12), (_cart_large_dx, 0.0), 1.2),
+    ("Medium", _medium_size, (-_cart_large_dx, 0.0), 0.6),  # Large1 중심에 그대로(centered)
+    ("Small", _small_size, (_cart_large_dx, 0.0), 0.3),  # Large2 중심에 그대로(centered)
 ]
-CART_BOX_DROP_HEIGHT_ABOVE_FLOOR = 0.10
+CART_BOX_DROP_HEIGHT_ABOVE_FLOOR = 0.07
 _CART_STACK_TOP_SPAWN_MARGIN_M = 0.05
-_cart_large_size = next(size for name, size, _off, _m in CART_BOX_SPECS if name == CART_STACK_BASE_NAME)
+# 사용자 요청(100번과 동일) - 박스 전체 그룹을 카트 앞쪽(B단=입구, 손잡이 반대쪽,
+# +X/차량에 가까운 쪽)으로 조금씩 옮긴다. CART_BOX_SPECS 안의 dx는 그대로 두고
+# (박스끼리 상대 배치 유지), 스폰 위치에서만 이 값을 더해 그룹 전체를 평행이동한다.
+CART_BOX_FRONT_SHIFT_M = 0.07
+# [사용자 실측 확인 - 2026-07-27] Large1이 카트 손잡이쪽(-X) 턱에 살짝 걸린다.
+# Large2/Small은 문제 없으니 그대로 두고, Large1과 그 위에 얹힌 Medium(같은 dx를
+# 씀)만 추가로 조금 더 앞(+X, 손잡이 반대/입구 방향)으로 옮긴다 - 그룹 전체를
+# 옮기는 CART_BOX_FRONT_SHIFT_M과는 별개로, 이 두 박스에만 얹어서 더한다.
+CART_LARGE1_EXTRA_FRONT_SHIFT_M = 0.04
+_extra_front_shift_by_name = {"Large1": CART_LARGE1_EXTRA_FRONT_SHIFT_M, "Medium": CART_LARGE1_EXTRA_FRONT_SHIFT_M}
+_cart_box_size_by_name = {name: size for name, size, _off, _m in CART_BOX_SPECS}
 _cart_large_spawn_z = CART_BASKET_FLOOR_Z + CART_BOX_DROP_HEIGHT_ABOVE_FLOOR
 for name, size, (dx, dy), mass_kg in CART_BOX_SPECS:
-    if name == CART_STACK_BASE_NAME:
+    if name in CART_STACK_BASE_NAMES:
         spawn_z = _cart_large_spawn_z
     else:
+        parent_size = _cart_box_size_by_name[_STACK_PARENT[name]]
         spawn_z = (
             _cart_large_spawn_z
-            + _cart_large_size[2] / 2.0
+            + parent_size[2] / 2.0
             + size[2] / 2.0
             + _CART_STACK_TOP_SPAWN_MARGIN_M
         )
@@ -601,7 +645,7 @@ for name, size, (dx, dy), mass_kg in CART_BOX_SPECS:
         prim_path=f"/World/Box_{name}",
         name=name.lower(),
         position=np.array([
-            cart_center_xy[0] + dx,
+            cart_center_xy[0] + dx + CART_BOX_FRONT_SHIFT_M + _extra_front_shift_by_name.get(name, 0.0),
             cart_center_xy[1] + dy,
             spawn_z,
         ]),
@@ -611,7 +655,7 @@ for name, size, (dx, dy), mass_kg in CART_BOX_SPECS:
         physics_material=box_material,
     )
 print(f"[박스 배치] 카트 안에 적층 구조 {len(CART_BOX_SPECS)}개 낙하 예정 "
-      f"(바닥={CART_STACK_BASE_NAME}, 그 위에 Medium+Small 나란히): "
+      f"(바닥=Large1/Large2, Large1 위에 Medium, Large2 위에 Small): "
       f"{[s[0] for s in CART_BOX_SPECS]}", flush=True)
 
 # 사용자 설계(100번과 동일 - 카트 옆 접근이 이제 폭(Y) 방향) - STANDOFF_X를 카트의
@@ -954,7 +998,16 @@ CART_SCAN_ROI_MAX_HEIGHT_M = 0.40  # CART_BASKET_FLOOR_Z 위로 이만큼까지�
 # 카트 중심 기준 실제 박스 적재 영역보다 넉넉하되 카트 벽(cart_half_x/y)보다는
 # 확실히 안쪽인 반경으로 크롭하면 벽이 아예 안 들어와서 문제가 사라진다. 값은 88번과
 # 동일(0.22/0.22, 대칭이라 축이 바뀌어도 그대로 이식 가능).
-CART_SCAN_ROI_HALF_X_M = 0.22
+# [실측으로 확인된 버그 - 2026-07-26] CART_BOX_FRONT_SHIFT_M으로 박스 그룹을 +X로
+# 옮긴 뒤, 대칭 크롭(중심=카트 중심, 반경 0.22)이 가장 앞쪽(+X) 박스인 Large2를
+# 더 이상 다 못 담았다 - 실측: box_id=1이 폭 0.18->0.074로 잘려서 검출됨(딱 ROI
+# 경계에서 잘린 크기). Large2의 실제 먼 쪽 끝은 cart_center + (_cart_large_dx +
+# CART_LARGE_SIZE_XY/2 + CART_BOX_FRONT_SHIFT_M) = 0.165+0.09+0.05 = 0.305m라
+# 0.22로는 어차피 못 덮는다. 크롭 중심도 박스 그룹과 함께 +X로 옮기고, 반경도
+# 그룹 전체 반스팬(0.255)을 여유 있게 덮도록 키운다(카트 벽 cart_half_x=0.448보다는
+# 여전히 확실히 안쪽).
+CART_SCAN_ROI_CENTER_X_SHIFT_M = CART_BOX_FRONT_SHIFT_M
+CART_SCAN_ROI_HALF_X_M = 0.29
 CART_SCAN_ROI_HALF_Y_M = 0.22
 
 OPTICAL_TO_USD_CAMERA_AXES = np.diag([1.0, -1.0, -1.0])
@@ -1025,8 +1078,8 @@ for i, x_offset in enumerate(CART_SCAN_STRAFE_X_OFFSETS):
         continue
 
     keep = (
-        (pts_world_i[:, 0] >= cart_center_xy[0] - CART_SCAN_ROI_HALF_X_M)
-        & (pts_world_i[:, 0] <= cart_center_xy[0] + CART_SCAN_ROI_HALF_X_M)
+        (pts_world_i[:, 0] >= cart_center_xy[0] + CART_SCAN_ROI_CENTER_X_SHIFT_M - CART_SCAN_ROI_HALF_X_M)
+        & (pts_world_i[:, 0] <= cart_center_xy[0] + CART_SCAN_ROI_CENTER_X_SHIFT_M + CART_SCAN_ROI_HALF_X_M)
         & (pts_world_i[:, 1] >= cart_center_xy[1] - CART_SCAN_ROI_HALF_Y_M)
         & (pts_world_i[:, 1] <= cart_center_xy[1] + CART_SCAN_ROI_HALF_Y_M)
         # 실측 확인: CART_BASKET_FLOOR_Z(0.68)가 하드코딩된 추정값이라, 처리된

@@ -994,37 +994,84 @@ box_material = PhysicsMaterial(
 # 물리 박스가 없어 그 박스는 조용히 건너뛰어진다.
 # 오프셋 축 매핑은 99번과 동일 - 88번은 dx=폭(옛 X)/dy=길이(옛 Y)였는데, 100번(회전
 # 후)은 dx=길이(X)/dy=폭(Y)이므로 88번의 (dx, dy)를 (dy, dx)로 맞바꿔서 옮긴다.
-CART_STACK_BASE_NAME = "Large"
+# 사용자 요청(d0f2830 "Cart_Box_Specs 원상복구" 형태를 기반으로, 겹치지 않는 Large를
+# 하나 더 추가) - 단일 Large 위에 Medium/Small이 나란히 앉는 원래(검증된) 상대
+# 배치는 그대로 보존하고, 그 Large를 "Large1"로 옮긴 뒤 옆에 자식 없는 "Large2"만
+# 하나 더 세운다(Large1/Large2 사이 간격 0.06m는 이전 Large1/Large2 리팩터에서
+# 이미 실측 검증된 값 그대로 재사용 - 새로 값을 고르지 않는다). Medium/Small의
+# 절대 offset은 "Large1 offset + 원래 Large 기준 로컬 offset"으로 그대로 평행이동
+# 했을 뿐이라, Large 기준으로 봤을 때 각 자식과 Large 가장자리 사이 여유(이미
+# 물리적으로 안정적이라고 확인된 값)는 전혀 바뀌지 않는다.
+# [실측으로 확인된 버그 - 2026-07-26] Large 2개만 떨어뜨렸는데 착지 중 하나가
+# 옆으로 넘어져 세로로 서버렸다 - 간격 0.06m가 너무 좁아서 낙하 중 살짝만 흔들려도
+# 서로 모서리가 닿아 토크를 받고, 게다가 CART_BOX_DROP_HEIGHT_ABOVE_FLOOR=0.10m는
+# Large 바닥면 기준 실제 자유낙하 거리가 0.04m(0.10 - 반두께 0.06)나 돼서 착지
+# 충격/바운스가 컸다. 간격을 넉넉히 늘리고(카트 half_x=0.448m라 여유는 충분히
+# 있음, 99_scan_run*.log의 [카트 bbox] 실측값 참고), 낙하 높이는 바닥에서 거의
+# 뜨지 않을 정도(바닥면 기준 약 0.01m)로 낮춰서 두 Large가 각각 조용히 내려앉게
+# 한다.
+CART_LARGE_SIZE_XY = 0.18  # Large의 x/y 한 변 - 아래 간격 계산과 CART_BOX_SPECS가 항상 같은 값을 보게 여기서 한 번만 정의
+CART_LARGE_GAP_M = 0.15
+_cart_large_dx = (CART_LARGE_SIZE_XY + CART_LARGE_GAP_M) / 2.0  # 각 Large 중심이 카트 중심에서 떨어질 거리
+# [실측으로 확인된 버그 - 2026-07-27, 99번과 동일] Medium/Small을 둘 다 Large2 위에
+# 올렸더니(마진을 아무리 균등하게 나눠도) 둘이 Large2 폭의 ~90%를 차지해서 노출된
+# 윗면이 얇은 테두리 조각들로만 남았고, RANSAC이 그 조각을 매번 다른 위치에서
+# 우연히만 잡아서(10회/1회/1회 관측) 사각형 하나로 안정적으로 못 잡히고 전부
+# 필터링됐다(Large1은 반대로 완전히 노출돼 있어서 151/150회 전부 검출됨 - 노출
+# 면적 문제임을 확인). 그래서 Medium은 Large1 위에, Small은 Large2 위에 하나씩만
+# 올린다 - 이러면 각 Large가 자식 하나(0.08~0.085m)만 갖고 나머지(0.18m 중 절반
+# 가까이)는 그대로 노출되어 있어 둘 다 Large1처럼 안정적으로 검출된다. 위치는
+# 각자의 부모 Large 중심에 그대로 올린다(모든 방향 마진이 넉넉함 - flush/타이트한
+# 배치로 되돌아가지 않는다).
+_medium_size = (0.085, 0.085, 0.11)
+_small_size = (0.07, 0.08, 0.07)
+CART_STACK_BASE_NAMES = ["Large1", "Large2"]
+_STACK_PARENT = {"Medium": "Large1", "Small": "Large2"}  # 자식이 어느 Large 위에 앉는지
 CART_BOX_SPECS = [
-    # (name, size(x,y,z), Large 중심 기준 offset(dx=길이축, dy=폭축), mass_kg)
-    ("Large", (0.20, 0.20, 0.12), (0.0, 0.0), 1.2),
-    ("Medium", (0.085, 0.10, 0.11), (-0.0525, 0.0), 0.6),
-    ("Small", (0.085, 0.09, 0.07), (0.0425, 0.03), 0.3),
+    # (name, size(x,y,z), 카트 중심 기준 offset(dx=길이축, dy=폭축), mass_kg)
+    ("Large1", (CART_LARGE_SIZE_XY, CART_LARGE_SIZE_XY, 0.12), (-_cart_large_dx, 0.0), 1.2),
+    ("Large2", (CART_LARGE_SIZE_XY, CART_LARGE_SIZE_XY, 0.12), (_cart_large_dx, 0.0), 1.2),
+    ("Medium", _medium_size, (-_cart_large_dx, 0.0), 0.6),  # Large1 중심에 그대로(centered)
+    ("Small", _small_size, (_cart_large_dx, 0.0), 0.3),  # Large2 중심에 그대로(centered)
 ]
-CART_BOX_DROP_HEIGHT_ABOVE_FLOOR = 0.10
+CART_BOX_DROP_HEIGHT_ABOVE_FLOOR = 0.07
 _CART_STACK_TOP_SPAWN_MARGIN_M = 0.05
-_cart_large_size = next(size for name, size, _off, _m in CART_BOX_SPECS if name == CART_STACK_BASE_NAME)
+# 사용자 요청 - 박스 전체 그룹을 카트 앞쪽(B단=입구, 손잡이 반대쪽, +X/차량에 가까운
+# 쪽 - 위 CART_ROT_Z 주석 참고)으로 조금씩 옮긴다. CART_BOX_SPECS 안의 dx는 그대로
+# 두고(Large1/Large2/Medium/Small 서로간 상대 배치 유지), 스폰 위치에서만 이 값을
+# 더해 그룹 전체를 평행이동시킨다.
+CART_BOX_FRONT_SHIFT_M = 0.07
+# [사용자 실측 확인 - 2026-07-27, 99번과 동일] Large1이 카트 손잡이쪽(-X) 턱에
+# 살짝 걸린다. Large2/Small은 문제 없으니 그대로 두고, Large1과 그 위에 얹힌
+# Medium(같은 dx를 씀)만 추가로 조금 더 앞(+X, 손잡이 반대/입구 방향)으로 옮긴다 -
+# 그룹 전체를 옮기는 CART_BOX_FRONT_SHIFT_M과는 별개로, 이 두 박스에만 얹어서 더한다.
+CART_LARGE1_EXTRA_FRONT_SHIFT_M = 0.04
+_extra_front_shift_by_name = {"Large1": CART_LARGE1_EXTRA_FRONT_SHIFT_M, "Medium": CART_LARGE1_EXTRA_FRONT_SHIFT_M}
+_cart_box_size_by_name = {name: size for name, size, _off, _m in CART_BOX_SPECS}
 _cart_large_spawn_z = CART_BASKET_FLOOR_Z + CART_BOX_DROP_HEIGHT_ABOVE_FLOOR
 cart_box_objects = {}  # prim_path -> DynamicCuboid 래퍼(PICK 뒤 test_box로 재사용하기 위해 저장)
 for _box_name, _box_size, (_dx, _dy), _mass_kg in CART_BOX_SPECS:
-    if _box_name == CART_STACK_BASE_NAME:
+    if _box_name in CART_STACK_BASE_NAMES:
         _spawn_z = _cart_large_spawn_z
     else:
+        _parent_size = _cart_box_size_by_name[_STACK_PARENT[_box_name]]
         _spawn_z = (
             _cart_large_spawn_z
-            + _cart_large_size[2] / 2.0
+            + _parent_size[2] / 2.0
             + _box_size[2] / 2.0
             + _CART_STACK_TOP_SPAWN_MARGIN_M
         )
     _box_prim_path = f"/World/Box_{_box_name}"
     cart_box_objects[_box_prim_path] = DynamicCuboid(
         prim_path=_box_prim_path, name=_box_name.lower(),
-        position=np.array([cart_center_xy[0] + _dx, cart_center_xy[1] + _dy, _spawn_z]),
+        position=np.array([
+            cart_center_xy[0] + _dx + CART_BOX_FRONT_SHIFT_M + _extra_front_shift_by_name.get(_box_name, 0.0),
+            cart_center_xy[1] + _dy, _spawn_z]),
         scale=np.array(_box_size), color=np.array([0.85, 0.55, 0.15]), mass=_mass_kg,
         physics_material=box_material,
     )
 print(f"[박스 배치] 카트 안에 적층 구조 {len(CART_BOX_SPECS)}개 낙하 예정 "
-      f"(바닥={CART_STACK_BASE_NAME}, 그 위에 Medium+Small 나란히)", flush=True)
+      f"(바닥=Large1/Large2, Large1 위에 Medium, Large2 위에 Small)", flush=True)
 # prim_path -> (sx, sy, sz) 스폰 시점의 진짜 크기(91번과 동일 이유 - bbox_of()로 매번 다시
 # 재면 박스가 기울어졌을 때 신뢰할 수 없다).
 BOX_KNOWN_SIZE = {f"/World/Box_{name}": size for name, size, _off, _m in CART_BOX_SPECS}
@@ -1177,10 +1224,27 @@ def set_lift_height(h):
     lift_translate_op.Set(Gf.Vec3d(float(chassis_pos[0]), float(chassis_pos[1]), column_base_z + column_len / 2.0))
 
 
+# [사용자 실측 확인 - 2026-07-27] PICK 하강/PLACE 입구 통과/Y축 정렬 구간에서 렉이
+# 심하다는 제보 - 이 세 구간은 전부 스텝 수가 많은 저속 폐루프(drive_until의
+# step_hold(), move_link6_smooth())라 공통점이 있다: 매 스텝 world.step(render=True)
+# 로 "물리 스텝 + 화면 렌더링"을 항상 같이 했다. 물리는 결과/조건 판정에 필요해서
+# 매 스텝 반드시 진행해야 하지만, 렌더링(화면 그리기)은 그렇지 않다 - 화면 갱신
+# 빈도를 줄여도 물리 상태나 조건 충족 타이밍은 전혀 안 바뀐다. 그래서 물리는 계속
+# 매 스텝 진행하되(world.step() 자체는 매번 호출) 렌더링만 RENDER_EVERY_N_STEPS
+# 스텝에 한 번으로 줄여서 렉의 실제 원인(과도한 프레임 그리기)만 줄인다.
+RENDER_EVERY_N_STEPS = 4
+_render_step_counter = {"n": 0}
+
+
+def sim_step():
+    _render_step_counter["n"] += 1
+    world.step(render=(_render_step_counter["n"] % RENDER_EVERY_N_STEPS == 0))
+
+
 def step_hold(n=1):
     for _ in range(n):
         set_lift_height(lift_state["h"])
-        world.step(render=True)
+        sim_step()
 
 
 def move_lift_to(target_h, steps=90):
@@ -1430,11 +1494,29 @@ def find_min_tilt_angle(box_dims, pivot_world_z, floor_clear_z, ceiling_clear_z,
     return None
 
 
+# [실측으로 확인된 버그 - 2026-07-26] classify_entry_strategy()의 "box_x_len <=
+# transition_pocket_length" 판정이 여유(margin) 없이 딱 맞아 떨어지는지만 봤다 -
+# 그런데 실제 STAGE2 성공 조건(_box_cleared_entrance(), 아래 ENTRANCE_CLEAR_MARGIN/
+# FRONT_CLEAR_MARGIN 정의부 참고)은 "박스 뒤가 입구+0.005m를 넘고 박스 앞이
+# 천장시작-0.01m 전이어야" 하므로, 실질적으로 여유 있게 통과하려면
+# box_x_len <= transition_pocket_length - 0.015가 필요하다. 이 마진을 안 뺀 채로
+# classify_entry_strategy가 "0.199 <= 0.21이니 HORIZONTAL_INSERT"라고 판정해버리면,
+# 실제로는 여유가 없어 STAGE2가 입구~천장 사이에 낀 채로 자세 붕괴로 실패한다
+# (실측 확인: 이 계산 없이 라우팅만 연결했을 때도 여전히 실패 재현됨). 두 마진
+# 상수와 반드시 같은 값을 유지해야 하므로 여기서 함께 정의하고, 아래 STAGE 2의
+# 지역 변수(ENTRANCE_CLEAR_MARGIN/FRONT_CLEAR_MARGIN)는 이 상수를 그대로 참조한다.
+ENTRANCE_CLEAR_MARGIN_M = 0.005
+FRONT_CLEAR_MARGIN_M = 0.01
+
+
 def classify_entry_strategy(box_dims):
     """반환: (strategy, info) - strategy는 "HORIZONTAL_INSERT"|"TILT_AND_INSERT"|"INFEASIBLE".
     설계 문서 6.4 - box_needs_tilt()가 놓쳤던 "박스 X길이 vs 진입포켓 길이" 조건을 추가하고,
     Tilt 필요 시 find_min_tilt_angle()로 실제 실현 가능한 최소 각도까지 확인한다."""
     transition_pocket_length = INTERNAL_CEILING_START_X - TRUNK_ENTRANCE_X
+    # STAGE2 실제 성공 조건과 동일한 마진을 빼서 비교한다(위 주석 참고) - 마진 없이
+    # 딱 맞기만 하면 이론상은 HORIZONTAL_INSERT지만 실전에서는 여유가 없어 실패한다.
+    usable_pocket_length = transition_pocket_length - ENTRANCE_CLEAR_MARGIN_M - FRONT_CLEAR_MARGIN_M
     box_x_len = float(box_dims[0])
     envelope_height = float(box_dims[2]) + GRIPPER_ARM_OVERHEAD + 2.0 * HORIZONTAL_PASS_MARGIN
 
@@ -1446,10 +1528,11 @@ def classify_entry_strategy(box_dims):
     worst_opening = min(openings) if openings else None
 
     info = {
-        "transition_pocket_length": transition_pocket_length, "box_x_len": box_x_len,
+        "transition_pocket_length": transition_pocket_length,
+        "usable_pocket_length": usable_pocket_length, "box_x_len": box_x_len,
         "envelope_height": envelope_height, "worst_opening": worst_opening,
     }
-    if worst_opening is not None and envelope_height <= worst_opening and box_x_len <= transition_pocket_length:
+    if worst_opening is not None and envelope_height <= worst_opening and box_x_len <= usable_pocket_length:
         info["strategy"] = "HORIZONTAL_INSERT"
         return "HORIZONTAL_INSERT", info
 
@@ -1635,7 +1718,7 @@ def move_link6_smooth(target_tip_pos, tolerance=0.004, max_speed=0.01, kp=3.0, m
         if try_grasp or hold_gripper_closed:
             m0609_robot.gripper.close()
         set_lift_height(lift_state["h"])
-        world.step(render=True)
+        sim_step()
     tip_pos = measure_tip_world_pos()
     err = float(np.linalg.norm(tip_pos - target_tip_pos))
     ee_pos, _ = m0609_robot.end_effector.get_world_pose()
@@ -2252,6 +2335,22 @@ for _box_num, (picked_prim_path, picked_placement) in enumerate(pick_order):
     print(f"\n===== PICK 시작 {picked_prim_path} (스캔 박스상단={np.round(scan_box_top[picked_prim_path], 3)}) =====",
           flush=True)
 
+    # [진단 - PICK 흡착 실패 원인 조사] scan_box_top은 99번 스캔 세션에서 base_to_
+    # camera_transform.json으로 재투영한 "스캔 당시" 위치다. 100번은 카트/박스를
+    # CART_BOX_SPECS로 이 세션에서 새로 떨어뜨리므로, 물리 낙하 결과(특히 Medium이
+    # Large1 위에 새로 얹히게 된 뒤)가 스캔 시점과 미세하게 달라질 수 있다 - 그
+    # 차이가 GRASP_STANDOFF/DESCENT_OVERTRAVEL 여유(각각 0.01m/0.06m)보다 크면
+    # 흡착 시도가 박스 표면을 완전히 놓치거나 잘못된 위치에서 접촉한다. 흡착 실패
+    # 시 바로 확인할 수 있도록, 흡착 시도 직전에 박스의 "지금 이 시뮬레이션의" 실제
+    # world 위치/윗면 Z를 재서 스캔값과 함께 찍는다.
+    _live_box_pos, _ = cart_box_objects[picked_prim_path].get_world_pose()
+    _live_box_top_z = float(_live_box_pos[2]) + float(BOX_KNOWN_SIZE[picked_prim_path][2]) / 2.0
+    _pos_delta = np.array([scan_top_x, scan_top_y, scan_top_z]) - np.array(
+        [_live_box_pos[0], _live_box_pos[1], _live_box_top_z])
+    print(f"[진단 스캔-실측 위치차] 실측 박스중심={np.round(_live_box_pos, 3)} 실측윗면Z={_live_box_top_z:.3f} "
+          f"스캔값과의 차이(XYZ)={np.round(_pos_delta, 3)} (|Z차이|={abs(_pos_delta[2]):.3f}m, "
+          f"GRASP_STANDOFF+DESCENT_OVERTRAVEL 여유={GRASP_STANDOFF + DESCENT_OVERTRAVEL:.3f}m)", flush=True)
+
     move_link6_smooth(hover_target, label="박스 위 호버")
 
     chassis_pos_pick1, _ = base_robot.get_world_pose()
@@ -2264,6 +2363,24 @@ for _box_num, (picked_prim_path, picked_placement) in enumerate(pick_order):
     picked_grasped = bool(m0609_robot.gripper.is_closed())
     if not picked_grasped:
         pause_for_inspection(f"[중단] PICK 실패 - {picked_prim_path} 흡착이 안 됐습니다.")
+
+    # [진단 - 2번째 박스 Y축 정렬 붕괴 조사, 사용자 지적] DOWN_QUAT=euler([0,pi,0])는
+    # Y축 180도 회전만 지정하고 Z축(그리퍼 자기축 회전=joint_6과 직결)은 전혀 구속하지
+    # 않는다 - "아래를 본다"는 조건은 만족해도 "어느 방향으로 돌아서 아래를 보는지"는
+    # RMPflow가 시작 시드(=_pick_fold, solution space별로 다름)에 따라 알아서 정한다.
+    # solution space 1/2가 이 남는 자유도(joint_6)를 다르게 수렴시키면, 흡착 FixedJoint가
+    # "부착 순간의 상대 회전을 그대로 고정"하므로 박스가 매번 다른 각도로 붙들려서 이후
+    # Y축 정렬이 흔들릴 수 있다(사용자 가설) - 정확한 오프셋을 추측 대신 실측으로 확인한다.
+    if "joint_6" in m0609_robot.dof_names:
+        _diag_joint6_rad = float(m0609_robot.get_joint_positions()[m0609_robot.dof_names.index("joint_6")])
+    else:
+        _diag_joint6_rad = float("nan")
+    _diag_box_pos, _diag_box_quat = cart_box_objects[picked_prim_path].get_world_pose()
+    _diag_box_yaw_deg = float(np.degrees(quat_to_euler_angles(np.asarray(_diag_box_quat, dtype=float))[2]))
+    print(f"[진단 PICK 흡착 자세] solution_space={'2(반전)' if _need_space2 else '1(표준)'} "
+          f"joint_6={np.degrees(_diag_joint6_rad):.1f}deg({_diag_joint6_rad:.4f}rad) "
+          f"박스yaw={_diag_box_yaw_deg:.1f}deg 박스pos={np.round(np.asarray(_diag_box_pos, dtype=float), 3)}",
+          flush=True)
 
     # 91번과 달리 여기서 gripper.open()을 부르지 않는다 - 계속 붙잡은 채로 다음 단계(안전 운송
     # 자세)로 넘어간다.
@@ -2486,14 +2603,43 @@ for _box_num, (picked_prim_path, picked_placement) in enumerate(pick_order):
         print("[FORCE_TILT_TEST] 실제 판정과 무관하게 Tilt-and-Insert 경로를 강제로 사용합니다"
               "(대형 박스 시나리오 없이 새 경로를 스모크 테스트하기 위한 진단 플래그).", flush=True)
         BOX_NEEDS_TILT = True
-    print(f"[문턱 통과 방식 판정] 박스높이={TEST_BOX_SIZE[2]:.3f}m 필요공간={_tilt_required:.3f}m "
-          f"가용공간={_tilt_available:.3f}m -> {'TILT_AND_INSERT 필요' if BOX_NEEDS_TILT else '수평 통과 가능(기존 STAGE 2/3)'}",
+    print(f"[문턱 통과 방식 판정(레거시, 참고용)] 박스높이={TEST_BOX_SIZE[2]:.3f}m 필요공간={_tilt_required:.3f}m "
+          f"가용공간={_tilt_available:.3f}m -> {'TILT_AND_INSERT 필요' if BOX_NEEDS_TILT else '수평 통과 가능'}",
           flush=True)
 
-    # 사용자 설계 문서(2차: 진입 가능성 판정) - 새 classify_entry_strategy()를 옛 box_needs_tilt()
-    # 결과와 나란히 로그로 비교한다(아직 실제 경로 분기는 안 바꿈 - 3~4차에서 교체 예정).
-    _new_strategy, _new_strategy_info = classify_entry_strategy(TEST_BOX_SIZE)
-    print(f"[신규 진입전략 판정] strategy={_new_strategy} info={_new_strategy_info}", flush=True)
+    # [실측으로 확인된 버그 - 2026-07-26] classify_entry_strategy()가 지금까지 로그로만
+    # 비교되고 실제 라우팅엔 연결이 안 돼 있었다(주석에 "3~4차에서 교체 예정"이라고
+    # 적혀만 있었음). 게다가 TEST_BOX_SIZE(placement_result.json의 dimensions)는
+    # algorism이 _oriented_footprint()로 회전을 보정해서 뽑은 "진짜 변 길이"라 -
+    # 이 박스가 스캔 당시 완벽히 축 정렬이 아니라 약간(실측 ~2도) 돌아간 채로
+    # 놓여 있었는데도, PICK 이후 그 회전을 되돌리는 조작(wrist_yaw 보정)이 전혀
+    # 없어서 트렁크 입구에 다가갈 때는 여전히 그 회전이 그대로 살아있다 - 즉
+    # TEST_BOX_SIZE[0](0.1898)을 그대로 넣으면 "회전 때문에 실제로 커진 폭"을
+    # 놓친다(실측: 이 회전만으로 축정렬 폭이 0.1898->약 0.196로 커짐, 로그의
+    # 실제 박스 폭 0.199와 거의 일치). _get_box_x_edges()와 동일한 분리축(SAT)
+    # 투영 공식으로 "지금 이 순간 박스의 실제 world X 폭"을 직접 재서 그 값으로
+    # classify_entry_strategy를 판정한다 - 정적 설계값이 아니라 실측값 기준.
+    _entry_box_pos, _entry_box_quat = test_box.get_world_pose()
+    _entry_R = quat_wxyz_to_matrix(np.asarray(_entry_box_quat, dtype=float))
+    _entry_half_dims = np.asarray(TEST_BOX_SIZE, dtype=float) / 2.0
+    _entry_projected_half_x = (
+        abs(_entry_R[0, 0]) * _entry_half_dims[0]
+        + abs(_entry_R[0, 1]) * _entry_half_dims[1]
+        + abs(_entry_R[0, 2]) * _entry_half_dims[2]
+    )
+    _entry_real_box_x_len = 2.0 * _entry_projected_half_x
+    print(f"[진입전략 실측 폭 보정] 설계값(회전보정됨) TEST_BOX_SIZE[0]={TEST_BOX_SIZE[0]:.4f}m -> "
+          f"현재 world 회전 반영 실측 폭={_entry_real_box_x_len:.4f}m", flush=True)
+    _entry_dims_for_strategy = (_entry_real_box_x_len, TEST_BOX_SIZE[1], TEST_BOX_SIZE[2])
+    ENTRY_STRATEGY, ENTRY_STRATEGY_INFO = classify_entry_strategy(_entry_dims_for_strategy)
+    print(f"[진입전략 판정(라우팅에 실제로 사용됨)] strategy={ENTRY_STRATEGY} info={ENTRY_STRATEGY_INFO}",
+          flush=True)
+    if ENTRY_STRATEGY == "INFEASIBLE":
+        pause_for_inspection(
+            f"[중단] 이 박스(실측 폭={_entry_real_box_x_len:.3f}m)는 현재 트렁크 입구 형상으로는 "
+            "수평 통과도 Tilt-and-Insert도 불가능하다고 판정됐습니다(INFEASIBLE) - "
+            "박스 회전/크기 또는 진입 전략을 재검토하세요."
+        )
 
     # 사용자 지적 - 93번 진단은 "박스 자체의 수직 두께"만 필요공간으로 계산했는데, 실제로 입구를
     # 통과해야 하는 건 박스 혼자가 아니라 "박스를 아래에 매달고 있는 그리퍼 + 그 그리퍼가 붙은
@@ -2718,7 +2864,9 @@ for _box_num, (picked_prim_path, picked_placement) in enumerate(pick_order):
         #   c) TRUNK_X_MIN을 "적재 공간 시작점"과 "실제 차량 개구부 평면" 두 용도로 같이 쓰면
         #      안 된다(차량 형상상 몇 cm 차이 날 수 있음) - TRUNK_ENTRANCE_X로 분리했다(현재는
         #      같은 값, 아래 마커로 실제 위치 확인 후 필요하면 이 값만 조정).
-        ENTRANCE_CLEAR_MARGIN = 0.005  # 입구를 "박스 뒤쪽 끝"이 넘은 뒤 아주 약간만 더 여유를 둔다.
+        # classify_entry_strategy()가 쓰는 것과 반드시 같은 값이어야 하므로(위 함수 정의부
+        # 근처 ENTRANCE_CLEAR_MARGIN_M 참고) 리터럴을 다시 안 쓰고 그 상수를 그대로 참조한다.
+        ENTRANCE_CLEAR_MARGIN = ENTRANCE_CLEAR_MARGIN_M  # 입구를 "박스 뒤쪽 끝"이 넘은 뒤 아주 약간만 더 여유를 둔다.
         STAGE2_Y_TOLERANCE = 0.04  # 박스 중심이 중앙선(ANCHOR_Y)에서 이 이상 벗어나면 이상으로 본다.
         STAGE2_POSE_DRIFT_TOLERANCE = 0.025  # 팁-섀시 상대 위치가 시작 시점 대비 이 이상 벗어나면 충돌로 본다.
 
@@ -2776,7 +2924,9 @@ for _box_num, (picked_prim_path, picked_placement) in enumerate(pick_order):
         # 하고, 지금 자세의 실측 클리어런스(그리퍼/link_6/전완 포함 포락선 기준)도 최소 여유를
         # 만족해야 한다 - 그래야 "다음 하강/자세복원 스윕이 안전한 상태"임을 확실히 하는
         # VERIFY_TRANSITION_POCKET 조건이 된다.
-        FRONT_CLEAR_MARGIN = 0.01  # 박스 앞쪽이 내부천장 시작점보다 이만큼 못 미쳐야 한다.
+        # classify_entry_strategy()와 반드시 같은 값(FRONT_CLEAR_MARGIN_M 참조, 위 ENTRANCE_
+        # CLEAR_MARGIN과 동일한 이유).
+        FRONT_CLEAR_MARGIN = FRONT_CLEAR_MARGIN_M  # 박스 앞쪽이 내부천장 시작점보다 이만큼 못 미쳐야 한다.
         MIN_CLEARANCE_MARGIN = HORIZONTAL_PASS_MARGIN  # 포락선 최소 여유(기존 마진 상수 재사용)
 
         def _box_cleared_entrance():
@@ -2912,9 +3062,18 @@ for _box_num, (picked_prim_path, picked_placement) in enumerate(pick_order):
                 m0609_robot.apply_action(ArticulationAction(joint_positions=tilt_hold_q))
                 m0609_robot.gripper.close()
 
+            # [실측으로 확인된 버그 - 2026-07-26] 원래 "통과 완료" 기준이 entrance_x+
+            # restore_clear_margin(2.855+0.10=2.955)이었는데, 낮은 천장 제약 구간은
+            # entrance_x부터 INTERNAL_CEILING_START_X(3.065)까지다(classify_entry_
+            # strategy()의 worst_opening 계산 구간과 동일) - 즉 2.955는 아직 낮은 천장
+            # 밑에 있는 위치였다. 실측: 이 기준으로 TILT-3가 "통과 완료"라고 멈췄는데
+            # 그 직후 TILT-4(수평 복원)가 낮은 천장에 팔이 걸려 IK가 크게 발산했다
+            # (err=1.38m, IK 발산=물리 충돌 의심이라는 이 프로젝트의 기존 교훈과 일치).
+            # 기준점을 entrance_x 대신 INTERNAL_CEILING_START_X로 바꿔서, 낮은 천장
+            # 구간을 박스 뒤쪽 끝까지 완전히 벗어난 뒤에만 수평 복원을 시도하게 한다.
             def _tilt_cleared_entrance():
                 rear_x, _, box_center = _get_box_x_edges()
-                x_cleared = rear_x >= entrance_x + restore_clear_margin
+                x_cleared = rear_x >= INTERNAL_CEILING_START_X + restore_clear_margin
                 y_centered = abs(float(box_center[1]) - ANCHOR_Y) < 0.04
                 return x_cleared and y_centered and m0609_robot.gripper.is_closed()
 
@@ -2930,16 +3089,41 @@ for _box_num, (picked_prim_path, picked_placement) in enumerate(pick_order):
                 )
 
             # ---- Phase 4: 내부 자세 복원(섀시 정지, 다시 수평) ----
+            # [실측으로 확인된 버그 - 2026-07-26] tilt_quat(피치 -tilt_deg만큼 기울어짐)에서
+            # DOWN_QUAT(완전 수평)로 move_link6 한 번 호출로 한번에 재요청하면, RMPflow가
+            # "지금 위치 유지"조차 못 하고 err=0.50~1.38m 규모로 발산했다 - 그런데 세 번의
+            # 재현 실행에서 발산 방향이 Z/X붕괴 -> Y쏠림 -> X/Z쏠림으로 매번 달랐다. 특정
+            # 벽/천장에 고정적으로 걸리는 거라면 발산 방향도 매번 비슷해야 하는데 그렇지
+            # 않았다 - 즉 move_link6()이 매 스텝 동일한 최종 target을 그대로
+            # controller.forward()에 넣을 뿐 내부적으로 보간하지 않아서(위 정의 참고),
+            # 좁고 꺾인 자세에서 한 번에 너무 큰 목표(피치 tilt_deg 전체)를 주면 RMPflow가
+            # 매번 다른 국소해로 튀는 불안정 문제로 판단된다. 여기서 직접 tilt_deg->0을
+            # 여러 단계로 나눠 점진적으로 목표를 이동시켜, RMPflow가 매번 작은 변화만
+            # 쫓도록 한다.
             restore_pos, _ = m0609_robot.end_effector.get_world_pose()
-            restore_ee, restore_err = move_link6(restore_pos, steps=tilt_steps, hold_gripper_closed=True,
-                                                  orientation=DOWN_QUAT, label="TILT-4: 내부 자세 복원(수평)")
-            if restore_err > 0.03 or not m0609_robot.gripper.is_closed():
-                raise SystemExit(f"[중단] TILT-4(자세 복원) 실패: err={restore_err:.3f}m")
+            RESTORE_SUBSTEPS = 6
+            restore_ee, restore_err = None, None
+            for _sub_i in range(1, RESTORE_SUBSTEPS + 1):
+                _sub_tilt_deg = tilt_deg * (1.0 - _sub_i / RESTORE_SUBSTEPS)
+                _sub_quat = euler_angles_to_quat(np.array([0.0, np.pi - np.radians(_sub_tilt_deg), 0.0]))
+                restore_ee, restore_err = move_link6(
+                    restore_pos, steps=max(20, tilt_steps // RESTORE_SUBSTEPS), hold_gripper_closed=True,
+                    orientation=_sub_quat,
+                    label=f"TILT-4: 내부 자세 복원(수평) {_sub_i}/{RESTORE_SUBSTEPS}(잔여기울임={_sub_tilt_deg:.2f}deg)")
+                if restore_err > 0.03 or not m0609_robot.gripper.is_closed():
+                    raise SystemExit(
+                        f"[중단] TILT-4(자세 복원) 실패: 단계 {_sub_i}/{RESTORE_SUBSTEPS}"
+                        f"(잔여기울임={_sub_tilt_deg:.2f}deg) err={restore_err:.3f}m"
+                    )
             return restore_ee, restore_err
 
-        if BOX_NEEDS_TILT:
-            print("[STAGE2 경로] 박스가 커서 수평 통과 불가 - Tilt-and-Insert 경로 사용", flush=True)
-            tilt_and_insert_through_entrance(TRUNK_ENTRANCE_X, TEST_BOX_SIZE)
+        # [실측으로 확인된 버그 수정 - 2026-07-26] 레거시 BOX_NEEDS_TILT(박스 높이만 봄) 대신
+        # ENTRY_STRATEGY(박스의 실측 회전-반영 폭까지 함께 보는 classify_entry_strategy() 결과)로
+        # 분기한다 - 위 STAGE 1에서 이미 계산해뒀다(INFEASIBLE은 거기서 즉시 중단됨).
+        if ENTRY_STRATEGY == "TILT_AND_INSERT":
+            print(f"[STAGE2 경로] {ENTRY_STRATEGY_INFO} -> Tilt-and-Insert 경로 사용", flush=True)
+            tilt_and_insert_through_entrance(
+                TRUNK_ENTRANCE_X, TEST_BOX_SIZE, tilt_deg=ENTRY_STRATEGY_INFO.get("tilt_angle_deg"))
             condition_met, aborted = True, False
         else:
             final_pos, final_yaw, condition_met, aborted = drive_until(
@@ -3622,6 +3806,23 @@ for _box_num, (picked_prim_path, picked_placement) in enumerate(pick_order):
         print(f"[STAGE3.3 종료] 박스=({_stage3_3_final_box_center[0]:.3f},{_stage3_3_final_box_center[1]:.3f}) "
               f"목표=({STAGE3_3_TARGET_X:.3f},{STAGE3_3_TARGET_Y:.3f})", flush=True)
         _log_clearance("STAGE3.3 종료(X/Y 정렬 후)")
+
+        # [진단 - PICK 시점 로그(solution_space/joint_6/박스yaw)와 직접 비교하기 위한
+        # 동일 형식 - 사용자 지적한 "place 정렬하면서 박스를 돌려버린다"를 실측으로
+        # 확인한다. PICK 직후엔 joint_6이 달라도(-96.5도 vs +92.4도) 박스yaw는
+        # 거의 동일(0.2도)했다 - 여기서 값이 달라져 있으면 STAGE3.3(또는 그 사이
+        # 어느 단계)에서 joint_6이 다시 움직이며 박스를 같이 돌렸다는 뜻이다.
+        if "joint_6" in m0609_robot.dof_names:
+            _diag2_joint6_rad = float(
+                m0609_robot.get_joint_positions()[m0609_robot.dof_names.index("joint_6")])
+        else:
+            _diag2_joint6_rad = float("nan")
+        _diag2_box_pos, _diag2_box_quat = cart_box_objects[picked_prim_path].get_world_pose()
+        _diag2_box_yaw_deg = float(np.degrees(quat_to_euler_angles(np.asarray(_diag2_box_quat, dtype=float))[2]))
+        print(f"[진단 STAGE3.3 종료 흡착 자세] solution_space={'2(반전)' if _need_space2 else '1(표준)'} "
+              f"joint_6={np.degrees(_diag2_joint6_rad):.1f}deg({_diag2_joint6_rad:.4f}rad) "
+              f"박스yaw={_diag2_box_yaw_deg:.1f}deg 박스pos={np.round(np.asarray(_diag2_box_pos, dtype=float), 3)}",
+              flush=True)
 
         chassis_pos0, _ = base_robot.get_world_pose()
         snapshot(eye=[chassis_pos0[0] - 0.8, chassis_pos0[1] - 1.6, chassis_pos0[2] + 0.9],

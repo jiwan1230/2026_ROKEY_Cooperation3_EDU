@@ -224,3 +224,49 @@ def draw_scene(
     plt.savefig(out_path, dpi=130)
     plt.close(fig)
     print("그래프 저장:", out_path)
+
+
+def draw_side_view(trunk_width, trunk_height, fixed_obstacles, placed_boxes, title, out_path):
+    """
+    측면도(Side View) - x(입구→안쪽) / z(높이) 평면에 투영. top-down(x-y)은 몇
+    층까지 쌓였는지를 못 보여주는데, 이 뷰는 쌓인 높이를 한눈에 보여준다.
+
+    draw_scene()과 별개 함수로 둔 이유: draw_scene()은 이미 7곳(GUI, ROS2 노드,
+    각 산업 시나리오 스케치 스크립트)에서 호출 중이라, "Side View 추가" 요구사항
+    하나 때문에 그 레이아웃/시그니처를 바꾸면 영향 범위가 너무 커진다 - 필요한
+    곳(planner_gui.py)만 이 함수를 추가로 호출한다.
+    """
+    G = ROBOT_TO_TRUNK_GAP
+
+    fig, ax = plt.subplots(figsize=(6.5, 4.2))
+    fig.suptitle(title, fontsize=11, weight="bold")
+
+    ax.add_patch(Rectangle((G, 0), trunk_width, trunk_height, fill=False,
+                            edgecolor="red", linewidth=2, label="trunk"))
+
+    for obs in fixed_obstacles:
+        ax.add_patch(Rectangle((G + obs.x, obs.z), obs.width, obs.height,
+                                facecolor=obs.color, edgecolor=obs.color, alpha=0.55))
+        ax.text(G + obs.x + obs.width / 2, obs.z + obs.height / 2, obs.box_id,
+                fontsize=6, ha="center", va="center", color="black")
+
+    for pb in placed_boxes:
+        ax.add_patch(Rectangle((G + pb.x, pb.z), pb.width, pb.height,
+                                facecolor=pb.color, edgecolor=("navy" if pb.dashed else pb.color),
+                                alpha=0.9, linewidth=(2.4 if pb.dashed else 1.3),
+                                linestyle=("--" if pb.dashed else "-")))
+        ax.text(G + pb.x + pb.width / 2, pb.z + pb.height / 2, pb.box_id,
+                fontsize=6, ha="center", va="center", color="white", weight="bold")
+
+    ax.set_xlim(0, G + trunk_width + 0.05)
+    ax.set_ylim(0, trunk_height + 0.05)
+    ax.set_xlabel("x (m, 입구→안쪽)")
+    ax.set_ylabel("z (m, 높이)")
+    ax.set_title("side view (x-z)", fontsize=10)
+    ax.legend(loc="upper left", fontsize=7)
+    ax.set_aspect("equal")
+
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=130)
+    plt.close(fig)
+    print("그래프 저장:", out_path)

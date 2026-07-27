@@ -45,6 +45,7 @@ generate_loading_plan = _m08.generate_loading_plan
 decide_loading_order = _m06.decide_loading_order
 place_one_box = _m07.place_one_box
 score_count_first = _m05.score_count_first
+make_weighted_score_fn = _m05.make_weighted_score_fn
 
 RESCAN_TRIGGER_POLICY = "PER_PLACEMENT"  # 지완 답변 확정: 박스 1개 놓을 때마다 1회
 
@@ -69,15 +70,26 @@ def rebuild_state_from_rescan(rescanned_placed_boxes: List["PlacedBox"]) -> "Ext
     return state
 
 
-def _run_strategy(order, trunk, rescanned_placed_boxes, score_fn, margin, allow_stacking):
+def _run_strategy(order, trunk, rescanned_placed_boxes, score_fn, margin, allow_stacking,
+                   allow_rotation=True, wall_margin=None, obstacle_margin=None, ceiling_margin=None,
+                   entrance_margin=None):
     """정해진 순서(order)로 재스캔 상태를 새로 구성하고 하나씩 배치 시도하는 공통 루프."""
     state = rebuild_state_from_rescan(rescanned_placed_boxes)
     plans, unloadable = [], []
-    order_counter = len(rescanned_placed_boxes) + 1  # 순번은 기존에 놓인 개수 다음부터 이어감
+    # 순번은 "실제로 이미 놓인 카트 박스" 개수 다음부터 이어간다 - 장애물
+    # (휠하우스 등, is_obstacle=True)은 로봇이 실은 게 아니라 원래 트렁크에
+    # 있던 고정 구조물이라 순번에서 빼야 한다. 버그로 발견됨: 이걸 안 뺐더니
+    # (지금 파이프라인에서 rescanned_placed_boxes가 사실상 항상 장애물뿐이라)
+    # 첫 카트 박스가 order=1이 아니라 order=(장애물 개수+1)로 나왔었다 - Task
+    # JSON의 sequence 필드에도 그대로 나가는 값이라 MSI2에 잘못 전달될 뻔함.
+    already_placed_cart_boxes = sum(1 for pb in rescanned_placed_boxes if not pb.box.is_obstacle)
+    order_counter = already_placed_cart_boxes + 1
 
     for box in order:
         plan = place_one_box(box, trunk, state, order_counter, score_fn=score_fn, margin=margin,
-                              allow_stacking=allow_stacking)
+                              allow_stacking=allow_stacking, allow_rotation=allow_rotation,
+                              wall_margin=wall_margin, obstacle_margin=obstacle_margin,
+                              ceiling_margin=ceiling_margin, entrance_margin=entrance_margin)
         if plan is not None:
             plans.append(plan)
             order_counter += 1
@@ -95,26 +107,44 @@ def _run_strategy(order, trunk, rescanned_placed_boxes, score_fn, margin, allow_
 def replan_after_rescan(
     remaining_boxes: List["Box"], trunk, rescanned_placed_boxes: List["PlacedBox"],
     mode: str = "large_first", margin: Optional[float] = None, allow_stacking: bool = False,
+    allow_rotation: bool = True, wall_margin: Optional[float] = None,
+    obstacle_margin: Optional[float] = None, ceiling_margin: Optional[float] = None,
+    entrance_margin: Optional[float] = None,
+    entrance_preference: float = 1.0, contact_preference: float = 1.0, height_preference: float = 1.0,
+    fixed_order: Optional[List[str]] = None,
 ):
     """
     재스캔 트리거(PER_PLACEMENT)가 발생할 때마다 호출.
     보수적 가정 버전: 재스캔으로 확인된 박스들로 상태를 다시 만들고,
     remaining_boxes(카트에 남은 것으로 알려진 박스)에 대해 이어서 계획한다.
 
-    mode/margin/allow_stacking은 08_unloadable_reason.generate_loading_plan()과
-    같은 뜻 - trunk_map_planner_node.py(ROS2)가 실제로 호출하는 게 08의
-    generate_loading_plan()이 아니라 이 함수라서, 사용자가 고른 모드/마진/쌓기
-    허용 여부가 로봇까지 실제로 전달되려면 여기도 지원해야 한다. mode="count_first"의
-    best-of-two 로직(작은 것부터 vs 큰 것부터 중 더 많이 담기는 쪽 채택)도
-    08과 동일하게 여기서 수행한다 - 08의 docstring 참고.
+    모든 파라미터는 08_unloadable_reason.generate_loading_plan()과 같은 뜻
+    (그쪽 docstring 참고) - trunk_map_planner_node.py(ROS2)가 실제로 호출하는
+    게 08의 generate_loading_plan()이 아니라 이 함수라서, 사용자가 고른
+    설정이 로봇까지 실제로 전달되려면 여기도 08과 똑같이 지원해야 한다.
+    mode="count_first"의 best-of-two 로직도, fixed_order가 주어지면 그 로직
+    자체를 건너뛰는 것도 08과 동일하게 여기서 수행한다.
     """
+    weighted_fn = None
+    if entrance_preference != 1.0 or contact_preference != 1.0 or height_preference != 1.0:
+        weighted_fn = make_weighted_score_fn(entrance_preference, contact_preference, height_preference)
+
+    extra_kwargs = dict(allow_rotation=allow_rotation, wall_margin=wall_margin,
+                         obstacle_margin=obstacle_margin, ceiling_margin=ceiling_margin,
+                         entrance_margin=entrance_margin)
+
+    if fixed_order is not None:
+        order = decide_loading_order(remaining_boxes, fixed_order=fixed_order)
+        return _run_strategy(order, trunk, rescanned_placed_boxes, weighted_fn, margin, allow_stacking, **extra_kwargs)
+
     if mode == "count_first":
         order_small_first = decide_loading_order(remaining_boxes, mode="count_first")
+        score_a = weighted_fn if weighted_fn is not None else score_count_first
         plans_a, unloadable_a = _run_strategy(
-            order_small_first, trunk, rescanned_placed_boxes, score_count_first, margin, allow_stacking)
+            order_small_first, trunk, rescanned_placed_boxes, score_a, margin, allow_stacking, **extra_kwargs)
         order_large_first = decide_loading_order(remaining_boxes, mode="large_first")
         plans_b, unloadable_b = _run_strategy(
-            order_large_first, trunk, rescanned_placed_boxes, None, margin, allow_stacking)
+            order_large_first, trunk, rescanned_placed_boxes, weighted_fn, margin, allow_stacking, **extra_kwargs)
 
         if len(plans_b) > len(plans_a):
             logger.info(
@@ -126,7 +156,7 @@ def replan_after_rescan(
 
     # 남은 박스만 대상으로 [⑥][⑦]을 그대로 다시 수행 (기존 배치는 이미 state에 반영됨)
     order = decide_loading_order(remaining_boxes, mode=mode)
-    return _run_strategy(order, trunk, rescanned_placed_boxes, None, margin, allow_stacking)
+    return _run_strategy(order, trunk, rescanned_placed_boxes, weighted_fn, margin, allow_stacking, **extra_kwargs)
 
 
 # TODO: 트리거 신호 연동 (트리거 정책은 확정, 신호 자체 연동은 미구현)
