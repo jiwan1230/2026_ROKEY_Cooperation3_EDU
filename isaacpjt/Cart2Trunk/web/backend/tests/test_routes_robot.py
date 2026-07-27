@@ -20,6 +20,8 @@ def test_cart_scan_returns_success_from_robot_bridge(monkeypatch):
         "ply_filename": "all_boxes_completed_20260727_000000_000000.ply",
         "ply_total_bytes": 330836,
         "ply_total_chunks": 11,
+        "raw_ply_filename": "cart_scan_raw_20260727_000000_000000.ply",
+        "raw_ply_total_bytes": 1308928,
     })
     resp = _client().post("/api/robot/cart-scan")
     assert resp.status_code == 200
@@ -32,6 +34,9 @@ def test_cart_scan_returns_success_from_robot_bridge(monkeypatch):
     assert body["ply_filename"] == "all_boxes_completed_20260727_000000_000000.ply"
     assert body["ply_url"] == "/api/robot/cart-scan-file/all_boxes_completed_20260727_000000_000000.ply"
     assert body["ply_total_bytes"] == 330836
+    assert body["raw_ply_filename"] == "cart_scan_raw_20260727_000000_000000.ply"
+    assert body["raw_ply_url"] == "/api/robot/cart-scan-file/cart_scan_raw_20260727_000000_000000.ply"
+    assert body["raw_ply_total_bytes"] == 1308928
 
 
 def test_cart_scan_returns_error_when_robot_bridge_fails(monkeypatch):
@@ -69,6 +74,9 @@ def test_trunk_scan_returns_success_from_robot_bridge(monkeypatch):
         "total_bytes": 100,
         "total_chunks": 1,
         "point_count": 42,
+        "raw_filename": "trunk_scan_raw_20260727_000000_000000.ply",
+        "raw_total_bytes": 18058669,
+        "raw_point_count": 1504879,
     })
     resp = _client().post("/api/robot/trunk-scan")
     assert resp.status_code == 200
@@ -79,6 +87,10 @@ def test_trunk_scan_returns_success_from_robot_bridge(monkeypatch):
     assert body["url"] == "/api/robot/trunk-scan-file/trunk_scan_20260727_000000_000000.ply"
     assert body["point_count"] == 42
     assert body["total_bytes"] == 100
+    assert body["raw_filename"] == "trunk_scan_raw_20260727_000000_000000.ply"
+    assert body["raw_url"] == "/api/robot/trunk-scan-file/trunk_scan_raw_20260727_000000_000000.ply"
+    assert body["raw_point_count"] == 1504879
+    assert body["raw_total_bytes"] == 18058669
 
 
 def test_trunk_scan_returns_error_when_robot_bridge_fails(monkeypatch):

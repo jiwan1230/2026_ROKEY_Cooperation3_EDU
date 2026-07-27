@@ -85,17 +85,19 @@ def _run_scan_client(console_script: str, label: str, timeout_sec: int) -> dict:
 
 def run_trunk_scan(timeout_sec: int = TRUNK_SCAN_TIMEOUT_SEC) -> dict:
     """`/cart2trunk/trunk_scan` 액션을 호출해서 89.py+90.py를 실행시키고, 청크로
-    받은 PLY를 RECEIVED_SCANS_DIR에 저장한다. 성공 시
-    {"success": True, "filename", "path", "total_bytes", "total_chunks", "point_count"}를
-    반환하고, 실패 시 RuntimeError를 던진다."""
+    받은 PLY 2개(전처리+원본)를 RECEIVED_SCANS_DIR에 저장한다. 성공 시
+    {"success": True, "filename", "path", "total_bytes", "total_chunks", "point_count",
+    "raw_filename", "raw_path", "raw_total_bytes", "raw_point_count"}를 반환하고,
+    실패 시 RuntimeError를 던진다."""
     return _run_scan_client("trunk_scan_client", "트렁크 스캔", timeout_sec)
 
 
 def run_cart_scan(timeout_sec: int = CART_SCAN_TIMEOUT_SEC) -> dict:
     """`/cart2trunk/cart_scan` 액션을 호출해서 99.py+multiview_scan.py를 실행시키고,
-    검출된 박스 JSON과 청크로 받은 PLY를 RECEIVED_SCANS_DIR에 저장한다. 성공 시
-    {"success": True, "box_count", "json_filename", "ply_filename",
-    "ply_total_bytes", "ply_total_chunks"}를 반환하고, 실패 시 RuntimeError를 던진다."""
+    검출된 박스 JSON과 청크로 받은 PLY 2개(전처리+원본)를 RECEIVED_SCANS_DIR에
+    저장한다. 성공 시 {"success": True, "box_count", "json_filename", "ply_filename",
+    "ply_total_bytes", "ply_total_chunks", "raw_ply_filename", "raw_ply_total_bytes"}를
+    반환하고, 실패 시 RuntimeError를 던진다."""
     return _run_scan_client("cart_scan_client", "카트 스캔", timeout_sec)
 
 

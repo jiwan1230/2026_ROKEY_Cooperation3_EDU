@@ -23,6 +23,7 @@ import pathlib
 import queue
 import time
 
+import numpy as np
 import rclpy
 from rclpy.action import ActionServer
 from rclpy.callback_groups import ReentrantCallbackGroup
@@ -176,6 +177,22 @@ class TrunkScanActionServer(Node):
                 chunk = data[i * chunk_size:(i + 1) * chunk_size]
                 self._emit(goal_handle, feedback, "sending_chunks", i, total_chunks, chunk)
 
+            # [2026-07-28] "원본" 뷰용 - 89.py가 저장한 필터링 전 포인트클라우드.
+            # 90.py를 거친 위 trunk_pointcloud_filtered_base.ply(크롭+이상치제거+
+            # voxel다운샘플)와 달리, 이건 그대로다(수백만 점이라 90.py 결과보다
+            # 훨씬 큼 - 청크 수도 그만큼 많다).
+            self._emit(goal_handle, feedback, "reading_raw_ply")
+            raw_npy_path = self._cart2trunk_dir / "results" / "holonomic_base" / "trunk_pointcloud.npy"
+            raw_points = np.load(raw_npy_path)
+            raw_data = pipeline_runner.write_binary_ply_from_xyz(raw_points)
+            raw_point_count = len(raw_points)
+
+            raw_total_chunks = max(1, math.ceil(len(raw_data) / chunk_size))
+            self._emit(goal_handle, feedback, "sending_raw_chunks", total_chunks=raw_total_chunks)
+            for i in range(raw_total_chunks):
+                chunk = raw_data[i * chunk_size:(i + 1) * chunk_size]
+                self._emit(goal_handle, feedback, "sending_raw_chunks", i, raw_total_chunks, chunk)
+
         except pipeline_runner.PipelineStageError as e:
             self.get_logger().error(str(e))
             goal_handle.abort()
@@ -185,14 +202,16 @@ class TrunkScanActionServer(Node):
             goal_handle.abort()
             return TrunkScan.Result(success=False, message=f"예상치 못한 오류: {e}")
 
-        self._emit(goal_handle, feedback, "done", total_chunks=total_chunks)
+        self._emit(goal_handle, feedback, "done", total_chunks=raw_total_chunks)
         goal_handle.succeed()
         import datetime
-        filename = f"trunk_scan_{datetime.datetime.now():%Y%m%d_%H%M%S_%f}.ply"
+        stamp = f"{datetime.datetime.now():%Y%m%d_%H%M%S_%f}"
         return TrunkScan.Result(
             success=True, message="트렁크 스캔 완료",
-            filename=filename, total_bytes=len(data),
+            filename=f"trunk_scan_{stamp}.ply", total_bytes=len(data),
             total_chunks=total_chunks, point_count=point_count,
+            raw_filename=f"trunk_scan_raw_{stamp}.ply", raw_total_bytes=len(raw_data),
+            raw_total_chunks=raw_total_chunks, raw_point_count=raw_point_count,
         )
 
 

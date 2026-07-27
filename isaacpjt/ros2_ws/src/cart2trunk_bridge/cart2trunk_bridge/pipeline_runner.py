@@ -159,3 +159,24 @@ def parse_ply_vertex_count(data: bytes) -> int:
         if line.startswith("element vertex"):
             return int(line.split()[-1])
     return -1
+
+
+def write_binary_ply_from_xyz(points: np.ndarray) -> bytes:
+    """Nx3 포인트 배열을 binary_little_endian PLY 바이트열로 직렬화한다.
+
+    trunk_pointcloud.npy/merged_cart_scan.npy(89.py/99.py가 저장하는 미가공
+    포인트클라우드, 둘 다 xyz float32뿐 - color/normal 없음)를 "원본" 뷰용
+    PLY로 바꿀 때 쓴다. convert_ply_double_to_float32()의 반대 방향(이쪽은
+    "PLY가 이미 있고 double->float32로 재인코딩") - 여기는 "PLY 자체가
+    없고 raw numpy 배열에서 새로 만듦"이라는 차이가 있다."""
+    points = np.ascontiguousarray(points, dtype=np.float32)
+    header = (
+        "ply\n"
+        "format binary_little_endian 1.0\n"
+        f"element vertex {len(points)}\n"
+        "property float x\n"
+        "property float y\n"
+        "property float z\n"
+        "end_header\n"
+    ).encode("ascii")
+    return header + points.tobytes()

@@ -37,6 +37,13 @@ def cart_scan():
         "ply_filename": result["ply_filename"],
         "ply_url": f"/api/robot/cart-scan-file/{result['ply_filename']}",
         "ply_total_bytes": result.get("ply_total_bytes"),
+        # "원본" 뷰용 - 박스 검출(multiview_scan.py) 전 병합 포인트클라우드.
+        "raw_ply_filename": result.get("raw_ply_filename"),
+        "raw_ply_url": (
+            f"/api/robot/cart-scan-file/{result['raw_ply_filename']}"
+            if result.get("raw_ply_filename") else None
+        ),
+        "raw_ply_total_bytes": result.get("raw_ply_total_bytes"),
     })
 
 
@@ -59,6 +66,14 @@ def trunk_scan():
         "url": f"/api/robot/trunk-scan-file/{result['filename']}",
         "point_count": result.get("point_count"),
         "total_bytes": result.get("total_bytes"),
+        # "원본" 뷰용 - 90.export_trunk_map_holonomic.py로 필터링하기 전 포인트클라우드.
+        "raw_filename": result.get("raw_filename"),
+        "raw_url": (
+            f"/api/robot/trunk-scan-file/{result['raw_filename']}"
+            if result.get("raw_filename") else None
+        ),
+        "raw_point_count": result.get("raw_point_count"),
+        "raw_total_bytes": result.get("raw_total_bytes"),
     })
 
 

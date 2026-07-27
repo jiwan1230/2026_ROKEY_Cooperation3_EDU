@@ -143,6 +143,56 @@ describe("ScanViewerPanel", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
+  it("트렁크 스캔 응답에 raw_url이 있으면 (기본값인) 원본 모드에서 실제 PLY를 불러와 렌더링하고, 더미 BoundingBox는 안 쓴다", async () => {
+    vi.spyOn(client, "postTrunkScan").mockResolvedValue({
+      status: "ok", message: "트렁크 스캔 완료",
+      url: "/api/robot/trunk-scan-file/trunk_scan_test.ply",
+      raw_url: "/api/robot/trunk-scan-file/trunk_scan_raw_test.ply",
+    });
+    const fetchSpy = vi.spyOn(client, "fetchScanFile").mockResolvedValue(new ArrayBuffer(0));
+
+    render(<ScanViewerPanel kind="trunk" />);
+    fireEvent.click(screen.getByTestId("trigger-trunk"));
+    await waitFor(() => expect(screen.getByTestId("status-trunk").textContent).toBe("완료"));
+
+    // 원본 토글이 기본 선택값이라 따로 클릭할 필요 없음.
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith("/api/robot/trunk-scan-file/trunk_scan_raw_test.ply"));
+    expect(screen.queryByTestId("raw-mesh")).toBeNull();
+  });
+
+  it("카트 스캔 응답에 raw_ply_url이 있으면 원본 모드에서 실제 PLY를 불러와 렌더링한다", async () => {
+    vi.spyOn(client, "postCartScan").mockResolvedValue({
+      status: "ok", message: "카트 스캔 완료", box_count: 2,
+      ply_url: "/api/robot/cart-scan-file/all_boxes_completed_test.ply",
+      raw_ply_url: "/api/robot/cart-scan-file/cart_scan_raw_test.ply",
+    });
+    const fetchSpy = vi.spyOn(client, "fetchScanFile").mockResolvedValue(new ArrayBuffer(0));
+
+    render(<ScanViewerPanel kind="cart" />);
+    fireEvent.click(screen.getByTestId("trigger-cart"));
+    await waitFor(() => expect(screen.getByTestId("status-cart").textContent).toBe("완료"));
+
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith("/api/robot/cart-scan-file/cart_scan_raw_test.ply"));
+    expect(screen.queryByTestId("raw-mesh")).toBeNull();
+  });
+
+  it("원본/전처리를 오가면 각각의 실제 PLY를 따로 불러온다(서로 안 섞임)", async () => {
+    vi.spyOn(client, "postTrunkScan").mockResolvedValue({
+      status: "ok", message: "완료",
+      url: "/api/robot/trunk-scan-file/processed.ply",
+      raw_url: "/api/robot/trunk-scan-file/raw.ply",
+    });
+    const fetchSpy = vi.spyOn(client, "fetchScanFile").mockResolvedValue(new ArrayBuffer(0));
+
+    render(<ScanViewerPanel kind="trunk" />);
+    fireEvent.click(screen.getByTestId("trigger-trunk"));
+    await waitFor(() => expect(screen.getByTestId("status-trunk").textContent).toBe("완료"));
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith("/api/robot/trunk-scan-file/raw.ply"));
+
+    fireEvent.click(screen.getByTestId("trunk-viewmode-processed"));
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith("/api/robot/trunk-scan-file/processed.ply"));
+  });
+
   it("실패하면 onLog가 오류 메시지로 호출된다", async () => {
     vi.spyOn(client, "postCartScan").mockRejectedValue(new Error("네트워크 오류"));
     const onLog = vi.fn();

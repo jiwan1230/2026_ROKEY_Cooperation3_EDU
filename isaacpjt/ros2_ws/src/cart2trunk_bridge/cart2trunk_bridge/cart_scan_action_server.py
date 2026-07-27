@@ -25,6 +25,7 @@ import pathlib
 import queue
 import time
 
+import numpy as np
 import rclpy
 from rclpy.action import ActionServer
 from rclpy.callback_groups import ReentrantCallbackGroup
@@ -203,6 +204,20 @@ class CartScanActionServer(Node):
                 chunk = ply_data[i * chunk_size:(i + 1) * chunk_size]
                 self._emit(goal_handle, feedback, "sending_chunks", i, total_chunks, chunk)
 
+            # [2026-07-28] "원본" 뷰용 - 99.py가 저장한 박스 검출 전 병합 포인트클라우드.
+            # multiview_scan.py를 거친 위 ply_data(박스별 재구성 결과)와 달리 원본
+            # 그대로다.
+            self._emit(goal_handle, feedback, "reading_raw_ply")
+            raw_npy_path = self._cart2trunk_dir / "perception" / "scan_cache" / "merged_cart_scan.npy"
+            raw_points = np.load(raw_npy_path)
+            raw_ply_data = pipeline_runner.write_binary_ply_from_xyz(raw_points)
+
+            raw_total_chunks = max(1, math.ceil(len(raw_ply_data) / chunk_size))
+            self._emit(goal_handle, feedback, "sending_raw_chunks", total_chunks=raw_total_chunks)
+            for i in range(raw_total_chunks):
+                chunk = raw_ply_data[i * chunk_size:(i + 1) * chunk_size]
+                self._emit(goal_handle, feedback, "sending_raw_chunks", i, raw_total_chunks, chunk)
+
         except pipeline_runner.PipelineStageError as e:
             self.get_logger().error(str(e))
             goal_handle.abort()
@@ -212,13 +227,17 @@ class CartScanActionServer(Node):
             goal_handle.abort()
             return CartScan.Result(success=False, message=f"예상치 못한 오류: {e}")
 
-        self._emit(goal_handle, feedback, "done", total_chunks=total_chunks)
+        self._emit(goal_handle, feedback, "done", total_chunks=raw_total_chunks)
         goal_handle.succeed()
+        import datetime
+        raw_filename = f"cart_scan_raw_{datetime.datetime.now():%Y%m%d_%H%M%S_%f}.ply"
         return CartScan.Result(
             success=True, message="카트 스캔 완료", box_count=box_count,
             json_filename=json_path.name, json_text=json_text,
             ply_filename=ply_path.name, ply_total_bytes=len(ply_data),
             ply_total_chunks=total_chunks,
+            raw_ply_filename=raw_filename, raw_ply_total_bytes=len(raw_ply_data),
+            raw_ply_total_chunks=raw_total_chunks,
         )
 
 
