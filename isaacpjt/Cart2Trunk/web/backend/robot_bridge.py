@@ -31,6 +31,11 @@ CART_SCAN_TIMEOUT_SEC = 180
 # 2026-07-27 4박스 실측 기준 STAGE0~4 전체(박스당 수 분)가 15~20분 걸렸다 -
 # trunk/cart_scan(고정 180초)보다 훨씬 넉넉하게 잡는다.
 PICK_AND_PLACE_TIMEOUT_SEC = 1800
+# pick_and_place_client가 Feedback을 실시간으로 append하는 파일 - POST
+# /api/robot/pick-and-place가 15~20분 동안 블로킹돼있는 중에도 GET
+# /api/robot/pick-and-place/progress로 이 파일을 폴링해서 진행 상황을
+# 보여줄 수 있다(app.py가 threaded=True라 GET이 POST와 동시에 처리됨).
+PICK_AND_PLACE_PROGRESS_FILE = RECEIVED_SCANS_DIR / "pick_and_place_progress.jsonl"
 
 
 def _run_client_subprocess(cmd: str, label: str, timeout_sec: int) -> dict:
@@ -101,15 +106,41 @@ def run_pick_and_place(plan_id: str = "", timeout_sec: int = PICK_AND_PLACE_TIME
     서비스를 pick_and_place_action_server.py가 대신 호출하는 방식이다(cart2trunk_bridge/
     pick_and_place_action_server.py 참고) - 받을 PLY가 없어서 --output-dir이 필요없다.
     성공 시 {"success": True, "message", "boxes_placed", "boxes_total"}를 반환하고,
-    실패 시 RuntimeError를 던진다."""
+    실패 시 RuntimeError를 던진다.
+
+    호출 전에 PICK_AND_PLACE_PROGRESS_FILE을 비워서, read_pick_and_place_progress()가
+    이전 실행의 이벤트를 이번 실행 것으로 착각하지 않게 한다."""
+    RECEIVED_SCANS_DIR.mkdir(parents=True, exist_ok=True)
+    PICK_AND_PLACE_PROGRESS_FILE.write_text("", encoding="utf-8")
+
     cmd = (
         f"source {shlex.quote(_ROS_SETUP)} && "
         f"source {shlex.quote(_ROS2_WS_SETUP)} && "
         f"ros2 run cart2trunk_bridge pick_and_place_client "
         f"--plan-id {shlex.quote(plan_id)} "
-        f"--timeout-sec {timeout_sec}"
+        f"--timeout-sec {timeout_sec} "
+        f"--progress-file {shlex.quote(str(PICK_AND_PLACE_PROGRESS_FILE))}"
     )
     return _run_client_subprocess(cmd, "pick_and_place", timeout_sec)
+
+
+def read_pick_and_place_progress() -> list:
+    """PICK_AND_PLACE_PROGRESS_FILE(JSON Lines)을 읽어서 이벤트 리스트로
+    반환한다. run_pick_and_place()가 아직 한 번도 안 불렸거나 파일이 없으면
+    빈 리스트. 쓰는 중(pick_and_place_client가 계속 append)인 마지막 줄이
+    잘려 있을 수 있어 그런 줄은 조용히 건너뛴다(다음 폴링에서 완성된 채로
+    다시 읽힘)."""
+    if not PICK_AND_PLACE_PROGRESS_FILE.exists():
+        return []
+    events = []
+    for line in PICK_AND_PLACE_PROGRESS_FILE.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            events.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return events
 
 
 def send_placement_plan(task_json: dict, timeout_sec: int = 30) -> dict:

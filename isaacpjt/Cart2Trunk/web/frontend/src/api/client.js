@@ -125,6 +125,16 @@ export async function postPickAndPlace(planId = "") {
   return handleResponse(resp);
 }
 
+// POST /api/robot/pick-and-place가 15~20분 동안 응답을 안 주는 동안, 이 GET을
+// 주기적으로 폴링해서 박스 단위 진행 상황(box_started/box_done 등)을 받아온다
+// - {"events": [{"stage", "box_index", "box_count", "box_id"}, ...]} 형태로,
+// 매번 "지금까지의 전체 이벤트 목록"을 그대로 돌려준다(마지막으로 본 개수
+// 이후만 새 이벤트로 취급하면 됨).
+export async function fetchPickAndPlaceProgress() {
+  const resp = await fetch(`${BASE}/robot/pick-and-place/progress`);
+  return handleResponse(resp);
+}
+
 // 산업현장 시나리오 미리보기 - routes/scenarios.py 참고. 요청 바디는 필요 없다.
 export async function postScenarioPlan(scenarioId) {
   const resp = await fetch(`${BASE}/scenarios/${scenarioId}/plan`, {

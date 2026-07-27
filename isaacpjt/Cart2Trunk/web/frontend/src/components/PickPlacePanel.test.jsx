@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import PickPlacePanel from "./PickPlacePanel.jsx";
 import * as client from "../api/client.js";
 
-afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.useRealTimers(); });
 
 describe("PickPlacePanel", () => {
   it("대기 중엔 Stop 상태와 '대기 중' 텍스트를 보여준다", () => {
@@ -17,6 +17,7 @@ describe("PickPlacePanel", () => {
     vi.spyOn(client, "postPickAndPlace").mockReturnValue(
       new Promise((resolve) => { resolvePromise = resolve; })
     );
+    vi.spyOn(client, "fetchPickAndPlaceProgress").mockResolvedValue({ events: [] });
 
     render(<PickPlacePanel />);
     await act(async () => { fireEvent.click(screen.getByTestId("trigger-pickAndPlace")); });
@@ -34,6 +35,7 @@ describe("PickPlacePanel", () => {
     vi.spyOn(client, "postPickAndPlace").mockResolvedValue({
       status: "ok", boxes_placed: 4, boxes_total: 4,
     });
+    vi.spyOn(client, "fetchPickAndPlaceProgress").mockResolvedValue({ events: [] });
 
     render(<PickPlacePanel />);
     await act(async () => { fireEvent.click(screen.getByTestId("trigger-pickAndPlace")); });
@@ -45,6 +47,7 @@ describe("PickPlacePanel", () => {
 
   it("백엔드가 실패를 반환하면 Warning 상태로 실패 메시지를 보여준다(가짜 완료로 안 넘어감)", async () => {
     vi.spyOn(client, "postPickAndPlace").mockRejectedValue(new Error("isaac_task_runner.py에 연결할 수 없습니다"));
+    vi.spyOn(client, "fetchPickAndPlaceProgress").mockResolvedValue({ events: [] });
 
     render(<PickPlacePanel />);
     await act(async () => { fireEvent.click(screen.getByTestId("trigger-pickAndPlace")); });
@@ -56,6 +59,7 @@ describe("PickPlacePanel", () => {
 
   it("시작하면 onLog가 시작 메시지로, 실제 완료 후엔 완료 메시지로 호출된다", async () => {
     vi.spyOn(client, "postPickAndPlace").mockResolvedValue({ status: "ok", boxes_placed: 2, boxes_total: 2 });
+    vi.spyOn(client, "fetchPickAndPlaceProgress").mockResolvedValue({ events: [] });
     const onLog = vi.fn();
 
     render(<PickPlacePanel onLog={onLog} />);
@@ -63,5 +67,44 @@ describe("PickPlacePanel", () => {
 
     expect(onLog).toHaveBeenCalledWith("픽앤플레이스 시작");
     expect(onLog).toHaveBeenCalledWith("픽앤플레이스 완료");
+  });
+
+  it("진행 중 폴링으로 새 이벤트를 받으면 관제 로그에 추가되고 진행률/작업 텍스트가 갱신된다", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let resolvePromise;
+    vi.spyOn(client, "postPickAndPlace").mockReturnValue(
+      new Promise((resolve) => { resolvePromise = resolve; })
+    );
+    const progressSpy = vi.spyOn(client, "fetchPickAndPlaceProgress");
+    progressSpy.mockResolvedValueOnce({
+      events: [
+        { stage: "started", box_index: 0, box_count: 0, box_id: "" },
+        { stage: "box_started", box_index: 0, box_count: 4, box_id: "0" },
+      ],
+    });
+    const onLog = vi.fn();
+
+    render(<PickPlacePanel onLog={onLog} />);
+    await act(async () => { fireEvent.click(screen.getByTestId("trigger-pickAndPlace")); });
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+
+    expect(onLog).toHaveBeenCalledWith("픽앤플레이스 시작됨(Isaac Sim)");
+    expect(onLog).toHaveBeenCalledWith("박스 1/4 시작 (id=0)");
+    expect(screen.getByTestId("current-task").textContent).toBe("박스 1/4 진행 중 (id=0)");
+
+    progressSpy.mockResolvedValue({
+      events: [
+        { stage: "started", box_index: 0, box_count: 0, box_id: "" },
+        { stage: "box_started", box_index: 0, box_count: 4, box_id: "0" },
+        { stage: "box_done", box_index: 0, box_count: 4, box_id: "0" },
+      ],
+    });
+    await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+
+    expect(onLog).toHaveBeenCalledWith("박스 1/4 배치 완료");
+    expect(screen.getByTestId("current-task").textContent).toBe("박스 1/4 배치 완료");
+
+    await act(async () => { resolvePromise({ status: "ok", boxes_placed: 4, boxes_total: 4 }); });
   });
 });

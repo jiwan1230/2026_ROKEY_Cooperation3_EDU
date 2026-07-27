@@ -82,3 +82,13 @@ def pick_and_place():
         "boxes_placed": result.get("boxes_placed"),
         "boxes_total": result.get("boxes_total"),
     })
+
+
+@robot_bp.get("/api/robot/pick-and-place/progress")
+def pick_and_place_progress():
+    """POST /api/robot/pick-and-place가 15~20분 동안 블로킹돼있는 중에도
+    프론트가 이 GET을 주기적으로 폴링해서 박스 단위 진행 상황(box_started/
+    box_done 등)을 관제 로그에 실시간으로 반영할 수 있게 한다(app.py의
+    threaded=True 덕분에 POST와 동시에 처리됨). run_pick_and_place()가 아직
+    한 번도 안 불렸으면 빈 목록을 돌려준다."""
+    return jsonify({"events": robot_bridge.read_pick_and_place_progress()})

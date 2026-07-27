@@ -151,6 +151,24 @@ def test_pick_and_place_returns_error_when_robot_bridge_fails(monkeypatch):
     assert "isaac_task_runner.py에 연결할 수 없습니다" in body["message"]
 
 
+def test_pick_and_place_progress_returns_events_from_robot_bridge(monkeypatch):
+    events = [
+        {"stage": "box_started", "box_index": 0, "box_count": 4, "box_id": "0"},
+        {"stage": "box_done", "box_index": 0, "box_count": 4, "box_id": "0"},
+    ]
+    monkeypatch.setattr(robot_module.robot_bridge, "read_pick_and_place_progress", lambda: events)
+    resp = _client().get("/api/robot/pick-and-place/progress")
+    assert resp.status_code == 200
+    assert resp.get_json()["events"] == events
+
+
+def test_pick_and_place_progress_empty_before_any_run(monkeypatch):
+    monkeypatch.setattr(robot_module.robot_bridge, "read_pick_and_place_progress", lambda: [])
+    resp = _client().get("/api/robot/pick-and-place/progress")
+    assert resp.status_code == 200
+    assert resp.get_json()["events"] == []
+
+
 def test_get_method_not_allowed():
     # 실수로 GET으로 호출하는 걸 방지하는 회귀 테스트 - 반드시 POST여야 한다.
     resp = _client().get("/api/robot/cart-scan")

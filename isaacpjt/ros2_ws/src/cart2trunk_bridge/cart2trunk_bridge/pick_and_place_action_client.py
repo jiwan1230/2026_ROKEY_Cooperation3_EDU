@@ -8,6 +8,13 @@ CLI. Flask 백엔드(`web/backend/robot_bridge.py`)가 서브프로세스로 이
 trunk_scan_client/cart_scan_client와 달리 받을 PLY가 없다 - 그냥 완료를
 기다렸다가 성공/실패와 박스 개수만 돌려준다.
 
+[2026-07-28] --progress-file 추가 - 이 프로세스 자체는 15~20분 동안 안 끝나고
+블로킹돼있으므로(robot_bridge.py의 POST 요청 하나가 그동안 계속 대기), 중간
+진행 상황(박스 시작/완료 등)을 화면에 보여주려면 별도 경로가 필요하다. 매
+Feedback을 이 파일에 JSON Lines(한 줄에 이벤트 하나)로 계속 append하고,
+Flask의 GET /api/robot/pick-and-place/progress가 이 파일을 폴링해서 프론트에
+전달한다(app.py가 threaded=True라 POST가 진행 중이어도 GET은 동시에 처리됨).
+
 성공/실패 여부는 종료 코드(0/1)와 stdout 마지막 줄의 JSON으로 판단한다.
 """
 import argparse
@@ -20,9 +27,16 @@ from rclpy.action import ActionClient
 from cart2trunk_interfaces.action import PickAndPlace
 
 
-def _fail(message):
+def _fail(message, progress_file=None):
+    if progress_file:
+        _append_progress(progress_file, {"stage": "error", "message": message})
     print(json.dumps({"success": False, "message": message}))
     sys.exit(1)
+
+
+def _append_progress(progress_file, event):
+    with open(progress_file, "a", encoding="utf-8") as f:
+        f.write(json.dumps(event, ensure_ascii=False) + "\n")
 
 
 def main(args=None):
@@ -31,6 +45,9 @@ def main(args=None):
     parser.add_argument("--timeout-sec", type=float, default=1800.0,
                          help="액션 전체 타임아웃(초) - 4박스 기준 실측 15~20분 소요")
     parser.add_argument("--server-wait-sec", type=float, default=10.0, help="액션 서버 연결 대기(초)")
+    parser.add_argument("--progress-file", default=None,
+                         help="Feedback을 JSON Lines로 계속 append할 파일 경로(선택) - "
+                              "robot_bridge.py가 매 호출 전에 비워두고 넘겨준다.")
     parsed = parser.parse_args(args=args)
 
     rclpy.init()
@@ -42,10 +59,16 @@ def main(args=None):
         node.get_logger().info(
             f"[진행] {fb.stage} box={fb.box_index + 1}/{fb.box_count} id={fb.box_id}"
             if fb.box_count else f"[진행] {fb.stage}")
+        if parsed.progress_file:
+            _append_progress(parsed.progress_file, {
+                "stage": fb.stage, "box_index": fb.box_index,
+                "box_count": fb.box_count, "box_id": fb.box_id,
+            })
 
     if not client.wait_for_server(timeout_sec=parsed.server_wait_sec):
         _fail("액션 서버(/cart2trunk/pick_and_place)에 연결할 수 없습니다 - Isaac Sim PC의 "
-              "pick_and_place_action_server가 켜져 있는지, ROS_DOMAIN_ID가 일치하는지 확인하세요")
+              "pick_and_place_action_server가 켜져 있는지, ROS_DOMAIN_ID가 일치하는지 확인하세요",
+              progress_file=parsed.progress_file)
 
     goal_msg = PickAndPlace.Goal()
     goal_msg.plan_id = parsed.plan_id
@@ -54,17 +77,24 @@ def main(args=None):
     rclpy.spin_until_future_complete(node, send_goal_future, timeout_sec=parsed.timeout_sec)
     goal_handle = send_goal_future.result()
     if goal_handle is None or not goal_handle.accepted:
-        _fail("액션 목표가 거부되었습니다")
+        _fail("액션 목표가 거부되었습니다", progress_file=parsed.progress_file)
 
     result_future = goal_handle.get_result_async()
     rclpy.spin_until_future_complete(node, result_future, timeout_sec=parsed.timeout_sec)
     wrapped = result_future.result()
     if wrapped is None:
-        _fail(f"결과 수신 타임아웃({parsed.timeout_sec}초) - pick_and_place가 아직 진행 중일 수 있습니다")
+        _fail(f"결과 수신 타임아웃({parsed.timeout_sec}초) - pick_and_place가 아직 진행 중일 수 있습니다",
+              progress_file=parsed.progress_file)
 
     result = wrapped.result
     if not result.success:
-        _fail(result.message or "pick_and_place 실패")
+        _fail(result.message or "pick_and_place 실패", progress_file=parsed.progress_file)
+
+    if parsed.progress_file:
+        _append_progress(parsed.progress_file, {
+            "stage": "done", "box_index": result.boxes_placed,
+            "box_count": result.boxes_total, "box_id": "",
+        })
 
     print(json.dumps({
         "success": True,
