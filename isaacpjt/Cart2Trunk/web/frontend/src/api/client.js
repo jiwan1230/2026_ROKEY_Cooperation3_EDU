@@ -72,8 +72,10 @@ export async function postParseVisionCorners(visionCornersJson) {
   return handleResponse(resp);
 }
 
-// 로봇(MSI2) 동작 트리거 - 지금은 백엔드가 실제 ROS2 없이 더미 응답만 준다
-// (routes/robot.py 참고). 요청 바디는 필요 없다.
+// 로봇(MSI2) 동작 트리거 - cart-scan/pick-and-place는 아직 백엔드가 실제 ROS2
+// 없이 더미 응답만 준다. trunk-scan은 실제 ROS2 Action으로 연동되어 있어서
+// 성공 시 filename/url/point_count가 함께 온다(routes/robot.py 참고). 요청
+// 바디는 필요 없다.
 export async function postCartScan() {
   const resp = await fetch(`${BASE}/robot/cart-scan`, {
     method: "POST",
@@ -90,6 +92,16 @@ export async function postTrunkScan() {
     body: JSON.stringify({}),
   });
   return handleResponse(resp);
+}
+
+// 트렁크 스캔 성공 응답의 url(예: "/api/robot/trunk-scan-file/xxx.ply")로 실제
+// PLY 바이너리를 받아온다 - PLYLoader.parse()에 그대로 넘길 수 있는 ArrayBuffer.
+export async function fetchTrunkScanPly(url) {
+  const resp = await fetch(url);
+  if (!resp.ok) {
+    throw new Error("트렁크 스캔 PLY 파일을 불러오지 못했습니다");
+  }
+  return resp.arrayBuffer();
 }
 
 export async function postPickAndPlace() {

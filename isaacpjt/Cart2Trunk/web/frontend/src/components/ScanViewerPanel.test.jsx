@@ -17,6 +17,13 @@ vi.mock("./sceneMeshes.jsx", () => ({
   layoutStagingBoxes: () => [{ id: "Large", position: [0, 0, 0], dimensions: [0.3, 0.3, 0.2] }],
   computeCartFootprint: () => ({ minX: 0, maxX: 1, minY: 0, maxY: 1, height: 0.5 }),
 }));
+vi.mock("three/examples/jsm/loaders/PLYLoader.js", () => ({
+  PLYLoader: class {
+    parse() {
+      return { computeBoundingSphere: () => {} };
+    }
+  },
+}));
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
@@ -79,6 +86,35 @@ describe("ScanViewerPanel", () => {
     await waitFor(() => expect(screen.getByTestId("status-trunk").textContent).toBe("완료"));
 
     expect(onLog).toHaveBeenCalledWith("트렁크 스캔 완료");
+  });
+
+  it("트렁크 스캔 응답에 url이 있으면 전처리 모드에서 실제 PLY를 불러와 렌더링하고, 더미 TrunkWireframe은 안 쓴다", async () => {
+    vi.spyOn(client, "postTrunkScan").mockResolvedValue({
+      status: "ok", message: "트렁크 스캔 완료",
+      url: "/api/robot/trunk-scan-file/trunk_scan_test.ply", point_count: 123,
+    });
+    const fetchSpy = vi.spyOn(client, "fetchTrunkScanPly").mockResolvedValue(new ArrayBuffer(0));
+
+    render(<ScanViewerPanel kind="trunk" />);
+    fireEvent.click(screen.getByTestId("trigger-trunk"));
+    await waitFor(() => expect(screen.getByTestId("status-trunk").textContent).toBe("완료"));
+
+    fireEvent.click(screen.getByTestId("trunk-viewmode-processed"));
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith("/api/robot/trunk-scan-file/trunk_scan_test.ply"));
+    expect(screen.queryByTestId("trunk-mesh")).toBeNull();
+  });
+
+  it("트렁크 스캔 응답에 url이 없으면(더미) 전처리 모드에서 기존 TrunkWireframe을 그대로 쓴다", async () => {
+    vi.spyOn(client, "postTrunkScan").mockResolvedValue({ status: "ok", dummy: true, message: "완료" });
+    const fetchSpy = vi.spyOn(client, "fetchTrunkScanPly");
+
+    render(<ScanViewerPanel kind="trunk" />);
+    fireEvent.click(screen.getByTestId("trigger-trunk"));
+    await waitFor(() => expect(screen.getByTestId("status-trunk").textContent).toBe("완료"));
+
+    fireEvent.click(screen.getByTestId("trunk-viewmode-processed"));
+    expect(screen.getByTestId("trunk-mesh")).toBeInTheDocument();
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it("실패하면 onLog가 오류 메시지로 호출된다", async () => {
