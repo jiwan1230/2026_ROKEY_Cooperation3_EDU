@@ -1,40 +1,25 @@
 """
 routes/robot.py
 POST /api/robot/cart-scan, /trunk-scan, /pick-and-place - 로봇(MSI2 - 신지완/
-민결) 동작 트리거. pick-and-place는 아직 ROS2 노드 구조가 설계 중이라
-DUMMY_DELAY_SECONDS만큼 대기한 뒤 항상 성공 응답을 돌려주는 더미다.
-
-trunk-scan/cart-scan은 실제 ROS2 Action(robot_bridge.py 참고)으로 연동했다:
+민결) 동작 트리거. 셋 다 실제 ROS2 Action(robot_bridge.py 참고)으로 연동했다:
 - trunk-scan: /cart2trunk/trunk_scan - 89.trunk_scan_holonomic.py ->
   90.export_trunk_map_holonomic.py 실행, PLY를 청크로 받아
   GET /api/robot/trunk-scan-file/<filename>으로 서빙.
 - cart-scan: /cart2trunk/cart_scan - 99.cart_scan_dual_side_holonomic.py ->
   perception/multiview_scan.py 실행, 박스 JSON+PLY를 받아
   GET /api/robot/cart-scan-file/<filename>으로 서빙.
+- pick-and-place: /cart2trunk/pick_and_place - trunk/cart-scan과 달리 매번
+  Isaac Sim을 새로 부팅하지 않는다. Isaac Sim PC에서 이미 계속 떠있는
+  isaac_task_runner.py의 Trigger 서비스를 pick_and_place_action_server.py가
+  대신 호출하는 얇은 어댑터라, isaac_task_runner.py가 실행 중이어야 성공한다.
 """
 import subprocess
-import time
 
-from flask import Blueprint, jsonify, send_from_directory
+from flask import Blueprint, jsonify, request, send_from_directory
 
 import robot_bridge
 
 robot_bp = Blueprint("robot", __name__)
-
-# 실제 스캔/동작 시간을 흉내내는 더미 지연(초). 테스트에서는 이 값을
-# monkeypatch로 0으로 낮춰서 느려지지 않게 한다.
-DUMMY_DELAY_SECONDS = 1.5
-
-
-def _dummy_trigger(step_name: str):
-    time.sleep(DUMMY_DELAY_SECONDS)
-    # TODO(MSI2): 여기에 실제 ROS2 서비스/액션 호출을 넣고, 그 결과에 따라
-    # status/message를 채운다. 지금은 항상 성공하는 더미.
-    return jsonify({
-        "status": "ok",
-        "dummy": True,
-        "message": f"{step_name} 완료 (더미 - 실제 로봇 미연동)",
-    })
 
 
 @robot_bp.post("/api/robot/cart-scan")
@@ -85,4 +70,15 @@ def get_trunk_scan_file(filename):
 
 @robot_bp.post("/api/robot/pick-and-place")
 def pick_and_place():
-    return _dummy_trigger("픽앤플레이스")
+    body = request.get_json(force=True, silent=True) or {}
+    plan_id = body.get("plan_id", "")
+    try:
+        result = robot_bridge.run_pick_and_place(plan_id=plan_id)
+    except (subprocess.TimeoutExpired, RuntimeError) as e:
+        return jsonify({"status": "error", "message": f"pick_and_place 실패: {e}"}), 502
+    return jsonify({
+        "status": "ok",
+        "message": result.get("message", "pick_and_place 완료"),
+        "boxes_placed": result.get("boxes_placed"),
+        "boxes_total": result.get("boxes_total"),
+    })

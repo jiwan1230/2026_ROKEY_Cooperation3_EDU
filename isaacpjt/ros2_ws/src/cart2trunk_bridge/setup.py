@@ -28,6 +28,8 @@ setup(
             "trunk_scan_client = cart2trunk_bridge.trunk_scan_action_client:main",
             "cart_scan_action_server = cart2trunk_bridge.cart_scan_action_server:main",
             "cart_scan_client = cart2trunk_bridge.cart_scan_action_client:main",
+            "pick_and_place_action_server = cart2trunk_bridge.pick_and_place_action_server:main",
+            "pick_and_place_client = cart2trunk_bridge.pick_and_place_action_client:main",
         ],
     },
 )

@@ -72,10 +72,9 @@ export async function postParseVisionCorners(visionCornersJson) {
   return handleResponse(resp);
 }
 
-// 로봇(MSI2) 동작 트리거 - cart-scan/pick-and-place는 아직 백엔드가 실제 ROS2
-// 없이 더미 응답만 준다. trunk-scan은 실제 ROS2 Action으로 연동되어 있어서
-// 성공 시 filename/url/point_count가 함께 온다(routes/robot.py 참고). 요청
-// 바디는 필요 없다.
+// 로봇(MSI2) 동작 트리거 - cart-scan/trunk-scan/pick-and-place 전부 실제 ROS2
+// Action으로 연동되어 있다(routes/robot.py 참고). cart-scan/trunk-scan 성공 시
+// filename/url/point_count가 함께 온다. 요청 바디는 필요 없다.
 export async function postCartScan() {
   const resp = await fetch(`${BASE}/robot/cart-scan`, {
     method: "POST",
@@ -105,11 +104,15 @@ export async function fetchScanFile(url) {
   return resp.arrayBuffer();
 }
 
-export async function postPickAndPlace() {
+// planId는 선택 - 지금은 로그/정보 제공용일 뿐이다(POST /api/approve 응답의
+// plan_id를 넘기면 됨). isaac_task_runner.py의 run_pick_and_place()는 아직 이
+// 값을 안 받고 디스크의 placement_result.json을 그대로 읽는다(20_task_export.py
+// 참고 - MSI2 실제 전송 경로가 확정되면 이 값으로 어떤 계획을 실행할지 지정하게 될 것).
+export async function postPickAndPlace(planId = "") {
   const resp = await fetch(`${BASE}/robot/pick-and-place`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({}),
+    body: JSON.stringify({ plan_id: planId }),
   });
   return handleResponse(resp);
 }

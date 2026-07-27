@@ -106,13 +106,49 @@ def test_trunk_scan_file_404_when_missing(tmp_path, monkeypatch):
     assert resp.status_code == 404
 
 
-def test_pick_and_place_returns_dummy_success(monkeypatch):
-    monkeypatch.setattr(robot_module, "DUMMY_DELAY_SECONDS", 0)
-    resp = _client().post("/api/robot/pick-and-place")
+def test_pick_and_place_returns_success_from_robot_bridge(monkeypatch):
+    # trunk/cart-scan과 같은 이유 - robot_bridge.run_pick_and_place()(ROS2 액션
+    # 클라이언트 서브프로세스 호출, 내부적으로 isaac_task_runner.py의 Trigger
+    # 서비스를 대신 호출하는 pick_and_place_action_server.py를 거침)만
+    # monkeypatch해서 실제 ROS2/Isaac Sim 없이 라우트의 응답 구성 로직만 검증한다.
+    captured = {}
+
+    def _fake(**kw):
+        captured.update(kw)
+        return {"success": True, "message": "pick_and_place 완료", "boxes_placed": 4, "boxes_total": 4}
+
+    monkeypatch.setattr(robot_module.robot_bridge, "run_pick_and_place", _fake)
+    resp = _client().post("/api/robot/pick-and-place", json={"plan_id": "load_plan_001"})
     assert resp.status_code == 200
     body = resp.get_json()
     assert body["status"] == "ok"
-    assert "픽앤플레이스" in body["message"]
+    assert body["boxes_placed"] == 4
+    assert body["boxes_total"] == 4
+    assert captured["plan_id"] == "load_plan_001"
+
+
+def test_pick_and_place_without_plan_id_defaults_to_empty_string(monkeypatch):
+    captured = {}
+
+    def _fake(**kw):
+        captured.update(kw)
+        return {"success": True, "message": "완료", "boxes_placed": 0, "boxes_total": 0}
+
+    monkeypatch.setattr(robot_module.robot_bridge, "run_pick_and_place", _fake)
+    resp = _client().post("/api/robot/pick-and-place")
+    assert resp.status_code == 200
+    assert captured["plan_id"] == ""
+
+
+def test_pick_and_place_returns_error_when_robot_bridge_fails(monkeypatch):
+    def _raise(**kw):
+        raise RuntimeError("isaac_task_runner.py에 연결할 수 없습니다")
+    monkeypatch.setattr(robot_module.robot_bridge, "run_pick_and_place", _raise)
+    resp = _client().post("/api/robot/pick-and-place")
+    assert resp.status_code == 502
+    body = resp.get_json()
+    assert body["status"] == "error"
+    assert "isaac_task_runner.py에 연결할 수 없습니다" in body["message"]
 
 
 def test_get_method_not_allowed():

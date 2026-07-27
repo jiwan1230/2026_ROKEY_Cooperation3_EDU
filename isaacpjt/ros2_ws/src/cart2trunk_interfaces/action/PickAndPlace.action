@@ -1,0 +1,30 @@
+# PickAndPlace.action
+#
+# trunk_scan/cart_scan과 달리 매번 Isaac Sim을 새로 부팅하는 서브프로세스가
+# 아니다 - Isaac Sim PC에서 이미 계속 떠있는 isaac_task_runner.py(단일 지속
+# 세션, cart_scan/trunk_scan/pick_and_place를 100.py/89.py/99.py 코드 그대로
+# 함수화해서 반복 트리거받는 방식)의 /isaac_task_runner/run_pick_and_place
+# Trigger 서비스를 이 액션 서버가 대신 호출하고, isaac_task_runner.py가 내는
+# 상태 토픽(/isaac_task_runner/status)을 받아서 Feedback으로 중계하는 얇은
+# 어댑터다. 즉 이 액션 서버 자신은 Isaac Sim을 다루지 않는다 - 이미 실행 중인
+# isaac_task_runner.py가 켜져 있어야 동작한다.
+#
+# plan_id는 지금은 정보 제공/로그용일 뿐이다 - isaac_task_runner.py의
+# run_pick_and_place()는 아직 이 값을 안 받고 디스크의 placement_result.json을
+# 그대로 읽는다(algorism/20_task_export.py -> MSI2 실제 전송 경로가 확정되면
+# 그때 이 필드로 어떤 계획을 실행할지 지정하게 될 것).
+
+# Goal
+string plan_id ""
+---
+# Result
+bool success
+string message
+int32 boxes_placed
+int32 boxes_total
+---
+# Feedback
+string stage
+int32 box_index
+int32 box_count
+string box_id

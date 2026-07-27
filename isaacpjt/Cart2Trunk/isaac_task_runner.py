@@ -2203,12 +2203,37 @@ def return_to_spawn_pose():
     print("[isaac_task_runner] 스폰 위치/접힘 자세로 복귀 완료", flush=True)
 
 
+# ---- isaac_task_runner 추가: MSI1(UI)/Action 서버가 진행 상황을 구독할 수 있게
+# /isaac_task_runner/status에 상태를 publish하는 헬퍼. _STATUS_PUB은 아래
+# dispatch 섹션(파일 맨 아래, rclpy 노드가 만들어진 뒤)에서만 실제 값이
+# 채워진다 - 이 함수 자체는 파일 앞쪽(run_pick_and_place 등)에서 정의되지만,
+# 실제로 "호출"되는 시점은 항상 dispatch 루프가 노드를 만든 뒤이므로(Python은
+# 전역 이름을 def 시점이 아니라 call 시점에 찾는다) 문제없다 - WORLD_UP 등
+# 이 파일의 다른 헤더 폴백값과 같은 원리.
+_STATUS_PUB = None
+
+
+def _publish_status(task, stage, box_index=0, box_count=0, box_id="", message=""):
+    print(f"[isaac_task_runner:status] task={task} stage={stage} "
+          f"box={box_index}/{box_count} box_id={box_id} {message}", flush=True)
+    if _STATUS_PUB is not None:
+        import json as _json_for_status
+        from std_msgs.msg import String as _StringForStatus
+        _msg = _StringForStatus()
+        _msg.data = _json_for_status.dumps({
+            "task": task, "stage": stage, "box_index": box_index,
+            "box_count": box_count, "box_id": box_id, "message": message,
+        })
+        _STATUS_PUB.publish(_msg)
+
+
 def run_pick_and_place():
     """100.py STAGE0~4 본문(pick_order 매칭 + 박스 루프) 그대로 - 코드 변경 없이 함수로만 감쌈."""
     global scan_box_top, ENTRY_HOLDING_Z, HOLDING_Z, TEST_BOX_SIZE, place_release_z
     global placement_data, placements, trunk_meta, SCAN_BASE_POS, SCAN_BASE_QUAT, SCAN_R_BASE
     global trunk_map, CEILING_WORLD_Z, SAFE_TRANSIT_Z, CARRY_CLEARANCE_ABOVE_RELEASE, ENTRY_CLEARANCE_ABOVE_RELEASE
     global PLACE_LIFT_MAX
+    _publish_status("pick_and_place", "started")
     # ================= placement_result.json + trunk 좌표계 로드 =================
     # 사용자 지시("카트에 있는 박스 2개 전부다 성공하도록") - placements가 이제 여러 개일 수
     # 있다. 92번은 첫 박스(placements[0])만 보고 place_release_z/HOLDING_Z/ENTRY_HOLDING_Z를
@@ -2304,6 +2329,7 @@ def run_pick_and_place():
     # 순서대로 (카트 접근 계획 수립 -> 카트 standoff 주행 ->) PICK -> 운송 -> 주행 ->
     # STAGE1~4(배치+후퇴)까지 반복한다.
     for _box_num, (picked_prim_path, picked_placement) in enumerate(pick_order):
+        _publish_status("pick_and_place", "box_started", box_index=_box_num, box_count=len(pick_order), box_id=str(picked_placement['box_id']))
         print(f"\n########## 박스 {_box_num + 1}/{len(pick_order)} 시작: {picked_prim_path} "
               f"(box_id={picked_placement['box_id']}) ##########\n", flush=True)
         compute_place_targets(picked_placement)
@@ -4236,6 +4262,7 @@ def run_pick_and_place():
                      target=[(chassis_pos0[0] + CAR_POS[0]) / 2, 0.0, 1.0], fname="_trunkplace_04_retreated.png")
             print(f"\n[STAGE 4 완료] 박스({picked_prim_path}) 배치 + 후퇴 완료 - STAGE 1 상태(홀딩 자세, "
                   f"BASE_START_XY 근처)로 복귀됨.\n", flush=True)
+            _publish_status("pick_and_place", "box_done", box_index=_box_num, box_count=len(pick_order), box_id=str(picked_placement['box_id']))
 
         # 사용자 설계(카트 양쪽 접근 재설계) - 94번엔 여기(루프 끝)에 "다음 박스를 위해 카트로
         # 복귀"하는 별도 블록이 있었다(카트 접근 위치/각도가 항상 고정이라, 다음 박스가
@@ -4245,6 +4272,7 @@ def run_pick_and_place():
         # 반복이 없으므로 이 자리에서 아무것도 할 필요가 없다(빈 채로 루프가 자연히 끝난다).
 
     return_to_spawn_pose()
+    _publish_status("pick_and_place", "done")
 
 
 def run_cart_scan():
@@ -4252,6 +4280,7 @@ def run_cart_scan():
     LIFT_MAX 등 이름은 같아도 스크립트마다 값이 다른 상수가 있어 절대 전역과 공유하지 않는다).
     씬/로봇을 다시 만드는 부분(월드/스테이지/카트 에셋/박스 스폰/로봇 생성/world.reset)만
     제외했고, 나머지는 99.py 원문 그대로다."""
+    _publish_status("cart_scan", "started")
     LIFT_TRAVEL_M = 0.55
 
     EE_LINK_NAME = "link_6"
@@ -4855,11 +4884,13 @@ def run_cart_scan():
 
 
     return_to_spawn_pose()
+    _publish_status("cart_scan", "done")
 
 
 def run_trunk_scan():
     """89.py 본문(카메라/컨트롤러/조준 함수는 이 함수 안에서만 유효한 로컬 재정의) -
     run_cart_scan()과 동일 원칙. LIFT_MAX=LIFT_MIN+0.45(89.py 고유값)도 로컬로만 쓴다."""
+    _publish_status("trunk_scan", "started")
     TRUNK_Y_MIN, TRUNK_Y_MAX = -0.663, 0.664
     TRUNK_FLOOR_Z = 0.459
     TRUNK_WALL_TOP = 1.010
@@ -5305,6 +5336,7 @@ def run_trunk_scan():
 
 
     return_to_spawn_pose()
+    _publish_status("trunk_scan", "done")
 
 
 
@@ -5335,6 +5367,7 @@ os.environ.setdefault("RMW_IMPLEMENTATION", "rmw_fastrtps_cpp")
 import rclpy
 from rclpy.node import Node
 from std_srvs.srv import Trigger as _TriggerSrv
+from std_msgs.msg import String as _StatusStringMsg
 
 
 class _IsaacTaskRunnerNode(Node):
@@ -5349,6 +5382,12 @@ class _IsaacTaskRunnerNode(Node):
                              lambda req, res: self._enqueue("trunk_scan", res))
         self.create_service(_TriggerSrv, "/isaac_task_runner/run_pick_and_place",
                              lambda req, res: self._enqueue("pick_and_place", res))
+        # pick_and_place_action_server.py(및 향후 cart/trunk_scan 어댑터)가 구독해서
+        # Action Feedback으로 중계하는 상태 토픽 - _publish_status() 헬퍼(파일 위쪽,
+        # run_pick_and_place 정의부 근처) 참고. TRANSIENT_LOCAL 없이 그냥 depth=20
+        # 큐로 충분 - 늦게 붙는 구독자는 "그 시점부터"만 받아도 되는 진행상황 스트림이라
+        # trunk_map 같은 "래치드 최신값"과는 성격이 다르다.
+        self.status_pub = self.create_publisher(_StatusStringMsg, "/isaac_task_runner/status", 20)
         self.get_logger().info("isaac_task_runner ready - cart_scan/trunk_scan/pick_and_place 대기 중")
 
     def _enqueue(self, name, res):
@@ -5370,6 +5409,7 @@ class _IsaacTaskRunnerNode(Node):
 
 rclpy.init()
 _node = _IsaacTaskRunnerNode()
+_STATUS_PUB = _node.status_pub
 _TASKS = {"cart_scan": run_cart_scan, "trunk_scan": run_trunk_scan, "pick_and_place": run_pick_and_place}
 
 try:
@@ -5381,10 +5421,11 @@ try:
             try:
                 _TASKS[task_name]()
                 _node.get_logger().info(f"[isaac_task_runner] '{task_name}' 완료")
-            except Exception:
+            except Exception as _e:
                 import traceback
                 traceback.print_exc()
                 _node.get_logger().error(f"[isaac_task_runner] '{task_name}' 실패 - 위 트레이스백 참고")
+                _publish_status(task_name, "error", message=str(_e))
 finally:
     _node.destroy_node()
     rclpy.shutdown()

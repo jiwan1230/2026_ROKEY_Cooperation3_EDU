@@ -28,6 +28,9 @@ _ROS_SETUP = "/opt/ros/humble/setup.bash"
 RECEIVED_SCANS_DIR = _HERE / "received_scans"
 TRUNK_SCAN_TIMEOUT_SEC = 180
 CART_SCAN_TIMEOUT_SEC = 180
+# 2026-07-27 4박스 실측 기준 STAGE0~4 전체(박스당 수 분)가 15~20분 걸렸다 -
+# trunk/cart_scan(고정 180초)보다 훨씬 넉넉하게 잡는다.
+PICK_AND_PLACE_TIMEOUT_SEC = 1800
 
 
 def _run_scan_client(console_script: str, label: str, timeout_sec: int) -> dict:
@@ -83,3 +86,43 @@ def run_cart_scan(timeout_sec: int = CART_SCAN_TIMEOUT_SEC) -> dict:
     {"success": True, "box_count", "json_filename", "ply_filename",
     "ply_total_bytes", "ply_total_chunks"}를 반환하고, 실패 시 RuntimeError를 던진다."""
     return _run_scan_client("cart_scan_client", "카트 스캔", timeout_sec)
+
+
+def run_pick_and_place(plan_id: str = "", timeout_sec: int = PICK_AND_PLACE_TIMEOUT_SEC) -> dict:
+    """`/cart2trunk/pick_and_place` 액션을 호출한다. trunk_scan/cart_scan과 달리
+    89.py/99.py를 새로 부팅하는 서브프로세스가 아니라, Isaac Sim PC에서 이미 계속
+    떠있는 isaac_task_runner.py의 /isaac_task_runner/run_pick_and_place Trigger
+    서비스를 pick_and_place_action_server.py가 대신 호출하는 방식이다(cart2trunk_bridge/
+    pick_and_place_action_server.py 참고) - 받을 PLY가 없어서 --output-dir이 필요없다.
+    성공 시 {"success": True, "message", "boxes_placed", "boxes_total"}를 반환하고,
+    실패 시 RuntimeError를 던진다."""
+    cmd = (
+        f"source {shlex.quote(_ROS_SETUP)} && "
+        f"source {shlex.quote(_ROS2_WS_SETUP)} && "
+        f"ros2 run cart2trunk_bridge pick_and_place_client "
+        f"--plan-id {shlex.quote(plan_id)} "
+        f"--timeout-sec {timeout_sec}"
+    )
+
+    try:
+        proc = subprocess.run(
+            ["bash", "-lc", cmd], capture_output=True, text=True, timeout=timeout_sec + 30)
+    except subprocess.TimeoutExpired as e:
+        raise RuntimeError(f"pick_and_place 서브프로세스 타임아웃: {e}") from e
+
+    stdout_lines = [line for line in proc.stdout.splitlines() if line.strip()]
+    if not stdout_lines:
+        raise RuntimeError(
+            f"pick_and_place 서브프로세스가 출력이 없습니다(returncode={proc.returncode}). "
+            f"stderr 마지막 부분: {proc.stderr[-500:]}")
+
+    try:
+        result = json.loads(stdout_lines[-1])
+    except json.JSONDecodeError as e:
+        raise RuntimeError(
+            f"pick_and_place 결과를 JSON으로 파싱할 수 없습니다: {stdout_lines[-1]!r} ({e})") from e
+
+    if not result.get("success"):
+        raise RuntimeError(result.get("message", "pick_and_place 실패(원인 불명)"))
+
+    return result
