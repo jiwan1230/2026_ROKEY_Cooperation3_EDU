@@ -2,6 +2,21 @@
 // Scene3DViewer.jsx에서 추출한 순수 3D 렌더링 부품 - props만 받고
 // PlannerContext 등 전역 상태에 의존하지 않는다. 시뮬레이터 탭(Scene3DViewer)과
 // 로봇 제어 탭(ScanViewerPanel)이 같이 쓴다.
+import { useLoader } from "@react-three/fiber";
+import { PLYLoader } from "three/examples/jsm/loaders/PLYLoader.js";
+
+// 실제 로봇 스캔 PLY 포인트클라우드를 그대로 렌더링 - "원본"(전처리 전) 뷰 전용.
+// 좌표는 파일에 저장된 그대로(로봇 base_link 기준) 쓰고 축 변환은 하지 않는다 -
+// 실제 비전 파이프라인 연동 전까지는 "지금 스캔이 이렇게 찍혔다"를 있는 그대로
+// 보여주는 임시 검증용이라, ②(to_bounding_trunk)가 하는 좌표 정리는 여기서 하지 않는다.
+export function ScannedPointCloud({ url, color = "#4A90D9", size = 0.006 }) {
+  const geometry = useLoader(PLYLoader, url);
+  return (
+    <points geometry={geometry}>
+      <pointsMaterial color={color} size={size} sizeAttenuation />
+    </points>
+  );
+}
 
 const STAGING_GAP = 0.05; // 대기 박스끼리, 그리고 트렁크 입구 면과의 간격(m)
 const STAGING_OFFSET = 0.3; // 트렁크 입구 면에서 대기 구역까지의 거리(m)
