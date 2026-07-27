@@ -59,13 +59,20 @@ DETECTION_MIN_APPEARANCE_FRACTION = float(
 # box_geometry.MIN_BOX_SIDE_M(0.04m)은 일반 파이프라인의 낮은 하한이라(다른
 # 용도로 얇은 후보도 통과시켜야 하는 legacy 단일 시점 경로에 영향을 주지 않기 위해
 # box_geometry.py 쪽 값은 건드리지 않는다), 실측 확인: 폭 4.5cm짜리 가늘고 긴
-# RANSAC 조각(진짜 박스가 아님 - 이 데모의 실제 박스 중 가장 좁은 변도 0.12m)이
+# RANSAC 조각(진짜 박스가 아님 - 당시 실제 박스 중 가장 좁은 변도 0.12m)이
 # 이 기준을 겨우 통과해서 최종 결과에 유령 4번째 박스로 남는 사례가 있었다.
-# multiview_scan 쪽(최종 선택 단계)에서만 더 엄격한 하한을 추가로 적용한다 -
-# 실제 박스 카탈로그 중 가장 좁은 변(Medium 0.12~0.13m)보다는 넉넉히 낮게,
-# 관측된 유령 조각(0.045m)보다는 확실히 높게 잡는다.
+# multiview_scan 쪽(최종 선택 단계)에서만 더 엄격한 하한을 추가로 적용한다.
+#
+# 실측 확인(2026-07-27, 트렁크 제약으로 Large를 줄이면서 Medium/Small도 같은
+# 비율로 줄인 뒤): 원래 0.08m는 "당시 가장 좁은 변(Medium 0.12~0.13m)보다
+# 넉넉히 낮게" 잡은 값이라, 지금처럼 카탈로그 전체가 작아지면 더 이상 유효하지
+# 않다 - Medium/Small의 짧은 변이 각각 0.07~0.09m대라 RANSAC 경계 침식만으로도
+# 이 기준에 걸려 "너무 가늘다"며 통째로 제외되고 Large만 남는 문제가 실측됨
+# (카트 4박스 시나리오, 박스 2개만 검출). 유령 조각(0.045m)보다는 위, 지금
+# 카탈로그에서 가장 작은 실제 관측값(0.059~0.070m)보다는 아래로 재조정한다 -
+# 박스 크기가 또 바뀌면 이 값도 다시 확인이 필요하다.
 MIN_PLAUSIBLE_BOX_FOOTPRINT_SIDE_M = float(
-    os.environ.get("CART2TRUNK_MIN_PLAUSIBLE_BOX_FOOTPRINT_SIDE_M", "0.08")
+    os.environ.get("CART2TRUNK_MIN_PLAUSIBLE_BOX_FOOTPRINT_SIDE_M", "0.055")
 )
 
 # 88.cart_scan_holonomic.py(카트 바스켓 스캔)에서 실측 확인: 카트 자체의 철망
