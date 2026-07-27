@@ -5,6 +5,7 @@
 import { useEffect, useState } from "react";
 import { Canvas } from "@react-three/fiber";
 import { Grid, OrbitControls } from "@react-three/drei";
+import { Matrix4 } from "three";
 import { PLYLoader } from "three/examples/jsm/loaders/PLYLoader.js";
 import { postCartScan, postTrunkScan, fetchTrunkScanPly } from "../api/client.js";
 import {
@@ -45,10 +46,18 @@ function RealTrunkPointCloud({ url }) {
     fetchTrunkScanPly(url).then((buffer) => {
       if (cancelled) return;
       const loaded = new PLYLoader().parse(buffer);
-      // ROS/아이작심 좌표계(X 전방, Y 좌우, Z 위)를 Three.js 좌표계(Y가 위)에
-      // 맞게 지오메트리 자체에 X축 -90도 회전을 구워넣는다 - 안 하면 트렁크의
-      // 좌우 폭(Y)이 화면 세로축으로 그려져서 세워진 것처럼 보인다.
-      loaded.rotateX(-Math.PI / 2);
+      // ROS/아이작심 좌표계(X 전방, Y 좌우, Z 위)를 Three.js 좌표계(X 화면
+      // 가로, Y 위, Z 화면 깊이)로 옮긴다. 단순히 한 축만 돌리면(X축 -90도)
+      // 트렁크의 실제 좌우 폭(ROS Y)이 화면 "깊이" 방향으로 가버려서 비스듬히
+      // 누운 것처럼 보인다 - 좌우 폭이 화면 가로로 오도록 세 축을 순환
+      // 치환한다: three_x=ros_y(좌우->가로), three_y=ros_z(위->위),
+      // three_z=ros_x(전후->깊이). 순환 치환이라 손대칭이 안 바뀐다(rotation).
+      loaded.applyMatrix4(new Matrix4().set(
+        0, 1, 0, 0,
+        0, 0, 1, 0,
+        1, 0, 0, 0,
+        0, 0, 0, 1,
+      ));
       // 회전 후 최저점이 그리드(y=0) 아래로 내려갈 수 있어(원점이 트렁크
       // 바닥과 정확히 일치하지 않음) - 최저점을 0에 맞춰서 바닥에 붙인다.
       loaded.computeBoundingBox();
