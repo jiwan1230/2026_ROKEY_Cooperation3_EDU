@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  countFirstDensityScoreRange, gradeBoxScore, gradeCountFirstDensityScore,
-  gradeUtilization, gradeWeightedScore, weightedScoreRange,
+  countFirstDensityScoreRange, gradeAveragePlacementScore, gradeBoxScore, gradeCountFirstDensityScore,
+  gradeOverallScore, gradeUtilization, gradeWeightedScore, weightedScoreRange,
 } from "./scoreGrading.js";
 
 describe("gradeUtilization", () => {
@@ -120,5 +120,79 @@ describe("gradeBoxScore", () => {
 
   it("returns null when count_first_density is graded without trunk info", () => {
     expect(gradeBoxScore("count_first_density", 1.5, { preferences: prefs })).toBeNull();
+  });
+});
+
+describe("gradeAveragePlacementScore", () => {
+  const trunk = { width: 0.85, depth: 1.25, height: 0.5 };
+  const prefs = { entrancePreference: 1.0, contactPreference: 1.0, heightPreference: 1.0 };
+
+  it("averages same-formula boxes into a single 0~100 grade", () => {
+    // score=-0.5 -> weightedScoreRange[-1.6,1.0] 기준 pct=(1.0-(-0.5))/2.6*100=57.69
+    const placed = [
+      { score: -0.5, score_breakdown: { formula: "weighted" } },
+      { score: -0.5, score_breakdown: { formula: "weighted" } },
+    ];
+    const result = gradeAveragePlacementScore(placed, { preferences: prefs, trunk });
+    expect(result.pct).toBeCloseTo(57.69, 1);
+    expect(result.label).toBe("양호");
+  });
+
+  it("averages mixed-formula boxes by first normalizing each to a percentage", () => {
+    // A(weighted, score=0.42) -> pct 22.31, B(count_first_density, score=1.5) -> pct 86.96
+    const placed = [
+      { score: 0.42, score_breakdown: { formula: "weighted" } },
+      { score: 1.5, score_breakdown: { formula: "count_first_density" } },
+    ];
+    const result = gradeAveragePlacementScore(placed, { preferences: prefs, trunk });
+    expect(result.pct).toBeCloseTo((22.31 + 86.96) / 2, 0);
+    expect(result.label).toBe("양호");
+  });
+
+  it("skips boxes that cannot be graded (e.g. count_first_density without trunk)", () => {
+    const placed = [{ score: 1.5, score_breakdown: { formula: "count_first_density" } }];
+    expect(gradeAveragePlacementScore(placed, { preferences: prefs })).toBeNull();
+  });
+
+  it("returns null for an empty placed list", () => {
+    expect(gradeAveragePlacementScore([], { preferences: prefs, trunk })).toBeNull();
+  });
+});
+
+describe("gradeOverallScore", () => {
+  const trunk = { width: 0.85, depth: 1.25, height: 0.5 };
+  const prefs = { entrancePreference: 1.0, contactPreference: 1.0, heightPreference: 1.0 };
+
+  it("equals the quality score when everything is placed (완주율 100%)", () => {
+    // score=-0.5 -> pct 57.69
+    const placed = [{ score: -0.5, score_breakdown: { formula: "weighted" } }];
+    const result = gradeOverallScore(placed, 1, { preferences: prefs, trunk });
+    expect(result.pct).toBeCloseTo(57.69, 1);
+    expect(result.completionRate).toBe(1);
+    expect(result.qualityPct).toBeCloseTo(57.69, 1);
+  });
+
+  it("multiplies by completion rate when some boxes are unplaced, even if placed ones scored perfectly", () => {
+    // score=-1.6(이론상 최선, pct=100) 2개 배치, 전체 3개 -> 완주율 2/3
+    const placed = [
+      { score: -1.6, score_breakdown: { formula: "weighted" } },
+      { score: -1.6, score_breakdown: { formula: "weighted" } },
+    ];
+    const result = gradeOverallScore(placed, 3, { preferences: prefs, trunk });
+    expect(result.completionRate).toBeCloseTo(2 / 3, 3);
+    expect(result.qualityPct).toBeCloseTo(100, 1);
+    expect(result.pct).toBeCloseTo((2 / 3) * 100, 1);
+    expect(result.label).toBe("양호"); // 66.67% -> [50,80) 구간
+  });
+
+  it("returns 0 when nothing was placed, without needing a quality score", () => {
+    const result = gradeOverallScore([], 3, { preferences: prefs, trunk });
+    expect(result.pct).toBe(0);
+    expect(result.completionRate).toBe(0);
+    expect(result.qualityPct).toBeNull();
+  });
+
+  it("returns null for zero total boxes", () => {
+    expect(gradeOverallScore([], 0, { preferences: prefs, trunk })).toBeNull();
   });
 });

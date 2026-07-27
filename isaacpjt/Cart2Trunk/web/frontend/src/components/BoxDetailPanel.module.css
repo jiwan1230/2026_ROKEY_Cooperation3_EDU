@@ -1,4 +1,8 @@
-.panel { background: var(--color-surface); border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+/* App.module.css의 resultArea가 이제 grid(위:topRow, 아래:BoxDetailPanel)로
+   화면 높이를 나눠주므로, 이 패널이 내용만큼(auto) 한없이 커지면 위쪽 topRow
+   (3D 뷰어 등)를 짓눌러버린다(강사님 "한 화면에" 피드백 대응 중 발견한 문제) -
+   높이를 제한하고 내용이 길어지면 이 패널 안에서만 스크롤되게 한다. */
+.panel { background: var(--color-surface); border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 10px; max-height: 180px; overflow-y: auto; }
 .label { font-size: 11px; font-weight: 700; color: var(--color-text-secondary); text-transform: uppercase; }
 .select { border: 1px solid var(--color-border); border-radius: 8px; padding: 6px 8px; }
 .detail { font-size: 12px; display: flex; flex-direction: column; gap: 6px; }
@@ -13,6 +17,18 @@
 }
 .breakdownRow span:first-child { min-width: 130px; }
 .placeholder { font-size: 12px; color: var(--color-text-secondary); }
+
+.detailToggle {
+  align-self: flex-start;
+  border: 1px solid var(--color-border);
+  background: var(--color-canvas);
+  border-radius: 8px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  cursor: pointer;
+}
 
 .gradeCaption { font-size: 11px; color: var(--color-text-secondary); }
 .grade {

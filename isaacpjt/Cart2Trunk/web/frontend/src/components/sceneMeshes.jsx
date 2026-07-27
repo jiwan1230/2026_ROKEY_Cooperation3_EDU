@@ -2,6 +2,21 @@
 // Scene3DViewer.jsx에서 추출한 순수 3D 렌더링 부품 - props만 받고
 // PlannerContext 등 전역 상태에 의존하지 않는다. 시뮬레이터 탭(Scene3DViewer)과
 // 로봇 제어 탭(ScanViewerPanel)이 같이 쓴다.
+import { useLoader } from "@react-three/fiber";
+import { PLYLoader } from "three/examples/jsm/loaders/PLYLoader.js";
+
+// 실제 로봇 스캔 PLY 포인트클라우드를 그대로 렌더링 - "원본"(전처리 전) 뷰 전용.
+// 좌표는 파일에 저장된 그대로(로봇 base_link 기준) 쓰고 축 변환은 하지 않는다 -
+// 실제 비전 파이프라인 연동 전까지는 "지금 스캔이 이렇게 찍혔다"를 있는 그대로
+// 보여주는 임시 검증용이라, ②(to_bounding_trunk)가 하는 좌표 정리는 여기서 하지 않는다.
+export function ScannedPointCloud({ url, color = "#4A90D9", size = 0.006 }) {
+  const geometry = useLoader(PLYLoader, url);
+  return (
+    <points geometry={geometry}>
+      <pointsMaterial color={color} size={size} sizeAttenuation />
+    </points>
+  );
+}
 
 const STAGING_GAP = 0.05; // 대기 박스끼리, 그리고 트렁크 입구 면과의 간격(m)
 const STAGING_OFFSET = 0.3; // 트렁크 입구 면에서 대기 구역까지의 거리(m)
@@ -148,6 +163,58 @@ export function BoundingBoxWireframe({ x, y, z, width, depth, height, color = "#
     <mesh position={toThreeCenter(x, y, z, width, depth, height)}>
       <boxGeometry args={[width, height, depth]} />
       <meshBasicMaterial color={color} wireframe />
+    </mesh>
+  );
+}
+
+// 산업현장 시나리오는 쇼핑 카트를 안 쓴다 - 택배 배송 트럭은 화물칸+운전석+
+// 바퀴가 있는 트럭 모형으로, 나머지(창고/냉동/위험물) 3개는 팔레트로
+// 대기 구역 모양을 바꾼다(CartWireframe 대신 사용).
+const TRUCK_WHEEL_RADIUS = 0.05;
+const TRUCK_CAB_LENGTH = 0.15;
+
+export function TruckWireframe({ footprint, entranceNearX }) {
+  const { minX, maxX, minY, maxY, height } = footprint;
+  const width = maxX - minX;
+  const depth = maxY - minY;
+  // 운전석(캡)은 화물칸에서 트렁크 입구 반대쪽(카트 손잡이와 같은 위치 -
+  // 사람이 미는/모는 쪽) 끝에 붙인다.
+  const cabX0 = entranceNearX ? maxX : minX - TRUCK_CAB_LENGTH;
+  const wheelY = [minY + TRUCK_WHEEL_RADIUS, maxY - TRUCK_WHEEL_RADIUS];
+  const wheelX = [minX + TRUCK_WHEEL_RADIUS, maxX - TRUCK_WHEEL_RADIUS];
+
+  return (
+    <group>
+      {/* 화물칸 */}
+      <mesh position={toThreeCenter(minX, minY, 0, width, depth, height)}>
+        <boxGeometry args={[width, height, depth]} />
+        <meshBasicMaterial color="#D8D8DC" wireframe />
+      </mesh>
+      {/* 운전석(캡) */}
+      <mesh position={toThreeCenter(cabX0, minY, 0, TRUCK_CAB_LENGTH, depth, height * 0.7)}>
+        <boxGeometry args={[TRUCK_CAB_LENGTH, height * 0.7, depth]} />
+        <meshStandardMaterial color="#5A6472" />
+      </mesh>
+      {wheelX.flatMap((x) => wheelY.map((y) => (
+        <mesh key={`${x}-${y}`} position={toThreeCenter(x, y, TRUCK_WHEEL_RADIUS, 0, 0, 0)}>
+          <sphereGeometry args={[TRUCK_WHEEL_RADIUS, 12, 12]} />
+          <meshStandardMaterial color="#2B2B2E" />
+        </mesh>
+      )))}
+    </group>
+  );
+}
+
+const PALLET_THICKNESS = 0.08;
+
+export function PalletPlatform({ footprint }) {
+  const { minX, maxX, minY, maxY } = footprint;
+  const width = maxX - minX;
+  const depth = maxY - minY;
+  return (
+    <mesh position={toThreeCenter(minX, minY, 0, width, depth, PALLET_THICKNESS)}>
+      <boxGeometry args={[width, PALLET_THICKNESS, depth]} />
+      <meshStandardMaterial color="#B08D57" roughness={0.9} />
     </mesh>
   );
 }

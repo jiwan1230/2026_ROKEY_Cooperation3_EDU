@@ -3,10 +3,9 @@ import { Canvas } from "@react-three/fiber";
 import { Grid, OrbitControls } from "@react-three/drei";
 import { usePlannerState } from "../state/PlannerContext.jsx";
 import { colorForBoxId } from "../utils/color.js";
-import { postScenarioPlan } from "../api/client.js";
 import {
   toThreeCenter, TrunkWireframe, computeCartFootprint, CartWireframe, SceneBoxMesh, layoutStagingBoxes,
-  BoundingBoxWireframe,
+  BoundingBoxWireframe, TruckWireframe, PalletPlatform,
 } from "./sceneMeshes.jsx";
 import { SCENARIOS, scenarioTrunkColor, scenarioBoxColor } from "./scenarioTheme.js";
 import styles from "./Scene3DViewer.module.css";
@@ -49,57 +48,22 @@ const CAMERA_PRESETS = {
   top: { position: [0.01, 3.36, 0.01], target: [0, 0, 0] },
 };
 
-export default function Scene3DViewer() {
+// 산업현장 시나리오 미리보기 상태는 App.jsx의 SimulatorBody가
+// useScenarioPreview()로 만들어서 SummaryCard(안내 문구)와 이 컴포넌트
+// 둘 다에 내려준다 - 여기서 로컬로 안 만드는 이유는 두 컴포넌트가 같은
+// 상태를 공유해야 하기 때문. state.result(지금 작업 중인 계획)는 이
+// prop과 무관하게 전혀 안 건드린다.
+export default function Scene3DViewer({ scenario }) {
   const state = usePlannerState();
-
-  // 산업현장 시나리오 미리보기 - state.result(지금 작업 중인 계획)는 전혀
-  // 건드리지 않는 완전히 별도의 로컬 상태다. 활성화되면 effectiveResult가
-  // scenarioResult를 가리키게 되어, 아래 Before/After・카트 적재・순서대로
-  // 재생 로직을 실시간 계획과 완전히 동일하게 재사용한다("실시간 계획하고
-  // 똑같이 해줘야지"라는 사용자 피드백 반영 - 처음엔 별도의 단순 렌더링
-  // 경로를 따로 만들었었는데, 카트/Before/재생이 전부 빠져서 부족했다).
-  const [activeScenarioId, setActiveScenarioId] = useState(null);
-  const [scenarioResult, setScenarioResult] = useState(null);
-  const [scenarioError, setScenarioError] = useState(null);
-  const [scenarioLoading, setScenarioLoading] = useState(false);
-
-  const handleSelectScenario = async (id) => {
-    setScenarioLoading(true);
-    setScenarioError(null);
-    try {
-      const result = await postScenarioPlan(id);
-      setActiveScenarioId(id);
-      setScenarioResult(result);
-    } catch (err) {
-      setScenarioError(err.cause || err.message || "시나리오를 불러오지 못했습니다.");
-    } finally {
-      setScenarioLoading(false);
-    }
-  };
-
-  const handleExitScenario = () => {
-    setActiveScenarioId(null);
-    setScenarioResult(null);
-    setScenarioError(null);
-  };
-
-  // ControlPanel의 "무작위 N개 생성"(또는 프리셋 선택, 직접 수정)은
-  // state.boxesText를 바꾸는데, 시나리오 미리보기 중엔 그게 화면에 전혀
-  // 반영이 안 됐다("무작위 생성이 안 먹힌다"는 피드백) - boxesText가
-  // 바뀌면 사용자가 실시간 계획 쪽을 다시 만지고 있다는 뜻이므로, 시나리오
-  // 미리보기를 자동으로 해제하고 실시간 화면으로 돌아간다.
-  const prevBoxesTextRef = useRef(state.boxesText);
-  useEffect(() => {
-    if (state.boxesText !== prevBoxesTextRef.current) {
-      prevBoxesTextRef.current = state.boxesText;
-      if (activeScenarioId) handleExitScenario();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.boxesText]);
+  const {
+    activeScenarioId, scenarioResult, scenarioError, scenarioLoading,
+    selectScenario, randomizeScenario, exitScenario,
+  } = scenario;
 
   // 시나리오가 활성화되어 있으면 이후 모든 파생 상태(trunk/placed/카트
   // 적재/Before-After/순서대로 재생)가 scenarioResult 기준으로 계산된다 -
-  // state.result 기준 코드를 두 번 만들지 않고 그대로 재사용한다.
+  // state.result 기준 코드를 두 번 만들지 않고 그대로 재사용한다("실시간
+  // 계획하고 똑같이 해줘야지"라는 사용자 피드백).
   const effectiveResult = activeScenarioId ? scenarioResult : state.result;
   const boxColor = (boxId) => (activeScenarioId ? scenarioBoxColor(activeScenarioId, boxId) : colorForBoxId(boxId));
 
@@ -257,13 +221,18 @@ export default function Scene3DViewer() {
                 type="button"
                 disabled={scenarioLoading}
                 className={activeScenarioId === s.id ? styles.scenarioActive : undefined}
-                onClick={() => handleSelectScenario(s.id)}
+                onClick={() => selectScenario(s.id)}
               >
                 {s.label}
               </button>
             ))}
             {activeScenarioId && (
-              <button type="button" onClick={handleExitScenario}>실시간 계획으로 돌아가기</button>
+              <>
+                <button type="button" disabled={scenarioLoading} onClick={randomizeScenario}>
+                  🔀 무작위로 다시 생성
+                </button>
+                <button type="button" onClick={exitScenario}>실시간 계획으로 돌아가기</button>
+              </>
             )}
           </div>
         </div>
@@ -289,7 +258,15 @@ export default function Scene3DViewer() {
                                     height={trunk.height} color={scenarioTrunkColor(activeScenarioId)} />
             : <TrunkWireframe trunk={trunk} />
         )}
-        {cartFootprint && (
+        {/* 산업현장 시나리오는 쇼핑 카트를 안 쓴다 - 택배 트럭은 트럭 모형,
+            나머지(창고/냉동/위험물)는 팔레트로 대기 구역 모양을 바꾼다. */}
+        {cartFootprint && activeScenarioId === "delivery_truck" && (
+          <TruckWireframe footprint={cartFootprint} entranceNearX={trunk.entrance_near_x !== false} />
+        )}
+        {cartFootprint && activeScenarioId && activeScenarioId !== "delivery_truck" && (
+          <PalletPlatform footprint={cartFootprint} />
+        )}
+        {cartFootprint && !activeScenarioId && (
           <CartWireframe footprint={cartFootprint} entranceNearX={trunk.entrance_near_x !== false} />
         )}
         {(effectiveResult?.obstacles || []).map((o) => (
