@@ -45,6 +45,15 @@ function RealTrunkPointCloud({ url }) {
     fetchTrunkScanPly(url).then((buffer) => {
       if (cancelled) return;
       const loaded = new PLYLoader().parse(buffer);
+      // ROS/아이작심 좌표계(X 전방, Y 좌우, Z 위)를 Three.js 좌표계(Y가 위)에
+      // 맞게 지오메트리 자체에 X축 -90도 회전을 구워넣는다 - 안 하면 트렁크의
+      // 좌우 폭(Y)이 화면 세로축으로 그려져서 세워진 것처럼 보인다.
+      loaded.rotateX(-Math.PI / 2);
+      // 회전 후 최저점이 그리드(y=0) 아래로 내려갈 수 있어(원점이 트렁크
+      // 바닥과 정확히 일치하지 않음) - 최저점을 0에 맞춰서 바닥에 붙인다.
+      loaded.computeBoundingBox();
+      const minY = loaded.boundingBox.min.y;
+      if (minY < 0) loaded.translate(0, -minY, 0);
       loaded.computeBoundingSphere();
       setGeometry(loaded);
     });
@@ -54,15 +63,10 @@ function RealTrunkPointCloud({ url }) {
   }, [url]);
 
   if (!geometry) return null;
-  // ROS/아이작심 좌표계(X 전방, Y 좌우, Z 위)로 온 PLY를 Three.js 좌표계(Y가
-  // 위)에 맞게 X축 기준 -90도 회전 - 안 하면 트렁크의 좌우 폭(Y)이 화면
-  // 세로축으로 그려져서 트렁크가 가로가 아니라 세로로 서 있는 것처럼 보인다.
   return (
-    <group rotation={[-Math.PI / 2, 0, 0]}>
-      <points geometry={geometry}>
-        <pointsMaterial size={0.01} sizeAttenuation color="#4A90D9" />
-      </points>
-    </group>
+    <points geometry={geometry}>
+      <pointsMaterial size={0.01} sizeAttenuation color="#4A90D9" />
+    </points>
   );
 }
 
