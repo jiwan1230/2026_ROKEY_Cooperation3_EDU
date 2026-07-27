@@ -185,3 +185,19 @@ def test_get_method_not_allowed():
     # 실수로 GET으로 호출하는 걸 방지하는 회귀 테스트 - 반드시 POST여야 한다.
     resp = _client().get("/api/robot/cart-scan")
     assert resp.status_code == 405
+
+
+def test_list_cart_scan_files_returns_saved_filenames(monkeypatch):
+    monkeypatch.setattr(
+        robot_module.robot_bridge, "list_cart_scan_files",
+        lambda: ["all_boxes_corners_20260727_000000_000000.json"])
+    resp = _client().get("/api/robot/cart-scan-files")
+    assert resp.status_code == 200
+    assert resp.get_json()["cart_scan_files"] == ["all_boxes_corners_20260727_000000_000000.json"]
+
+
+def test_list_cart_scan_files_empty_when_none_saved(monkeypatch):
+    monkeypatch.setattr(robot_module.robot_bridge, "list_cart_scan_files", lambda: [])
+    resp = _client().get("/api/robot/cart-scan-files")
+    assert resp.status_code == 200
+    assert resp.get_json()["cart_scan_files"] == []

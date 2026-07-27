@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { usePlannerDispatch, usePlannerState } from "../state/PlannerContext.jsx";
-import { postApprove, postSend } from "../api/client.js";
+import { usePlanActions } from "../hooks/usePlanActions.js";
 import VisionDataLoader from "./VisionDataLoader.jsx";
+import PlanParamFields from "./PlanParamFields.jsx";
 import styles from "./ControlPanel.module.css";
 
 function generateRandomBoxes(count) {
@@ -17,78 +18,18 @@ function generateRandomBoxes(count) {
   return boxes;
 }
 
-const MARGIN_FIELDS = [
-  { key: "margin", label: "박스 간격" },
-  { key: "wallMargin", label: "벽면 간격" },
-  { key: "ceilingMargin", label: "천장 여유" },
-  { key: "obstacleMargin", label: "장애물 간격" },
-  { key: "entranceMargin", label: "입구 여유거리" },
-];
-
-const PREFERENCE_FIELDS = [
-  { key: "entrancePreference", label: "입구 ↔ 깊은 위치", min: -1, max: 1, step: 0.1 },
-  { key: "contactPreference", label: "공간활용 ↔ 안정성", min: 0, max: 2, step: 0.1 },
-  { key: "heightPreference", label: "바닥부터 채우기 강도", min: 0, max: 2, step: 0.1 },
-];
-
+// "알고리즘 검증" 탭 - 더미 프리셋/무작위 생성으로 적재 알고리즘을 검증하는
+// 용도라 실제 로봇(MSI2) 전송 버튼은 없다(승인/거부까지만) - 실제 전송은
+// "실시간 제어" 탭(RealtimeControlPanel.jsx)의 몫이다.
 export default function ControlPanel() {
   const state = usePlannerState();
   const dispatch = usePlannerDispatch();
+  const { handleApprove, locked } = usePlanActions();
   // 무작위 생성 개수는 계산에 쓰이는 파라미터가 아니라(생성 시점에만 쓰는
   // 입력값) 전역 리듀서가 아닌 이 컴포넌트 로컬 상태로 둔다.
   const [randomBoxCount, setRandomBoxCount] = useState(6);
 
   const setParam = (key, value) => dispatch({ type: "SET_PARAM", payload: { key, value } });
-
-  const handleApprove = async () => {
-    if (state.planState !== "COMPUTED" || !state.result) return;
-    try {
-      // 승인 시 감사 기록에 남는 parameters는 useDebouncedPlan.js가
-      // postPlan()에 실제로 보낸 요청 바디와 형식이 같아야 한다(snake_case
-      // 키 이름 + 마진 필드 ""→null + Number() 변환). state.params를 그대로
-      // 넘기면 camelCase/빈 문자열 그대로라 실제 계산에 쓰인 값과 형식이
-      // 어긋난다.
-      const { params } = state;
-      const approvedParameters = {
-        mode: params.mode,
-        margin: params.margin === "" ? null : Number(params.margin),
-        wall_margin: params.wallMargin === "" ? null : Number(params.wallMargin),
-        obstacle_margin: params.obstacleMargin === "" ? null : Number(params.obstacleMargin),
-        ceiling_margin: params.ceilingMargin === "" ? null : Number(params.ceilingMargin),
-        entrance_margin: params.entranceMargin === "" ? null : Number(params.entranceMargin),
-        entrance_preference: params.entrancePreference,
-        contact_preference: params.contactPreference,
-        height_preference: params.heightPreference,
-        allow_stacking: params.allowStacking,
-        allow_rotation: params.allowRotation,
-        fixed_order: params.fixedOrder,
-      };
-      const resp = await postApprove({
-        box_snapshot_id: state.result.box_snapshot_id,
-        trunk_map_id: state.result.trunk_map_id,
-        parameters: approvedParameters,
-        placed: state.result.placed,
-        // POST /api/plan 응답 그대로 - 트렁크 로컬 좌표(placed[].position)를
-        // m0609_base_link 좌표로 되돌리는 데 필요(algorism_bridge.build_approved_task 참고).
-        trunk_offset_base_frame: state.result.trunk_offset_base_frame,
-      });
-      dispatch({ type: "APPROVE_SUCCESS", payload: resp });
-    } catch (err) {
-      dispatch({ type: "COMPUTE_ERROR", payload: { error_code: err.error_code, cause: err.cause, action: err.action } });
-    }
-  };
-
-  const handleSend = async () => {
-    if (state.planState !== "APPROVED" || !state.pendingTask) return;
-    try {
-      const resp = await postSend({ task: state.pendingTask });
-      dispatch({ type: "SEND_SUCCESS", payload: resp });
-    } catch (err) {
-      dispatch({ type: "COMPUTE_ERROR", payload: { error_code: err.error_code, cause: err.cause, action: err.action } });
-    }
-  };
-
-  const locked = state.planState === "APPROVED";
 
   return (
     <div className={styles.panel}>
@@ -131,56 +72,7 @@ export default function ControlPanel() {
         </div>
       </section>
 
-      <section className={styles.section}>
-        <label className={styles.label}>마진 (m, 비우면 기본값)</label>
-        {MARGIN_FIELDS.map(({ key, label }) => (
-          <div key={key} className={styles.fieldRow}>
-            <span className={styles.fieldLabel}>{label}</span>
-            <input
-              type="text"
-              inputMode="decimal"
-              className={styles.input}
-              disabled={locked}
-              value={state.params[key]}
-              onChange={(e) => setParam(key, e.target.value)}
-            />
-          </div>
-        ))}
-      </section>
-
-      <section className={styles.section}>
-        <label className={styles.label}>우선순위</label>
-        {PREFERENCE_FIELDS.map(({ key, label, min, max, step }) => (
-          <div key={key} className={styles.fieldRow}>
-            <span className={styles.fieldLabel}>{label} ({Number(state.params[key]).toFixed(1)})</span>
-            <input
-              type="range"
-              min={min} max={max} step={step}
-              disabled={locked}
-              value={state.params[key]}
-              onChange={(e) => setParam(key, Number(e.target.value))}
-            />
-          </div>
-        ))}
-      </section>
-
-      <section className={styles.section}>
-        <label className={styles.toggleRow}>
-          <input type="checkbox" disabled={locked} checked={state.params.allowStacking}
-                 onChange={(e) => setParam("allowStacking", e.target.checked)} />
-          2층 이상 쌓기 허용
-        </label>
-        <label className={styles.toggleRow}>
-          <input type="checkbox" disabled={locked} checked={state.params.allowRotation}
-                 onChange={(e) => setParam("allowRotation", e.target.checked)} />
-          90도 회전 허용
-        </label>
-        <label className={styles.toggleRow}>
-          <input type="checkbox" disabled={locked} checked={state.params.fixedOrder}
-                 onChange={(e) => setParam("fixedOrder", e.target.checked)} />
-          적재 순서 고정 (박스 목록 순서 그대로)
-        </label>
-      </section>
+      <PlanParamFields />
 
       <section className={styles.section}>
         <label className={styles.label}>박스 목록 (JSON)</label>
@@ -232,9 +124,6 @@ export default function ControlPanel() {
           <button type="button" disabled={!(state.planState === "COMPUTED" || state.planState === "APPROVED")}
                   onClick={() => dispatch({ type: "REJECT" })}>
             거부
-          </button>
-          <button type="button" disabled={state.planState !== "APPROVED"} onClick={handleSend}>
-            MSI2로 전송
           </button>
         </div>
         {state.error && (

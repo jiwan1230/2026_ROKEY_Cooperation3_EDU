@@ -8,7 +8,12 @@ import * as client from "../api/client.js";
 function Harness() {
   useResourceLoader();
   const state = usePlannerState();
-  return <div data-testid="trunk-map">{state.trunkMap}</div>;
+  return (
+    <>
+      <div data-testid="trunk-map">{state.trunkMap}</div>
+      <div data-testid="box-scan-files">{state.boxScanFiles.join(",")}</div>
+    </>
+  );
 }
 
 // vitest globals가 꺼져 있어 @testing-library/react의 자동 cleanup이 동작하지
@@ -21,6 +26,7 @@ describe("useResourceLoader", () => {
   it("loads resources on mount and dispatches RESOURCES_LOADED", async () => {
     vi.spyOn(client, "fetchTrunkMaps").mockResolvedValue(["run_a"]);
     vi.spyOn(client, "fetchBoxPresets").mockResolvedValue({ "기본값": [] });
+    vi.spyOn(client, "fetchCartScanFiles").mockResolvedValue([]);
 
     render(<PlannerProvider><Harness /></PlannerProvider>);
     await act(async () => {});
@@ -36,6 +42,7 @@ describe("useResourceLoader", () => {
       .mockResolvedValueOnce(["run_a"])
       .mockResolvedValue(["run_a", "run_new"]);
     vi.spyOn(client, "fetchBoxPresets").mockResolvedValue({ "기본값": [] });
+    vi.spyOn(client, "fetchCartScanFiles").mockResolvedValue([]);
 
     render(<PlannerProvider><Harness /></PlannerProvider>);
     await act(async () => {});
@@ -50,5 +57,16 @@ describe("useResourceLoader", () => {
     expect(screen.getByTestId("trunk-map").textContent).toBe("run_a");
 
     vi.useRealTimers();
+  });
+
+  it("loads the cart-scan-file list and dispatches BOX_SCAN_FILES_REFRESHED", async () => {
+    vi.spyOn(client, "fetchTrunkMaps").mockResolvedValue(["run_a"]);
+    vi.spyOn(client, "fetchBoxPresets").mockResolvedValue({ "기본값": [] });
+    vi.spyOn(client, "fetchCartScanFiles").mockResolvedValue(["all_boxes_corners_a.json"]);
+
+    render(<PlannerProvider><Harness /></PlannerProvider>);
+    await act(async () => {});
+
+    expect(screen.getByTestId("box-scan-files").textContent).toBe("all_boxes_corners_a.json");
   });
 });

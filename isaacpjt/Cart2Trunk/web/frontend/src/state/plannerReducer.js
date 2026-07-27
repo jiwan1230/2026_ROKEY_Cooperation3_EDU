@@ -16,6 +16,11 @@ export const DEFAULT_STRATEGY_PARAMS = {
 export const initialState = {
   trunkMaps: [],
   boxPresets: {},
+  // "실시간 제어" 탭 전용 - 실제 로봇 카트 스캔으로 저장된 all_boxes_corners_*.json
+  // 파일명 목록(robot_bridge.list_cart_scan_files()). "알고리즘 검증" 탭(더미
+  // 프리셋/무작위 생성)은 쓰지 않지만, 같은 reducer/hook을 공유하므로 초기값만
+  // 여기 둔다.
+  boxScanFiles: [],
   trunkMap: "",
   boxPresetName: "",
   boxesText: "[]",
@@ -79,6 +84,10 @@ export function plannerReducer(state, action) {
     // 폴링 때문에 매번 초기화되면 안 되므로 목록 자체만 갱신한다.
     case "TRUNK_MAPS_REFRESHED":
       return { ...state, trunkMaps: action.payload.trunkMaps };
+    // TRUNK_MAPS_REFRESHED와 같은 이유 - 실제 카트 스캔이 백그라운드에서
+    // 끝나 새 파일이 생겨도 목록만 갱신하고 현재 선택/계산 상태는 안 건드린다.
+    case "BOX_SCAN_FILES_REFRESHED":
+      return { ...state, boxScanFiles: action.payload.boxScanFiles };
     case "SET_TRUNK_MAP":
       return invalidateIfNeeded({ ...state, trunkMap: action.payload });
     case "SELECT_PRESET": {

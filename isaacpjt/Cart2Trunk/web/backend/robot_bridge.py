@@ -126,6 +126,16 @@ def run_pick_and_place(plan_id: str = "", timeout_sec: int = PICK_AND_PLACE_TIME
     return _run_client_subprocess(cmd, "pick_and_place", timeout_sec)
 
 
+def list_cart_scan_files() -> list:
+    """RECEIVED_SCANS_DIR에 저장된 실제 카트 스캔 박스 목록(all_boxes_corners_*.json,
+    run_cart_scan()이 저장한 것)의 파일명 목록을 오래된 순으로 반환한다 -
+    list_trunk_maps()(algorism_bridge.py)와 같은 관례. "실시간 제어" 탭이 실제
+    로봇으로 스캔한 박스 파일을 드롭다운으로 골라 불러올 때 쓴다."""
+    if not RECEIVED_SCANS_DIR.exists():
+        return []
+    return sorted(p.name for p in RECEIVED_SCANS_DIR.glob("all_boxes_corners_*.json"))
+
+
 def read_pick_and_place_progress() -> list:
     """PICK_AND_PLACE_PROGRESS_FILE(JSON Lines)을 읽어서 이벤트 리스트로
     반환한다. run_pick_and_place()가 아직 한 번도 안 불렸거나 파일이 없으면

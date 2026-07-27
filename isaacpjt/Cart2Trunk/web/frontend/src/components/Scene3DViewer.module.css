@@ -1,7 +1,10 @@
-/* 화면의 메인 컨텐츠라는 사용자 피드백 - 가로로 넓고 낮게(420px 고정)
-   눌려 있던 걸 뷰포트 높이 기준으로 키워서 실제로 눈에 띄는 크기로 만듦.
-   min-height는 작은 창에서도 최소한의 조작 가능한 크기를 보장한다. */
-.wrapper { display: flex; flex-direction: column; height: 75vh; min-height: 640px; background: var(--color-surface); border-radius: 12px; overflow: hidden; }
+/* 예전엔 뷰포트 높이 기준 고정값(75vh)으로 키웠는데, 강사님이 스크롤을
+   싫어해서 한 화면 안에 다 담기게 해달라는 피드백으로 App.module.css의
+   topRow가 계산해준 남은 공간을 그대로 채우는 방식(height:100%)으로
+   바꿨다 - 헤더/탭바/요약카드/로그/박스상세 높이가 얼마든 항상 화면을
+   벗어나지 않는다. min-height는 작은 창에서도 최소한의 조작 가능한
+   크기를 보장한다. */
+.wrapper { display: flex; flex-direction: column; height: 100%; min-height: 300px; background: var(--color-surface); border-radius: 12px; overflow: hidden; }
 /* Before/After 토글과 재생/카메라 버튼이 툴바 양 끝(space-between)에 멀리
    떨어져 있어서 클릭할 때 마우스를 오가야 했다는 피드백 - 왼쪽에 나란히
    붙여서 한 번에 조작하기 편하게 한다. */

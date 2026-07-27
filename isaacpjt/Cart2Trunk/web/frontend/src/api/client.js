@@ -32,6 +32,26 @@ export async function fetchBoxPresets() {
   return body.presets;
 }
 
+// "실시간 제어" 탭의 카트박스 스캔파일 드롭다운용 - 실제 로봇 카트 스캔으로
+// 저장된 all_boxes_corners_*.json 파일명 목록.
+export async function fetchCartScanFiles() {
+  const resp = await fetch(`${BASE}/robot/cart-scan-files`);
+  const body = await handleResponse(resp);
+  return body.cart_scan_files;
+}
+
+// 드롭다운에서 고른 실제 카트 스캔 JSON 파일의 내용을 그대로 가져온다(파싱은
+// postParseVisionCorners가 담당) - GET /api/robot/cart-scan-file/<filename>은
+// mimetype이 application/octet-stream이지만 내용은 JSON 텍스트라 .json()으로
+// 그대로 읽을 수 있다.
+export async function fetchCartScanFileJson(filename) {
+  const resp = await fetch(`${BASE}/robot/cart-scan-file/${encodeURIComponent(filename)}`);
+  if (!resp.ok) {
+    throw new Error(`${filename} 파일을 불러오지 못했습니다`);
+  }
+  return resp.json();
+}
+
 export async function postPlan(requestBody) {
   const resp = await fetch(`${BASE}/plan`, {
     method: "POST",

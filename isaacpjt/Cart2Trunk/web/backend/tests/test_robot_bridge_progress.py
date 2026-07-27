@@ -39,3 +39,21 @@ def test_read_pick_and_place_progress_skips_incomplete_trailing_line(tmp_path, m
     events = robot_bridge.read_pick_and_place_progress()
 
     assert events == [{"stage": "started", "box_index": 0, "box_count": 0, "box_id": ""}]
+
+
+def test_list_cart_scan_files_returns_empty_when_dir_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr(robot_bridge, "RECEIVED_SCANS_DIR", tmp_path / "does_not_exist")
+    assert robot_bridge.list_cart_scan_files() == []
+
+
+def test_list_cart_scan_files_filters_and_sorts(tmp_path, monkeypatch):
+    monkeypatch.setattr(robot_bridge, "RECEIVED_SCANS_DIR", tmp_path)
+    (tmp_path / "all_boxes_corners_20260727_120000_000000.json").write_text("{}")
+    (tmp_path / "all_boxes_corners_20260726_090000_000000.json").write_text("{}")
+    (tmp_path / "all_boxes_completed_20260727_120000_000000.ply").write_bytes(b"ply")
+    (tmp_path / "trunk_scan_20260727_120000_000000.ply").write_bytes(b"ply")
+
+    assert robot_bridge.list_cart_scan_files() == [
+        "all_boxes_corners_20260726_090000_000000.json",
+        "all_boxes_corners_20260727_120000_000000.json",
+    ]

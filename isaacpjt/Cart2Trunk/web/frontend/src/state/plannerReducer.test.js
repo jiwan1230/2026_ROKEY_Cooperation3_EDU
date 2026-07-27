@@ -50,6 +50,23 @@ describe("plannerReducer", () => {
     expect(next.boxSourceLabel).toBe("custom");
   });
 
+  it("BOX_SCAN_FILES_REFRESHED updates the cart-scan-file list without disturbing other state", () => {
+    // TRUNK_MAPS_REFRESHED와 같은 이유 - "실시간 제어" 탭이 폴링으로 목록만
+    // 다시 불러오는 액션. 이미 골라서 불러온 박스 목록을 건드리면 안 된다.
+    const working = {
+      ...initialState,
+      boxesText: '[{"id":"loaded_from_file"}]',
+      boxSourceLabel: "vision:snap1",
+    };
+    const next = plannerReducer(working, {
+      type: "BOX_SCAN_FILES_REFRESHED",
+      payload: { boxScanFiles: ["all_boxes_corners_a.json", "all_boxes_corners_b.json"] },
+    });
+    expect(next.boxScanFiles).toEqual(["all_boxes_corners_a.json", "all_boxes_corners_b.json"]);
+    expect(next.boxesText).toBe('[{"id":"loaded_from_file"}]');
+    expect(next.boxSourceLabel).toBe("vision:snap1");
+  });
+
   it("invalidates a computed plan when a param changes", () => {
     const computed = { ...initialState, planState: "COMPUTED" };
     const next = plannerReducer(computed, { type: "SET_PARAM", payload: { key: "mode", value: "count_first" } });

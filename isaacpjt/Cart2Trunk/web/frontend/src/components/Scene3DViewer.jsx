@@ -49,7 +49,13 @@ const CAMERA_PRESETS = {
   top: { position: [0.01, 3.36, 0.01], target: [0, 0, 0] },
 };
 
-export default function Scene3DViewer() {
+// showScenarios: "알고리즘 검증" 탭은 산업현장 시나리오 미리보기 버튼
+// (택배배송트럭 등)을 그대로 두지만, "실시간 제어" 탭은 실제 스캔 데이터로
+// 계획을 검토하는 화면이라 더미 시나리오 버튼이 맞지 않아 숨긴다(사용자
+// 피드백: "알고리즘 검증 탭에서 3D 뷰어에 있는 택배배송트럭 이런거는
+// 살려두고 실시간 제어 탭에서는 삭제해줘"). false여도 Before/After・카메라
+// 프리셋・순서대로 재생・카트 적재 시각화 등 나머지 로직은 전부 그대로다.
+export default function Scene3DViewer({ showScenarios = true }) {
   const state = usePlannerState();
 
   // 산업현장 시나리오 미리보기 - state.result(지금 작업 중인 계획)는 전혀
@@ -250,25 +256,27 @@ export default function Scene3DViewer() {
           {Object.keys(CAMERA_PRESETS).map((name) => (
             <button key={name} type="button" onClick={() => setPreset(name)}>{name}</button>
           ))}
-          <div className={styles.scenarioBar}>
-            {SCENARIOS.map((s) => (
-              <button
-                key={s.id}
-                type="button"
-                disabled={scenarioLoading}
-                className={activeScenarioId === s.id ? styles.scenarioActive : undefined}
-                onClick={() => handleSelectScenario(s.id)}
-              >
-                {s.label}
-              </button>
-            ))}
-            {activeScenarioId && (
-              <button type="button" onClick={handleExitScenario}>실시간 계획으로 돌아가기</button>
-            )}
-          </div>
+          {showScenarios && (
+            <div className={styles.scenarioBar}>
+              {SCENARIOS.map((s) => (
+                <button
+                  key={s.id}
+                  type="button"
+                  disabled={scenarioLoading}
+                  className={activeScenarioId === s.id ? styles.scenarioActive : undefined}
+                  onClick={() => handleSelectScenario(s.id)}
+                >
+                  {s.label}
+                </button>
+              ))}
+              {activeScenarioId && (
+                <button type="button" onClick={handleExitScenario}>실시간 계획으로 돌아가기</button>
+              )}
+            </div>
+          )}
         </div>
       </div>
-      {scenarioError && <span className={styles.scenarioError}>{scenarioError}</span>}
+      {showScenarios && scenarioError && <span className={styles.scenarioError}>{scenarioError}</span>}
       <Canvas key={dpr} dpr={dpr} camera={{ position: CAMERA_PRESETS.front.position, fov: 50 }}>
         <ambientLight intensity={0.7} />
         <directionalLight position={[3, 5, 3]} intensity={0.6} />

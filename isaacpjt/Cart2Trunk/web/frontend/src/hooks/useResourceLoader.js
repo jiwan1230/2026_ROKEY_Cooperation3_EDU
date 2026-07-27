@@ -1,10 +1,10 @@
 // src/hooks/useResourceLoader.js
 import { useEffect } from "react";
-import { fetchBoxPresets, fetchTrunkMaps } from "../api/client.js";
+import { fetchBoxPresets, fetchCartScanFiles, fetchTrunkMaps } from "../api/client.js";
 import { usePlannerDispatch } from "../state/PlannerContext.jsx";
 
-// 트렁크 스캔이 끝나 새 run_*/pointcloud/trunk_map.json이 생겨도, 새로고침
-// 전엔 드롭다운에 안 보이던 문제 - 이 주기로 트렁크 맵 목록만 다시 불러온다.
+// 트렁크/카트 스캔이 끝나 새 파일이 생겨도, 새로고침 전엔 드롭다운에 안
+// 보이던 문제 - 이 주기로 트렁크 맵/카트 스캔파일 목록만 다시 불러온다.
 // 박스 프리셋은 스캔 중에 새로 생기는 게 아니라 폴링 대상에서 제외한다.
 const TRUNK_MAP_POLL_INTERVAL_MS = 3000;
 
@@ -31,6 +31,19 @@ export function useResourceLoader() {
         });
       });
 
+    // "실시간 제어" 탭의 카트박스 스캔파일 드롭다운용 - 실패해도(백엔드가
+    // 아직 없는 옛 버전이거나 일시적 오류) "알고리즘 검증" 탭 쪽 흐름을
+    // 막으면 안 되므로 조용히 콘솔에만 남긴다.
+    fetchCartScanFiles()
+      .then((boxScanFiles) => {
+        if (cancelled) return;
+        dispatch({ type: "BOX_SCAN_FILES_REFRESHED", payload: { boxScanFiles } });
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        console.warn("카트 스캔파일 목록 조회 실패:", err);
+      });
+
     const intervalId = setInterval(() => {
       fetchTrunkMaps()
         .then((trunkMaps) => {
@@ -43,6 +56,15 @@ export function useResourceLoader() {
         .catch((err) => {
           if (cancelled) return;
           console.warn("트렁크 맵 목록 폴링 실패:", err);
+        });
+      fetchCartScanFiles()
+        .then((boxScanFiles) => {
+          if (cancelled) return;
+          dispatch({ type: "BOX_SCAN_FILES_REFRESHED", payload: { boxScanFiles } });
+        })
+        .catch((err) => {
+          if (cancelled) return;
+          console.warn("카트 스캔파일 목록 폴링 실패:", err);
         });
     }, TRUNK_MAP_POLL_INTERVAL_MS);
 

@@ -53,6 +53,13 @@ def get_cart_scan_file(filename):
         robot_bridge.RECEIVED_SCANS_DIR, filename, mimetype="application/octet-stream")
 
 
+@robot_bp.get("/api/robot/cart-scan-files")
+def list_cart_scan_files():
+    """"실시간 제어" 탭의 카트박스 스캔파일 드롭다운용 - 실제 로봇 카트
+    스캔으로 저장된 all_boxes_corners_*.json 파일명 목록(오래된 순)."""
+    return jsonify({"cart_scan_files": robot_bridge.list_cart_scan_files()})
+
+
 @robot_bp.post("/api/robot/trunk-scan")
 def trunk_scan():
     try:
