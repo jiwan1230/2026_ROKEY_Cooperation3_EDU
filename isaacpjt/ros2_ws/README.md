@@ -76,6 +76,28 @@ ros2 action send_goal /cart2trunk/trunk_scan cart2trunk_interfaces/action/TrunkS
   있으면 다른 머신을 아예 못 찾는다).
 - 두 머신 사이에 DDS 디스커버리/데이터용 UDP 트래픽(멀티캐스트 포함)이
   방화벽에 막히지 않아야 한다.
+- **실측 결과: `ROS_DOMAIN_ID`를 맞추고 ping/방화벽이 다 뚫려 있어도
+  `ros2 node list`/`ros2 action list`에 상대 머신 노드가 하나도 안 보일 수
+  있다** - 두 머신이 서로 다른 네트워크 세그먼트에 있어서 ICMP(ping)는
+  라우팅되지만 DDS 기본 디스커버리가 쓰는 UDP 멀티캐스트는 라우터를 못
+  넘어가는 경우다(`ros2 multicast send`/`ros2 multicast receive`로 재현
+  확인 가능 - 한쪽에서 send해도 반대쪽 receive에 아무것도 안 찍히면 이
+  케이스). 이럴 땐 멀티캐스트 없이 유니캐스트만으로 디스커버리하는
+  **Fast-DDS Discovery Server**로 우회한다:
+
+  ```bash
+  # 두 머신 중 아무 한쪽(예: UI PC)에서 - 계속 켜둘 프로세스
+  source /opt/ros/humble/setup.bash
+  fastdds discovery -i 0 -l <그 머신의_LAN_IP> -p 11811
+
+  # 그 뒤, ROS2 노드를 실행하는 모든 터미널(양쪽 머신 다)에서 노드 실행 전에
+  export ROS_DISCOVERY_SERVER="<Discovery Server IP>:11811"
+  ```
+
+  UI PC의 Flask(`app.py`)를 띄우는 터미널에도 반드시 이 환경변수를 넣어야
+  한다 - `robot_bridge.py`가 띄우는 `ros2 run cart2trunk_bridge
+  trunk_scan_client` 서브프로세스가 Flask 프로세스의 환경변수를 그대로
+  물려받기 때문이다.
 - `config/trunk_scan_server.params.yaml`의 `cart2trunk_dir`/`isaac_python_sh`/
   `ros2_bridge_ld_library_path`는 **Isaac Sim PC 기준 절대경로**다. 머신마다
   홈 디렉터리가 다를 수 있으므로(예: 이 저장소에는 이미 서로 다른 개발자의
