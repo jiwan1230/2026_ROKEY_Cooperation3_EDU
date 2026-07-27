@@ -4,7 +4,7 @@
   grid-template-columns: repeat(4, 1fr);
   grid-template-rows: 1fr 1fr;
   grid-template-areas:
-    "trunk  trunk  cart   cart"
+    "cart   cart   trunk  trunk"
     "camera pick   pick   log";
 }
 .trunk { grid-area: trunk; }
@@ -16,6 +16,6 @@
 @media (max-width: 1100px) {
   .panel {
     grid-template-columns: 1fr;
-    grid-template-areas: "trunk" "cart" "camera" "pick" "log";
+    grid-template-areas: "cart" "trunk" "camera" "pick" "log";
   }
 }
