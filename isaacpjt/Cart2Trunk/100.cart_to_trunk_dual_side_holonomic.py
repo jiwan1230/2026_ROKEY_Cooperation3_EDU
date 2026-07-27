@@ -591,14 +591,18 @@ def discover_box_prim_paths(stage):
     return [str(c.GetPath()) for c in world_prim.GetChildren() if c.GetName().startswith("Box_")]
 
 
-def match_physical_prim(stage, scan_center_world_xy, available_paths):
+def match_physical_prim(stage, scan_center_world, available_paths):
+    # XY만으로 매칭하면 같은 XY에 쌓인 박스(예: Large1 위의 Medium)를 구분할 수 없다
+    # (실측 확인 - 100.py PICK 세션에서 box_id=0(Medium 치수)이 XY만 보고 /World/Box_Large1에
+    # 잘못 매칭돼 Large1을 집으려다 Medium 윗면 높이를 목표로 삼는 바람에 흡착 실패했다).
+    # scan_center_world는 Z까지 포함해야 스택된 박스를 구분할 수 있다.
     best_path, best_dist = None, None
     for path in available_paths:
         prim = stage.GetPrimAtPath(path)
         if not prim.IsValid():
             continue
         pos = get_world_pos(prim)
-        dist = float(np.linalg.norm(pos[:2] - np.asarray(scan_center_world_xy)))
+        dist = float(np.linalg.norm(pos - np.asarray(scan_center_world)))
         if best_dist is None or dist < best_dist:
             best_path, best_dist = path, dist
     return best_path, best_dist
@@ -2202,7 +2206,7 @@ for placement in placements_pick:
     scan_center, scan_size, scan_min = world_aabb_from_base_corners(
         scan_entry["corners_m"], PICK_SCAN_BASE_POS, PICK_SCAN_R_BASE)
     available = [p for p in CANDIDATE_BOX_PRIM_PATHS if p not in used_prim_paths]
-    prim_path, match_dist = match_physical_prim(stage, scan_center[:2], available)
+    prim_path, match_dist = match_physical_prim(stage, scan_center, available)
     if prim_path is None:
         continue
     used_prim_paths.add(prim_path)

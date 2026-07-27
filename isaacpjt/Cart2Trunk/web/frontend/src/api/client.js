@@ -71,3 +71,42 @@ export async function postParseVisionCorners(visionCornersJson) {
   });
   return handleResponse(resp);
 }
+
+// 로봇(MSI2) 동작 트리거 - 지금은 백엔드가 실제 ROS2 없이 더미 응답만 준다
+// (routes/robot.py 참고). 요청 바디는 필요 없다.
+export async function postCartScan() {
+  const resp = await fetch(`${BASE}/robot/cart-scan`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({}),
+  });
+  return handleResponse(resp);
+}
+
+export async function postTrunkScan() {
+  const resp = await fetch(`${BASE}/robot/trunk-scan`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({}),
+  });
+  return handleResponse(resp);
+}
+
+export async function postPickAndPlace() {
+  const resp = await fetch(`${BASE}/robot/pick-and-place`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({}),
+  });
+  return handleResponse(resp);
+}
+
+// 산업현장 시나리오 미리보기 - routes/scenarios.py 참고. 요청 바디는 필요 없다.
+export async function postScenarioPlan(scenarioId) {
+  const resp = await fetch(`${BASE}/scenarios/${scenarioId}/plan`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({}),
+  });
+  return handleResponse(resp);
+}
