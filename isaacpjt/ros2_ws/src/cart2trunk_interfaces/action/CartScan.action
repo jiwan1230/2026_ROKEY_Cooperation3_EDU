@@ -1,0 +1,27 @@
+# CartScan.action
+#
+# 카트 스캔 파이프라인(99.cart_scan_dual_side_holonomic.py ->
+# perception/multiview_scan.py)을 Isaac Sim PC에서 실행하고, 검출된 박스
+# 정보(JSON)와 통합 point cloud(PLY)를 UI PC로 전송한다. JSON은 보통 수 KB라
+# 청크 없이 Result에 통째로 담고, PLY는 TrunkScan.action과 동일하게 청크로
+# 나눠 Feedback으로 보낸다. 두 원본 스크립트는 이 액션 서버가 서브프로세스로만
+# 호출하며 절대 수정하지 않는다.
+
+# Goal
+bool headless true
+---
+# Result
+bool success
+string message
+int32 box_count
+string json_filename
+string json_text
+string ply_filename
+uint32 ply_total_bytes
+uint32 ply_total_chunks
+---
+# Feedback
+string stage
+uint32 chunk_index
+uint32 total_chunks
+uint8[] chunk_data

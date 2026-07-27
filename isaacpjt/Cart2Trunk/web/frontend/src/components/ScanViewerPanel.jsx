@@ -2,10 +2,12 @@
 // 트렁크 Scan / 카트 Scan 칸 - 뼈대(토글+상태+버튼+3D 캔버스)가 완전히
 // 같아서 kind prop으로 내용만 갈아끼운다. 시뮬레이터 탭의 PlannerContext와
 // 무관하게 독립적으로 동작한다.
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Canvas } from "@react-three/fiber";
 import { Grid, OrbitControls } from "@react-three/drei";
-import { postCartScan, postTrunkScan } from "../api/client.js";
+import { Matrix4 } from "three";
+import { PLYLoader } from "three/examples/jsm/loaders/PLYLoader.js";
+import { postCartScan, postTrunkScan, fetchScanFile } from "../api/client.js";
 import {
   TrunkWireframe, CartWireframe, SceneBoxMesh, BoundingBoxWireframe,
   layoutStagingBoxes, computeCartFootprint,
@@ -32,6 +34,51 @@ function RawTrunkPreview() {
 
 function ProcessedTrunkPreview() {
   return <TrunkWireframe trunk={DUMMY_TRUNK} />;
+}
+
+// 실제 ROS2 액션으로 받은 스캔 PLY(트렁크: float32 xyz만 / 카트: ascii, 둘 다
+// PLYLoader가 그대로 파싱 가능)를 로드해서 점군으로 렌더링한다 - 트렁크/카트
+// 양쪽 "전처리" 모드에서 공용으로 쓴다. "원본" 토글은 아직 더미(SCENE_CONTENT)
+// 그대로 쓴다.
+function RealPointCloud({ url }) {
+  const [geometry, setGeometry] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchScanFile(url).then((buffer) => {
+      if (cancelled) return;
+      const loaded = new PLYLoader().parse(buffer);
+      // ROS/아이작심 좌표계(X 전방, Y 좌우, Z 위)를 Three.js 좌표계(X 화면
+      // 가로, Y 위, Z 화면 깊이)로 옮긴다. 단순히 한 축만 돌리면(X축 -90도)
+      // 트렁크의 실제 좌우 폭(ROS Y)이 화면 "깊이" 방향으로 가버려서 비스듬히
+      // 누운 것처럼 보인다 - 좌우 폭이 화면 가로로 오도록 세 축을 순환
+      // 치환한다: three_x=ros_y(좌우->가로), three_y=ros_z(위->위),
+      // three_z=ros_x(전후->깊이). 순환 치환이라 손대칭이 안 바뀐다(rotation).
+      loaded.applyMatrix4(new Matrix4().set(
+        0, 1, 0, 0,
+        0, 0, 1, 0,
+        1, 0, 0, 0,
+        0, 0, 0, 1,
+      ));
+      // 회전 후 최저점이 그리드(y=0) 아래로 내려갈 수 있어(원점이 트렁크
+      // 바닥과 정확히 일치하지 않음) - 최저점을 0에 맞춰서 바닥에 붙인다.
+      loaded.computeBoundingBox();
+      const minY = loaded.boundingBox.min.y;
+      if (minY < 0) loaded.translate(0, -minY, 0);
+      loaded.computeBoundingSphere();
+      setGeometry(loaded);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [url]);
+
+  if (!geometry) return null;
+  return (
+    <points geometry={geometry}>
+      <pointsMaterial size={0.01} sizeAttenuation color="#4A90D9" />
+    </points>
+  );
 }
 
 function RawCartPreview() {
@@ -63,23 +110,34 @@ const SCENE_CONTENT = {
 export default function ScanViewerPanel({ kind, onLog = () => {} }) {
   const [status, setStatus] = useState("idle");
   const [viewMode, setViewMode] = useState("raw");
+  const [scanPlyUrl, setScanPlyUrl] = useState(null);
 
   const handleTrigger = async () => {
     setStatus("running");
     try {
-      // TODO(비전팀 연동 시): 여기서 실제 스캔 결과를 받으면 DUMMY_TRUNK/
-      // DUMMY_CART_BOXES 대신 그 값을 써야 한다. 지금은 성공 여부만 보고
-      // 더미 message 내용은 쓰지 않는다.
-      await callScanTrigger(kind);
+      // 트렁크/카트 스캔 둘 다 실제 ROS2 액션 결과가 오면(ply_url 또는 url)
+      // 그걸로 실제 점군을 렌더링한다(RealPointCloud) - 없으면(더미 응답)
+      // 기존 DUMMY_TRUNK/DUMMY_CART_BOXES 경로로 자연스럽게 폴백한다.
+      // 카트 스캔의 json_url(적재 알고리즘용, algorism_bridge.py의
+      // load_boxes_from_vision_json이 소비하는 스키마)은 백엔드가 이미
+      // /api/robot/cart-scan-file/<filename>으로 서빙해두므로, 이 컴포넌트는
+      // 뷰어 표시에 필요한 ply_url만 쓴다.
+      const body = await callScanTrigger(kind);
+      const plyUrl = kind === "trunk" ? body.url : body.ply_url;
+      if (plyUrl) {
+        setScanPlyUrl(plyUrl);
+      }
       setStatus("done");
-      onLog(`${KIND_LABELS[kind]} 완료`);
+      const detail = kind === "cart" && body.box_count != null ? ` (박스 ${body.box_count}개)` : "";
+      onLog(`${KIND_LABELS[kind]} 완료${detail}`);
     } catch {
       setStatus("idle");
       onLog(`[오류] ${KIND_LABELS[kind]} 요청 실패`);
     }
   };
 
-  const Content = status === "done" ? SCENE_CONTENT[kind][viewMode] : null;
+  const showRealPointCloud = status === "done" && viewMode === "processed" && scanPlyUrl;
+  const Content = status === "done" && !showRealPointCloud ? SCENE_CONTENT[kind][viewMode] : null;
 
   return (
     <div className={styles.panel}>
@@ -103,6 +161,7 @@ export default function ScanViewerPanel({ kind, onLog = () => {} }) {
           <Grid position={[0, -0.001, 0]} args={[4, 4]} cellSize={0.25} cellThickness={0.5}
                 cellColor="#D8D8DC" sectionSize={1} sectionThickness={1} sectionColor="#B8B8C4"
                 fadeDistance={5} fadeStrength={1.2} infiniteGrid />
+          {showRealPointCloud && <RealPointCloud url={scanPlyUrl} />}
           {Content && <Content />}
         </Canvas>
       </div>

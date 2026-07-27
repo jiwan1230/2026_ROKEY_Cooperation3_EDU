@@ -1,0 +1,22 @@
+# TrunkScan.action
+#
+# 트렁크 스캔 파이프라인(89.trunk_scan_holonomic.py -> 90.export_trunk_map_holonomic.py)을
+# Isaac Sim PC에서 실행하고, 결과 PLY 포인트클라우드를 청크로 나눠 UI PC로 전송한다.
+# 두 원본 스크립트는 이 액션 서버가 서브프로세스로만 호출하며 절대 수정하지 않는다.
+
+# Goal
+bool headless true
+---
+# Result
+bool success
+string message
+string filename
+uint32 total_bytes
+uint32 total_chunks
+int32 point_count
+---
+# Feedback
+string stage
+uint32 chunk_index
+uint32 total_chunks
+uint8[] chunk_data
