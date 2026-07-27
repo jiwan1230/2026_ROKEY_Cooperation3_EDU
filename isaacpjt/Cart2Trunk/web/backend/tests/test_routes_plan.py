@@ -21,7 +21,7 @@ def _client(monkeypatch, tmp_path):
     run_dir = tmp_path / "run_test" / "pointcloud"
     run_dir.mkdir(parents=True)
     (run_dir / "trunk_map.json").write_text(json.dumps(_TRUNK_MAP))
-    monkeypatch.setattr(bridge, "_SRC_DIR", tmp_path)
+    monkeypatch.setattr(bridge, "_RESULTS_DIR", tmp_path)
     return create_app().test_client()
 
 
@@ -62,7 +62,7 @@ def test_post_plan_corrupt_trunk_map_json_returns_400(monkeypatch, tmp_path):
     run_dir = tmp_path / "run_corrupt" / "pointcloud"
     run_dir.mkdir(parents=True)
     (run_dir / "trunk_map.json").write_text("{ 이거 잘못된 json")
-    monkeypatch.setattr(bridge, "_SRC_DIR", tmp_path)
+    monkeypatch.setattr(bridge, "_RESULTS_DIR", tmp_path)
     client = create_app().test_client()
 
     resp = client.post("/api/plan", json={"trunk_map": "run_corrupt", "boxes": []})

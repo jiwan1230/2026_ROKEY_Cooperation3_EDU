@@ -8,7 +8,7 @@ import algorism_bridge as bridge
 
 
 def test_list_trunk_maps_finds_run_folders(tmp_path, monkeypatch):
-    monkeypatch.setattr(bridge, "_SRC_DIR", tmp_path)
+    monkeypatch.setattr(bridge, "_RESULTS_DIR", tmp_path)
     run_dir = tmp_path / "run_20260101_000000" / "pointcloud"
     run_dir.mkdir(parents=True)
     (run_dir / "trunk_map.json").write_text("{}")
@@ -17,8 +17,52 @@ def test_list_trunk_maps_finds_run_folders(tmp_path, monkeypatch):
 
 
 def test_list_trunk_maps_empty_when_none_found(tmp_path, monkeypatch):
-    monkeypatch.setattr(bridge, "_SRC_DIR", tmp_path)
+    monkeypatch.setattr(bridge, "_RESULTS_DIR", tmp_path)
     assert bridge.list_trunk_maps() == []
+
+
+def test_list_trunk_maps_includes_holonomic_base_when_present(tmp_path, monkeypatch):
+    # robot_bridge.run_trunk_scan()으로 이어지는 실제 트렁크 스캔 파이프라인
+    # (90.export_trunk_map_holonomic.py)은 run_* 폴더가 아니라 이 고정 경로
+    # 하나를 스캔마다 덮어쓴다 - "실시간 제어" 탭이 실제로 고르는 항목이라
+    # 목록에 반드시 포함돼야 한다(회귀 테스트 - 하드코딩된 남의 PC 경로
+    # /home/sunwook/... 때문에 이게 항상 빠졌었다).
+    monkeypatch.setattr(bridge, "_RESULTS_DIR", tmp_path)
+    holonomic_dir = tmp_path / "holonomic_base"
+    holonomic_dir.mkdir(parents=True)
+    (holonomic_dir / "trunk_map.json").write_text("{}")
+
+    assert bridge.list_trunk_maps() == ["holonomic_base"]
+
+
+def test_list_trunk_maps_sorts_holonomic_base_and_run_folders_by_mtime(tmp_path, monkeypatch):
+    import os
+    import time
+
+    monkeypatch.setattr(bridge, "_RESULTS_DIR", tmp_path)
+    run_dir = tmp_path / "run_20260101_000000" / "pointcloud"
+    run_dir.mkdir(parents=True)
+    (run_dir / "trunk_map.json").write_text("{}")
+
+    holonomic_dir = tmp_path / "holonomic_base"
+    holonomic_dir.mkdir(parents=True)
+    time.sleep(0.01)
+    (holonomic_dir / "trunk_map.json").write_text("{}")
+    # 확실히 더 최신이 되도록 mtime을 명시적으로 미래로 맞춘다(파일시스템
+    # 타임스탬프 해상도가 낮은 환경에서도 안정적으로 통과하도록).
+    future = time.time() + 10
+    os.utime(holonomic_dir / "trunk_map.json", (future, future))
+
+    assert bridge.list_trunk_maps() == ["run_20260101_000000", "holonomic_base"]
+
+
+def test_trunk_map_path_resolves_holonomic_base_without_pointcloud_subdir(tmp_path, monkeypatch):
+    monkeypatch.setattr(bridge, "_RESULTS_DIR", tmp_path)
+    holonomic_dir = tmp_path / "holonomic_base"
+    holonomic_dir.mkdir(parents=True)
+    (holonomic_dir / "trunk_map.json").write_text("{}")
+
+    assert bridge._trunk_map_path("holonomic_base") == holonomic_dir / "trunk_map.json"
 
 
 def test_list_box_presets_includes_default_and_example_files(tmp_path, monkeypatch):

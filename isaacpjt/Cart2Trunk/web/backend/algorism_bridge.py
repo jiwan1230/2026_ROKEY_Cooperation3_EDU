@@ -53,9 +53,12 @@ COUNT_FIRST_FOOTPRINT_GROWTH_WEIGHT = _m05.COUNT_FIRST_FOOTPRINT_GROWTH_WEIGHT
 DEFAULT_MARGIN = _m17.MARGIN
 build_task_json = _m20.build_task_json
 
-# planner_gui.py의 _discover_trunk_maps()와 같은 경로 관례 - 트렁크 스캔
-# run_* 폴더는 ROS2 워크스페이스 src/ 바로 밑에 쌓인다.
-_SRC_DIR = pathlib.Path("/home/sunwook/cobot3_ws/src")
+# 트렁크 맵이 실제로 쌓이는 두 위치 모두 이 프로젝트(Cart2Trunk/results) 밑에
+# 있다 - 예전엔 팀원 개발 PC의 절대경로(/home/sunwook/cobot3_ws/src)를 그대로
+# 박아뒀었는데, 그 경로는 이 백엔드가 실제로 도는 머신에는 존재하지 않아
+# list_trunk_maps()가 항상 빈 목록을 반환했다(사용자 리포트 - 실제 트렁크
+# 스캔을 했는데도 "실시간 제어" 탭 드롭다운에 안 뜸).
+_RESULTS_DIR = _CART2TRUNK_DIR / "results"
 _PENDING_TASKS_DIR = _ALGORISM_DIR / "local_test_data" / "pending_tasks"
 
 _DEFAULT_CART_BOXES = [
@@ -90,13 +93,31 @@ def color_for_box_id(box_id: str) -> str:
 
 
 def list_trunk_maps() -> List[str]:
-    """run_*/pointcloud/trunk_map.json이 있는 run 폴더 이름 목록 (오래된 순)."""
-    paths = sorted(_SRC_DIR.glob("run_*/pointcloud/trunk_map.json"))
-    return [p.parent.parent.name for p in paths]
+    """선택 가능한 트렁크 맵 이름 목록(오래된 순) - 실제로 존재하는 두 가지
+    위치를 합친다:
+    - results/run_*/pointcloud/trunk_map.json: 예전 다회차 스캔 테스트로 쌓인
+      더미/기록용 트렁크 맵("알고리즘 검증" 탭에서 여러 개 중 골라볼 때 씀).
+    - results/holonomic_base/trunk_map.json: 지금 실제로 연동된 트렁크 스캔
+      파이프라인(90.export_trunk_map_holonomic.py, isaac_task_runner.py 경유,
+      robot_bridge.run_trunk_scan())이 스캔마다 덮어쓰는 단일 파일 - run_*처럼
+      스캔마다 새 폴더가 안 생기고 "가장 최근 실제 스캔 결과" 하나만 있다
+      ("실시간 제어" 탭이 고르는 게 사실상 이거다).
+    """
+    entries = []
+    holonomic_path = _RESULTS_DIR / "holonomic_base" / "trunk_map.json"
+    if holonomic_path.exists():
+        entries.append(("holonomic_base", holonomic_path.stat().st_mtime))
+    for p in _RESULTS_DIR.glob("run_*/pointcloud/trunk_map.json"):
+        entries.append((p.parent.parent.name, p.stat().st_mtime))
+    entries.sort(key=lambda entry: entry[1])
+    return [name for name, _mtime in entries]
 
 
 def _trunk_map_path(run_name: str) -> pathlib.Path:
-    path = _SRC_DIR / run_name / "pointcloud" / "trunk_map.json"
+    path = (
+        _RESULTS_DIR / "holonomic_base" / "trunk_map.json" if run_name == "holonomic_base"
+        else _RESULTS_DIR / run_name / "pointcloud" / "trunk_map.json"
+    )
     if not path.exists():
         raise ValueError(f"'{run_name}' 트렁크 스캔 파일을 찾을 수 없습니다: {path}")
     return path
