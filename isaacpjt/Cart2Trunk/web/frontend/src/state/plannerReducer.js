@@ -1,5 +1,5 @@
 export const DEFAULT_STRATEGY_PARAMS = {
-  mode: "large_first",
+  mode: "count_first",
   margin: "",
   wallMargin: "",
   obstacleMargin: "",

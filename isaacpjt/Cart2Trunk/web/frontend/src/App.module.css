@@ -1,22 +1,32 @@
 /* src/App.module.css */
 .layout { display: flex; flex-direction: column; height: 100vh; }
-.body { display: grid; grid-template-columns: 340px 1fr; flex: 1; overflow: hidden; }
-.resultArea { display: flex; flex-direction: column; gap: 16px; padding: 20px; overflow-y: auto; }
+.body { display: grid; grid-template-columns: 340px 1fr; flex: 1; overflow: hidden; min-height: 0; }
+/* "스크롤 없이 한 화면에 다 보고 싶다"는 강사님 피드백 - resultArea를 세로로
+   흘러넘치는 flex 컬럼(overflow-y:auto) 대신, 위(topRow)/아래(BoxDetailPanel)
+   두 행짜리 grid로 바꿔서 화면 높이 안에 딱 맞춘다. topRow가 남는 공간을
+   전부 갖고(minmax(0,1fr)), BoxDetailPanel은 필요한 높이만(auto) 차지한다.
+   정상 크기 화면에서는 바깥 스크롤이 아예 필요 없어지고, 좁은 화면에서
+   세로로 다시 쌓일 때만 아래 미디어쿼리로 스크롤을 되살린다. */
+.resultArea { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; gap: 16px; padding: 20px; min-height: 0; overflow: hidden; }
 
 /* "화면 1"(요약 카드+결과 로그) 좁게 + "메인 화면 - 2"(3D 뷰어) 넓게 나란히
    - 좁은 화면(랩탑 등)에서는 옆으로 나란히 두면 둘 다 너무 좁아지므로
    세로로 다시 쌓는다. */
-.topRow { display: flex; gap: 16px; align-items: stretch; }
+.topRow { display: flex; gap: 16px; align-items: stretch; min-height: 0; }
 /* stretch로 3D 뷰어와 높이를 맞춘다. 요약 카드는 위쪽에 자기 높이만큼만
    차지하고, 결과 로그는 margin-top:auto로 나머지 빈 공간을 밀어내면서
    칸 맨 밑에 붙는다(사용자 피드백 - "결과 로그를 쭉 내려서 칸 맨 밑에
    배치") - LogPanel.module.css의 max-height와 짝을 이뤄, 로그가 길어져도
    칸 밖으로 넘치지 않고 그 안에서 스크롤된다. */
-.leftColumn { flex: 0 0 340px; display: flex; flex-direction: column; gap: 16px; min-height: 0; }
+/* overflow-y:auto는 안전장치 - 요약 카드 설명이 길어지는 등으로 leftColumn
+   내용이 배정된 높이를 넘을 때, 옆 3D 뷰어나 아래 BoxDetailPanel 위로
+   겹쳐 보이지 않고 이 컬럼 안에서만 스크롤되게 한다. */
+.leftColumn { flex: 0 0 340px; display: flex; flex-direction: column; gap: 16px; min-height: 0; overflow-y: auto; }
 .leftColumn > :last-child { margin-top: auto; }
-.topRow > :last-child { flex: 1; min-width: 0; }
+.topRow > :last-child { flex: 1; min-width: 0; min-height: 0; }
 
 @media (max-width: 900px) {
   .topRow { flex-direction: column; }
   .leftColumn { flex: none; width: 100%; }
+  .resultArea { overflow-y: auto; }
 }

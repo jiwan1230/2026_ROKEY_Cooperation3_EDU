@@ -1,7 +1,11 @@
-/* 화면의 메인 컨텐츠라는 사용자 피드백 - 가로로 넓고 낮게(420px 고정)
-   눌려 있던 걸 뷰포트 높이 기준으로 키워서 실제로 눈에 띄는 크기로 만듦.
-   min-height는 작은 창에서도 최소한의 조작 가능한 크기를 보장한다. */
-.wrapper { display: flex; flex-direction: column; height: 75vh; min-height: 640px; background: var(--color-surface); border-radius: 12px; overflow: hidden; }
+/* 화면의 메인 컨텐츠라는 사용자 피드백으로 한때 뷰포트 높이 기준 고정값
+   (75vh, min 640px)을 썼었는데, 그 값이 BoxDetailPanel 등 나머지 컨텐츠와
+   합쳐지면서 한 화면에 다 안 들어가고 스크롤이 생기는 원인이 됐다(강사님
+   피드백). App.module.css의 resultArea가 이제 grid로 화면 높이를 딱 맞춰
+   나눠주므로, 여기서는 그 배정된 높이(부모 topRow의 높이)를 그대로
+   채우기만 하면 된다. min-height는 아주 작은 창에서도 조작 가능한 최소
+   크기를 보장하기 위한 안전장치로만 남긴다. */
+.wrapper { display: flex; flex-direction: column; height: 100%; min-height: 360px; background: var(--color-surface); border-radius: 12px; overflow: hidden; }
 /* Before/After 토글과 재생/카메라 버튼이 툴바 양 끝(space-between)에 멀리
    떨어져 있어서 클릭할 때 마우스를 오가야 했다는 피드백 - 왼쪽에 나란히
    붙여서 한 번에 조작하기 편하게 한다. */

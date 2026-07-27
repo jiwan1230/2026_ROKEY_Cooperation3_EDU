@@ -55,4 +55,16 @@ describe("api client", () => {
     await postScenarioPlan("hazmat");
     expect(fetchMock).toHaveBeenCalledWith("/api/scenarios/hazmat/plan", expect.objectContaining({ method: "POST" }));
   });
+
+  it("postScenarioPlan sends randomize:true in the body when requested", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true, json: async () => ({ label: "위험물 창고", trunk: {}, placed: [], unloadable: [], summary: {} }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    await postScenarioPlan("hazmat", { randomize: true });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/scenarios/hazmat/plan",
+      expect.objectContaining({ body: JSON.stringify({ randomize: true }) }),
+    );
+  });
 });

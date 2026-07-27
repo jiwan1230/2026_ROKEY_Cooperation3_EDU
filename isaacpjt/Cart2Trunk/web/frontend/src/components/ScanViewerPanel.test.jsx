@@ -14,6 +14,7 @@ vi.mock("./sceneMeshes.jsx", () => ({
   CartWireframe: () => <div data-testid="cart-mesh" />,
   SceneBoxMesh: () => <div data-testid="box-mesh" />,
   BoundingBoxWireframe: () => <div data-testid="raw-mesh" />,
+  ScannedPointCloud: () => <div data-testid="point-cloud-mesh" />,
   layoutStagingBoxes: () => [{ id: "Large", position: [0, 0, 0], dimensions: [0.3, 0.3, 0.2] }],
   computeCartFootprint: () => ({ minX: 0, maxX: 1, minY: 0, maxY: 1, height: 0.5 }),
 }));
@@ -26,7 +27,7 @@ describe("ScanViewerPanel", () => {
 
     render(<ScanViewerPanel kind="trunk" />);
     expect(screen.getByTestId("status-trunk").textContent).toBe("대기");
-    expect(screen.queryByTestId("raw-mesh")).toBeNull();
+    expect(screen.queryByTestId("point-cloud-mesh")).toBeNull();
     expect(screen.queryByTestId("trunk-mesh")).toBeNull();
 
     fireEvent.click(screen.getByTestId("trigger-trunk"));
@@ -34,7 +35,7 @@ describe("ScanViewerPanel", () => {
     expect(screen.getByTestId("trigger-trunk")).toBeDisabled();
 
     await waitFor(() => expect(screen.getByTestId("status-trunk").textContent).toBe("완료"));
-    expect(screen.getByTestId("raw-mesh")).toBeInTheDocument();
+    expect(screen.getByTestId("point-cloud-mesh")).toBeInTheDocument();
     expect(screen.queryByTestId("trunk-mesh")).toBeNull();
   });
 
