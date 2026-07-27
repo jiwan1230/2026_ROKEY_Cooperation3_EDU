@@ -122,15 +122,41 @@ def test_boxes_from_vision_corners_uses_oriented_footprint_not_aabb_for_rotated_
     assert box["initial_yaw"] == pytest.approx(theta, abs=1e-9)
 
 
-def test_boxes_from_vision_corners_maps_support_candidate_to_the_box_that_owns_that_top_candidate():
-    # box_id=0,1 둘 다 support_candidate_id=0인데, 그건 "box_id=0을 가리키는 게
-    # 아니라" top_candidate_id=0을 가진 box_id=2를 가리킨다(실제 샘플로 검증한 규칙).
+def test_boxes_from_vision_corners_infers_rests_on_id_from_geometry():
+    # box_id=0,1은 z0=0.2(=box_id=2의 높이 0.2와 정확히 맞닿는 높이)에 있고
+    # XY도 box_id=2 풋프린트 안에 들어간다 - corners_m 좌표만으로 "2 위에
+    # 얹혀있다"고 판정돼야 한다(support_candidate_id/top_candidate_id는 이제
+    # 안 봄 - 아래 회귀 테스트 참고).
     boxes, _ = vision_adapter.boxes_from_vision_corners(_VISION_CORNERS_JSON)
     by_id = {b["id"]: b for b in boxes}
 
     assert by_id["0"]["rests_on_id"] == "2"
     assert by_id["1"]["rests_on_id"] == "2"
     assert by_id["2"]["rests_on_id"] is None  # 바닥
+
+
+def test_boxes_from_vision_corners_ignores_duplicate_top_candidate_ids():
+    # [2026-07-28 회귀 테스트] 실제 4박스 스캔(all_boxes_corners_20260728_052906_
+    # 279709.json)에서 서로 다른 두 박스(box_id=2,3)가 똑같이 top_candidate_id=3을
+    # 가진 게 확인됐다 - support_candidate_id/top_candidate_id로 매칭하던 옛
+    # 방식이면 이런 충돌 때문에 관계를 못 찾고 전부 "바닥"으로 잘못 판정되어
+    # (실제 증상: "큰 박스를 먼저 넣으려는데 그 위에 작은 박스가 있어서
+    # 불가능하다"는 물리적으로 말이 안 되는 적재 순서가 나왔었다). 여기선
+    # top_candidate_id를 일부러 전부 9로 충돌시켜도(0,1이 여전히 2 위에 기하학적
+    # 으로 있으므로) rests_on_id가 정확히 나와야 한다.
+    colliding = {
+        **_VISION_CORNERS_JSON,
+        "boxes": [
+            {**b, "top_candidate_id": 9, "support_candidate_id": -1}
+            for b in _VISION_CORNERS_JSON["boxes"]
+        ],
+    }
+    boxes, _ = vision_adapter.boxes_from_vision_corners(colliding)
+    by_id = {b["id"]: b for b in boxes}
+
+    assert by_id["0"]["rests_on_id"] == "2"
+    assert by_id["1"]["rests_on_id"] == "2"
+    assert by_id["2"]["rests_on_id"] is None
 
 
 def test_boxes_from_vision_corners_rejects_wrong_frame():
