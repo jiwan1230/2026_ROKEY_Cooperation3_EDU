@@ -32,8 +32,14 @@ function callScanTrigger(kind) {
   return kind === "trunk" ? postTrunkScan() : postCartScan();
 }
 
-function RawTrunkPreview() {
-  return <ScannedPointCloud url={TEST_TRUNK_PLY_URL} />;
+function RawTrunkPreview({ nonce }) {
+  // scan_bridge.py가 같은 파일명(trunk_pointcloud_filtered_base.ply)을 계속
+  // 덮어쓰기 때문에, URL 문자열이 매번 똑같으면 브라우저 캐시/three.js
+  // useLoader 캐시가 예전 포인트클라우드를 계속 보여줄 수 있다 - 스캔
+  // 버튼을 누를 때마다 바뀌는 캐시 무효화용 쿼리스트링을 붙여 매번 새로
+  // fetch/파싱하도록 강제한다.
+  const url = nonce ? `${TEST_TRUNK_PLY_URL}?t=${nonce}` : TEST_TRUNK_PLY_URL;
+  return <ScannedPointCloud url={url} />;
 }
 
 function ProcessedTrunkPreview() {
@@ -69,6 +75,7 @@ const SCENE_CONTENT = {
 export default function ScanViewerPanel({ kind, onLog = () => {} }) {
   const [status, setStatus] = useState("idle");
   const [viewMode, setViewMode] = useState("raw");
+  const [scanNonce, setScanNonce] = useState(null);
 
   const handleTrigger = async () => {
     setStatus("running");
@@ -78,6 +85,7 @@ export default function ScanViewerPanel({ kind, onLog = () => {} }) {
       // 더미 message 내용은 쓰지 않는다.
       await callScanTrigger(kind);
       setStatus("done");
+      setScanNonce(Date.now());
       onLog(`${KIND_LABELS[kind]} 완료`);
     } catch {
       setStatus("idle");
@@ -110,7 +118,7 @@ export default function ScanViewerPanel({ kind, onLog = () => {} }) {
           <Grid position={[0, -0.001, 0]} args={[4, 4]} cellSize={0.25} cellThickness={0.5}
                 cellColor="#D8D8DC" sectionSize={1} sectionThickness={1} sectionColor="#B8B8C4"
                 fadeDistance={5} fadeStrength={1.2} infiniteGrid />
-          {Content && <Content />}
+          {Content && <Content nonce={scanNonce} />}
         </Canvas>
       </div>
 
