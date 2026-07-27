@@ -3,11 +3,19 @@
 # Isaac Sim PC 전용 - 머신마다 홈 디렉터리/설치 경로가 다르므로 이 파일은 예시일 뿐이다.
 # 실제 배포 시 각 머신에서 아래 경로를 그 머신에 맞게 고쳐서 사용한다
 # (또는 --ros-args -p <name>:=<value> 로 커맨드라인에서 덮어쓴다).
+#
+# [2026-07-28] isaac_python_sh/ros2_bridge_ld_library_path 파라미터를 없앴다 -
+# 이 서버가 더 이상 99.py를 직접 부팅하지 않고(isaac_task_runner.py의
+# /isaac_task_runner/run_cart_scan Trigger를 대신 호출함, cart_scan_action_server.py
+# 상단 docstring 참고) 필요 없어졌다. detection_trials/min_plausible_box_footprint_side_m는
+# multiview_scan.py 박스 검출 파라미터 - 기본값(12/0.08)으로는 실제 박스 세트의
+# Small(0.07x0.08m)이 조용히 누락된다(memory: project_perception_env_vars.md).
 cart_scan_action_server:
   ros__parameters:
-    cart2trunk_dir: "/home/rokey/2026_ROKEY_Cooperation3_EDU/isaacpjt/Cart2Trunk"
-    isaac_python_sh: "/home/rokey/dev_ws/isaac_sim/isaacsim/_build/linux-x86_64/release/python.sh"
-    ros2_bridge_ld_library_path: "/home/rokey/dev_ws/isaac_sim/isaacsim/_build/linux-x86_64/release/exts/isaacsim.ros2.bridge/humble/lib"
-    perception_venv_python: "/home/rokey/2026_ROKEY_Cooperation3_EDU/isaacpjt/Cart2Trunk/perception/.venv/bin/python3"
+    cart2trunk_dir: "/home/rokey/cobot3_ws/isaacpjt/Cart2Trunk"
+    perception_venv_python: "/home/rokey/cobot3_ws/isaacpjt/Cart2Trunk/perception/.venv/bin/python3"
     chunk_size_bytes: 32768
-    subprocess_timeout_sec: 600
+    subprocess_timeout_sec: 900
+    isaac_phase_timeout_sec: 600
+    detection_trials: 150
+    min_plausible_box_footprint_side_m: 0.05

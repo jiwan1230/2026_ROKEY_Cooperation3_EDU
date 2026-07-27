@@ -1,12 +1,16 @@
 # trunk_scan_server.params.yaml
 #
 # Isaac Sim PC 전용 - 머신마다 홈 디렉터리/설치 경로가 다르므로 이 파일은 예시일 뿐이다.
-# 실제 배포 시 각 머신에서 아래 3개 경로를 그 머신에 맞게 고쳐서 사용한다
+# 실제 배포 시 각 머신에서 cart2trunk_dir을 그 머신에 맞게 고쳐서 사용한다
 # (또는 --ros-args -p <name>:=<value> 로 커맨드라인에서 덮어쓴다).
+#
+# [2026-07-28] isaac_python_sh/ros2_bridge_ld_library_path 파라미터를 없앴다 -
+# 이 서버가 더 이상 89.py를 직접 부팅하지 않고(isaac_task_runner.py의
+# /isaac_task_runner/run_trunk_scan Trigger를 대신 호출함, trunk_scan_action_server.py
+# 상단 docstring 참고) 필요 없어졌다.
 trunk_scan_action_server:
   ros__parameters:
-    cart2trunk_dir: "/home/rokey/2026_ROKEY_Cooperation3_EDU/isaacpjt/Cart2Trunk"
-    isaac_python_sh: "/home/rokey/dev_ws/isaac_sim/isaacsim/_build/linux-x86_64/release/python.sh"
-    ros2_bridge_ld_library_path: "/home/rokey/dev_ws/isaac_sim/isaacsim/_build/linux-x86_64/release/exts/isaacsim.ros2.bridge/humble/lib"
+    cart2trunk_dir: "/home/rokey/cobot3_ws/isaacpjt/Cart2Trunk"
     chunk_size_bytes: 32768
     subprocess_timeout_sec: 600
+    isaac_phase_timeout_sec: 900
