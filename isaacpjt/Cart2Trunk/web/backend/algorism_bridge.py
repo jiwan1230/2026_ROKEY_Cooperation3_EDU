@@ -20,6 +20,8 @@ import zlib
 from importlib import import_module
 from typing import Dict, List, Optional
 
+import robot_bridge
+
 _HERE = pathlib.Path(__file__).resolve().parent
 _CART2TRUNK_DIR = _HERE.parent.parent
 _ALGORISM_DIR = _CART2TRUNK_DIR / "algorism"
@@ -93,15 +95,20 @@ def color_for_box_id(box_id: str) -> str:
 
 
 def list_trunk_maps() -> List[str]:
-    """선택 가능한 트렁크 맵 이름 목록(오래된 순) - 실제로 존재하는 두 가지
+    """선택 가능한 트렁크 맵 이름 목록(오래된 순) - 실제로 존재하는 세 가지
     위치를 합친다:
     - results/run_*/pointcloud/trunk_map.json: 예전 다회차 스캔 테스트로 쌓인
       더미/기록용 트렁크 맵("알고리즘 검증" 탭에서 여러 개 중 골라볼 때 씀).
-    - results/holonomic_base/trunk_map.json: 지금 실제로 연동된 트렁크 스캔
-      파이프라인(90.export_trunk_map_holonomic.py, isaac_task_runner.py 경유,
-      robot_bridge.run_trunk_scan())이 스캔마다 덮어쓰는 단일 파일 - run_*처럼
-      스캔마다 새 폴더가 안 생기고 "가장 최근 실제 스캔 결과" 하나만 있다
-      ("실시간 제어" 탭이 고르는 게 사실상 이거다).
+    - results/holonomic_base/trunk_map.json: 웹 백엔드와 Isaac Sim이 "같은
+      머신"에서 돌 때만 의미 있는 경로 - 90.export_trunk_map_holonomic.py가
+      스캔마다 덮어쓰는 단일 파일.
+    - received_scans/trunk_map_*.json: MSI1/MSI2가 실제로 분리된 환경에서
+      진짜로 쓰이는 경로 - trunk_scan_action_server.py가 이제 trunk_map.json
+      내용을 ROS2 Action Result에 실어보내고, robot_bridge.run_trunk_scan()이
+      호출하는 trunk_scan_client가 그걸 스캔마다 새 타임스탬프 파일로 저장한다
+      (all_boxes_corners_*.json이 카트 스캔마다 쌓이는 것과 같은 패턴 - "실시간
+      제어" 탭이 실제로 고르는 게 이거다). 웹 백엔드가 Isaac Sim PC와 다른
+      머신에서 돌면 위 두 results/ 경로는 로컬에 아예 존재하지 않는다.
     """
     entries = []
     holonomic_path = _RESULTS_DIR / "holonomic_base" / "trunk_map.json"
@@ -109,15 +116,20 @@ def list_trunk_maps() -> List[str]:
         entries.append(("holonomic_base", holonomic_path.stat().st_mtime))
     for p in _RESULTS_DIR.glob("run_*/pointcloud/trunk_map.json"):
         entries.append((p.parent.parent.name, p.stat().st_mtime))
+    if robot_bridge.RECEIVED_SCANS_DIR.exists():
+        for p in robot_bridge.RECEIVED_SCANS_DIR.glob("trunk_map_*.json"):
+            entries.append((p.stem, p.stat().st_mtime))
     entries.sort(key=lambda entry: entry[1])
     return [name for name, _mtime in entries]
 
 
 def _trunk_map_path(run_name: str) -> pathlib.Path:
-    path = (
-        _RESULTS_DIR / "holonomic_base" / "trunk_map.json" if run_name == "holonomic_base"
-        else _RESULTS_DIR / run_name / "pointcloud" / "trunk_map.json"
-    )
+    if run_name == "holonomic_base":
+        path = _RESULTS_DIR / "holonomic_base" / "trunk_map.json"
+    elif run_name.startswith("trunk_map_"):
+        path = robot_bridge.RECEIVED_SCANS_DIR / f"{run_name}.json"
+    else:
+        path = _RESULTS_DIR / run_name / "pointcloud" / "trunk_map.json"
     if not path.exists():
         raise ValueError(f"'{run_name}' 트렁크 스캔 파일을 찾을 수 없습니다: {path}")
     return path

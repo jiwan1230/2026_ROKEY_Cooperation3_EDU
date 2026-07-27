@@ -10,6 +10,15 @@
 # 뭘 보여줄 데이터가 없어서 항상 더미만 나오던 문제 - 89.py가 저장한 미가공
 # 포인트클라우드(results/holonomic_base/trunk_pointcloud.npy, 필터링 전)도 같이
 # 보내서 "원본"/"전처리" 토글이 실제로 다른 데이터를 보여주게 한다.
+#
+# [2026-07-28 #2] trunk_map_filename/trunk_map_json 추가 - 지금까지는 PLY
+# 포인트클라우드(3D 뷰어 표시용)만 UI PC로 보내고, 정작 적재 계획 계산에
+# 필요한 trunk_map.json(장애물/입구/치수 등 구조화 데이터)은 Isaac Sim PC의
+# 로컬 디스크(results/holonomic_base/)에만 남아있었다 - MSI1/MSI2가 분리된
+# 환경에서 "실시간 제어" 탭이 트렁크 스캔 파일 목록을 영원히 못 보는 원인
+# (cart_scan_action_server.py가 all_boxes_corners_*.json을 json_filename/
+# json_text로 보내는 것과 같은 패턴). trunk_map.json은 수 KB라(포인트클라우드와
+# 달리) 청크로 안 쪼개고 Result 필드 하나로 통째로 보낸다.
 
 # Goal
 bool headless true
@@ -25,6 +34,8 @@ string raw_filename
 uint32 raw_total_bytes
 uint32 raw_total_chunks
 int32 raw_point_count
+string trunk_map_filename
+string trunk_map_json
 ---
 # Feedback
 string stage

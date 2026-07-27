@@ -193,6 +193,17 @@ class TrunkScanActionServer(Node):
                 chunk = raw_data[i * chunk_size:(i + 1) * chunk_size]
                 self._emit(goal_handle, feedback, "sending_raw_chunks", i, raw_total_chunks, chunk)
 
+            # [2026-07-28] trunk_map.json(90.export_trunk_map_holonomic.py가 방금
+            # 막 덮어쓴 파일) 내용을 그대로 읽어서 Result에 실어보낸다 - 이게
+            # 없으면 MSI1은 포인트클라우드만 받고, 적재 계획 계산에 실제로
+            # 필요한 장애물/입구/치수 구조화 데이터는 이 Isaac Sim PC 로컬
+            # 디스크에만 남는다. PLY와 달리 수 KB라 청크 스트리밍 없이 문자열
+            # 필드 하나로 충분하다. try 블록 안에서 읽어야 파일이 없거나
+            # 손상됐을 때도 기존 except 절이 goal_handle.abort()까지
+            # 일관되게 처리한다(try 밖이면 처리 안 된 예외로 콜백이 죽는다).
+            trunk_map_path = self._cart2trunk_dir / "results" / "holonomic_base" / "trunk_map.json"
+            trunk_map_json = trunk_map_path.read_text(encoding="utf-8")
+
         except pipeline_runner.PipelineStageError as e:
             self.get_logger().error(str(e))
             goal_handle.abort()
@@ -202,16 +213,17 @@ class TrunkScanActionServer(Node):
             goal_handle.abort()
             return TrunkScan.Result(success=False, message=f"예상치 못한 오류: {e}")
 
-        self._emit(goal_handle, feedback, "done", total_chunks=raw_total_chunks)
-        goal_handle.succeed()
         import datetime
         stamp = f"{datetime.datetime.now():%Y%m%d_%H%M%S_%f}"
+        self._emit(goal_handle, feedback, "done", total_chunks=raw_total_chunks)
+        goal_handle.succeed()
         return TrunkScan.Result(
             success=True, message="트렁크 스캔 완료",
             filename=f"trunk_scan_{stamp}.ply", total_bytes=len(data),
             total_chunks=total_chunks, point_count=point_count,
             raw_filename=f"trunk_scan_raw_{stamp}.ply", raw_total_bytes=len(raw_data),
             raw_total_chunks=raw_total_chunks, raw_point_count=raw_point_count,
+            trunk_map_filename=f"trunk_map_{stamp}.json", trunk_map_json=trunk_map_json,
         )
 
 

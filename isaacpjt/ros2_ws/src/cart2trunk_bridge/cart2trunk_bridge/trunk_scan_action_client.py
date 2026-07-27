@@ -100,6 +100,11 @@ def main(args=None):
     out_path.write_bytes(data)
     raw_out_path = output_dir / result.raw_filename
     raw_out_path.write_bytes(raw_data)
+    # cart_scan_action_client.py가 all_boxes_corners_*.json을 json_filename/
+    # json_text로 받아 그대로 저장하는 것과 같은 패턴 - trunk_map.json도 청크가
+    # 아니라 문자열 필드 하나로 통째로 왔으므로 그대로 파일에 쓰면 된다.
+    trunk_map_out_path = output_dir / result.trunk_map_filename
+    trunk_map_out_path.write_text(result.trunk_map_json, encoding="utf-8")
 
     print(json.dumps({
         "success": True,
@@ -112,6 +117,8 @@ def main(args=None):
         "raw_path": str(raw_out_path),
         "raw_total_bytes": result.raw_total_bytes,
         "raw_point_count": result.raw_point_count,
+        "trunk_map_filename": result.trunk_map_filename,
+        "trunk_map_path": str(trunk_map_out_path),
     }))
 
     node.destroy_node()
