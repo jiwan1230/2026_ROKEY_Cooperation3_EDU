@@ -53,8 +53,11 @@ DEFAULT_MARGIN = _m17.MARGIN
 build_task_json = _m20.build_task_json
 
 # planner_gui.py의 _discover_trunk_maps()와 같은 경로 관례 - 트렁크 스캔
-# run_* 폴더는 ROS2 워크스페이스 src/ 바로 밑에 쌓인다.
-_SRC_DIR = pathlib.Path("/home/sunwook/cobot3_ws/src")
+# run_* 폴더는 ROS2 워크스페이스 src/ 바로 밑에 쌓인다. 예전엔 "/home/sunwook/..."로
+# 하드코딩돼 있었는데, 다른 컴퓨터(다른 계정)로 레포만 git pull 받으면 그 경로가
+# 아예 존재하지 않아 트렁크 스캔 목록이 텅 비는 문제가 있었다 - 계정명과 무관하게
+# 항상 이 레포 위치 기준 상대 경로(레포가 src/ 바로 밑에 있다는 관례)로 계산한다.
+_SRC_DIR = _CART2TRUNK_DIR.parent.parent.parent
 _PENDING_TASKS_DIR = _ALGORISM_DIR / "local_test_data" / "pending_tasks"
 
 _DEFAULT_CART_BOXES = [
