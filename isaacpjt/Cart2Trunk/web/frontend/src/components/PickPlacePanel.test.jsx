@@ -12,49 +12,56 @@ describe("PickPlacePanel", () => {
     expect(screen.getByTestId("current-task").textContent).toBe("대기 중");
   });
 
-  it("시작을 누르면 즉시 Run으로 바뀌고 첫 단계 텍스트가 보인다", () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    vi.spyOn(client, "postPickAndPlace").mockResolvedValue({ status: "ok", dummy: true, message: "완료" });
+  it("시작을 누르면 즉시 Run으로 바뀌고 '실행 중' 안내 텍스트가 보인다", async () => {
+    let resolvePromise;
+    vi.spyOn(client, "postPickAndPlace").mockReturnValue(
+      new Promise((resolve) => { resolvePromise = resolve; })
+    );
 
     render(<PickPlacePanel />);
-    fireEvent.click(screen.getByTestId("trigger-pickAndPlace"));
+    await act(async () => { fireEvent.click(screen.getByTestId("trigger-pickAndPlace")); });
 
     expect(screen.getByTestId("pick-place-status").textContent).toBe("Run");
-    expect(screen.getByTestId("current-task").textContent).toBe("박스1 pick 접근");
+    expect(screen.getByTestId("current-task").textContent).toMatch(/실행 중/);
     expect(screen.getByTestId("trigger-pickAndPlace")).toBeDisabled();
     expect(client.postPickAndPlace).toHaveBeenCalledTimes(1);
 
-    vi.useRealTimers();
+    // 정리 - act() 밖에서 pending promise가 안 남게 마무리한다.
+    await act(async () => { resolvePromise({ status: "ok", boxes_placed: 4, boxes_total: 4 }); });
   });
 
-  it("모든 단계(6개, 700ms 간격)를 다 지나면 완료 텍스트와 함께 Stop으로 돌아온다", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    vi.spyOn(client, "postPickAndPlace").mockResolvedValue({ status: "ok", dummy: true, message: "완료" });
+  it("실제 백엔드 응답(성공)을 그대로 기다렸다가 완료 텍스트와 함께 Stop으로 돌아온다", async () => {
+    vi.spyOn(client, "postPickAndPlace").mockResolvedValue({
+      status: "ok", boxes_placed: 4, boxes_total: 4,
+    });
 
     render(<PickPlacePanel />);
-    fireEvent.click(screen.getByTestId("trigger-pickAndPlace"));
+    await act(async () => { fireEvent.click(screen.getByTestId("trigger-pickAndPlace")); });
 
-    await act(async () => { await vi.advanceTimersByTimeAsync(700 * 6); });
-
-    expect(screen.getByTestId("current-task").textContent).toBe("완료");
+    expect(screen.getByTestId("current-task").textContent).toBe("완료 (4/4개 배치)");
     expect(screen.getByTestId("pick-place-status").textContent).toBe("Stop");
     expect(screen.getByTestId("trigger-pickAndPlace")).not.toBeDisabled();
-
-    vi.useRealTimers();
   });
 
-  it("시작하면 onLog가 시작 메시지로, 끝나면 완료 메시지로 호출된다", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    vi.spyOn(client, "postPickAndPlace").mockResolvedValue({ status: "ok", dummy: true, message: "완료" });
+  it("백엔드가 실패를 반환하면 Warning 상태로 실패 메시지를 보여준다(가짜 완료로 안 넘어감)", async () => {
+    vi.spyOn(client, "postPickAndPlace").mockRejectedValue(new Error("isaac_task_runner.py에 연결할 수 없습니다"));
+
+    render(<PickPlacePanel />);
+    await act(async () => { fireEvent.click(screen.getByTestId("trigger-pickAndPlace")); });
+
+    expect(screen.getByTestId("current-task").textContent).toBe("isaac_task_runner.py에 연결할 수 없습니다");
+    expect(screen.getByTestId("pick-place-status").textContent).toBe("Warning");
+    expect(screen.getByTestId("pick-place-status").dataset.status).toBe("warning");
+  });
+
+  it("시작하면 onLog가 시작 메시지로, 실제 완료 후엔 완료 메시지로 호출된다", async () => {
+    vi.spyOn(client, "postPickAndPlace").mockResolvedValue({ status: "ok", boxes_placed: 2, boxes_total: 2 });
     const onLog = vi.fn();
 
     render(<PickPlacePanel onLog={onLog} />);
-    fireEvent.click(screen.getByTestId("trigger-pickAndPlace"));
+    await act(async () => { fireEvent.click(screen.getByTestId("trigger-pickAndPlace")); });
+
     expect(onLog).toHaveBeenCalledWith("픽앤플레이스 시작");
-
-    await act(async () => { await vi.advanceTimersByTimeAsync(700 * 6); });
     expect(onLog).toHaveBeenCalledWith("픽앤플레이스 완료");
-
-    vi.useRealTimers();
   });
 });

@@ -3,7 +3,11 @@ const BASE = "/api";
 async function handleResponse(resp) {
   const body = await resp.json();
   if (!resp.ok) {
-    const err = new Error(body.cause || "요청이 실패했습니다");
+    // routes/plan.py 등은 {error_code, cause, action}(ApiError) 형식을 쓰고,
+    // routes/robot.py(cart-scan/trunk-scan/pick-and-place)는 {status, message}
+    // 형식을 쓴다 - 실제 로봇/Isaac Sim 에러 메시지(routes/robot.py의 message)가
+    // 여기서 그냥 버려지고 있었다(cause만 보고 없으면 무조건 "요청이 실패했습니다").
+    const err = new Error(body.cause || body.message || "요청이 실패했습니다");
     err.error_code = body.error_code;
     err.cause = body.cause;
     err.action = body.action;

@@ -17,14 +17,3 @@ export const DUMMY_CART_BOXES = [
   { id: "Medium", width: 0.20, depth: 0.13, height: 0.15 },
   { id: "Small", width: 0.15, depth: 0.13, height: 0.10 },
 ];
-
-// TODO(로봇 연동 시): ROS2에서 실제 픽앤플레이스 진행 상태를 받아오면 이
-// 고정 배열 대신 그 값을 그대로 pct/label로 매핑해서 쓰면 된다.
-export const PICK_PLACE_STEPS = [
-  { pct: 15, label: "박스1 pick 접근" },
-  { pct: 35, label: "박스1 파지" },
-  { pct: 55, label: "박스1 트렁크로 이동" },
-  { pct: 70, label: "박스1 place" },
-  { pct: 85, label: "박스2 pick 접근" },
-  { pct: 100, label: "완료" },
-];

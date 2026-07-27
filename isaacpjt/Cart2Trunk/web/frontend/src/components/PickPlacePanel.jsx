@@ -1,42 +1,50 @@
 // src/components/PickPlacePanel.jsx
 // Pick&Place 칸 - 진행현황 바 + 현재 진행 작업 텍스트 + 상태(Run/Stop/
-// Warning). 백엔드 더미 호출(postPickAndPlace)은 지금까지와 동일하게 1회만
-// 하고, 화면에 보이는 단계별 진행 애니메이션은 프론트엔드가 자체적으로
-// PICK_PLACE_STEPS를 순회하며 만든다(실제 ROS2 진행 상태 스트리밍은
-// 아직 없음).
-import { useRef, useState } from "react";
+// Warning).
+//
+// [2026-07-28] postPickAndPlace()가 실제 pick_and_place ROS2 Action(4박스 기준
+// 실측 15~20분)을 호출하도록 백엔드가 바뀌었는데, 예전 이 컴포넌트는 그 응답을
+// 완전히 무시(.catch(() => {}))하고 프론트엔드 자체 타이머(PICK_PLACE_STEPS를
+// 700ms 간격으로 순회)로 몇 초 만에 가짜 "완료"를 보여주고 있었다 - 실제로는
+// 아직 로봇이 몇 분째 움직이고 있는데 화면은 이미 끝났다고 나오는 상태였다.
+// 지금은 postPickAndPlace()의 실제 완료/실패를 그대로 기다렸다가 반영한다.
+// 박스 단위 실시간 진행률(%)은 아직 웹 레이어까지 안 뚫려있어서(ROS2
+// /isaac_task_runner/status 토픽 -> 웹 API 연동은 다음 단계) 정확한 %를 보여줄
+// 수 없다 - 진행 중에는 막연한 "진행 중" 표시만 하고, 끝나면 실제 boxes_placed/
+// boxes_total로 결과를 보여준다.
+import { useState } from "react";
 import { postPickAndPlace } from "../api/client.js";
-import { PICK_PLACE_STEPS } from "./robotDummyData.js";
 import styles from "./PickPlacePanel.module.css";
-
-const STEP_INTERVAL_MS = 700;
 
 export default function PickPlacePanel({ onLog = () => {} }) {
   const [runState, setRunState] = useState("stopped"); // "stopped" | "running"
-  const [stepIndex, setStepIndex] = useState(-1); // -1 = 아직 시작 안 함
-  const timerRef = useRef(null);
+  const [resultText, setResultText] = useState(null); // 완료/실패 후 보여줄 텍스트
+  const [isError, setIsError] = useState(false);
 
-  const advance = (nextIndex) => {
-    if (nextIndex >= PICK_PLACE_STEPS.length) {
-      setRunState("stopped");
-      onLog("픽앤플레이스 완료");
-      return;
-    }
-    setStepIndex(nextIndex);
-    timerRef.current = setTimeout(() => advance(nextIndex + 1), STEP_INTERVAL_MS);
-  };
-
-  const handleStart = () => {
+  const handleStart = async () => {
     setRunState("running");
-    setStepIndex(-1);
-    // TODO(로봇 연동 시): 여기 응답으로 실제 진행 상태가 오면, 아래 advance()의
-    // 프론트 자체 타이머 시뮬레이션 대신 그 값을 그대로 반영하도록 바꾼다.
-    postPickAndPlace().catch(() => {});
+    setResultText(null);
+    setIsError(false);
     onLog("픽앤플레이스 시작");
-    advance(0);
+
+    try {
+      const resp = await postPickAndPlace();
+      setResultText(
+        resp.boxes_total != null
+          ? `완료 (${resp.boxes_placed}/${resp.boxes_total}개 배치)`
+          : "완료"
+      );
+      onLog("픽앤플레이스 완료");
+    } catch (err) {
+      setIsError(true);
+      setResultText(err.message || "실패");
+      onLog(`픽앤플레이스 실패: ${err.message || ""}`);
+    } finally {
+      setRunState("stopped");
+    }
   };
 
-  const currentStep = stepIndex >= 0 ? PICK_PLACE_STEPS[stepIndex] : null;
+  const badgeStatus = runState === "running" ? "running" : isError ? "warning" : "stopped";
 
   return (
     <div className={styles.panel}>
@@ -45,22 +53,29 @@ export default function PickPlacePanel({ onLog = () => {} }) {
       <div className={styles.progressSection}>
         <label className={styles.label}>진행현황</label>
         <div className={styles.progressBar}>
-          <div className={styles.progressFill} style={{ width: `${currentStep?.pct ?? 0}%` }} />
+          <div
+            className={styles.progressFill}
+            style={{ width: runState === "running" || resultText ? "100%" : "0%" }}
+          />
         </div>
-        <span className={styles.progressPct}>{currentStep?.pct ?? 0}%</span>
+        <span className={styles.progressPct}>
+          {runState === "running" ? "진행 중" : resultText ? "100%" : "0%"}
+        </span>
       </div>
 
       <div className={styles.taskSection}>
         <label className={styles.label}>현재 진행 작업</label>
         <div className={styles.taskText} data-testid="current-task">
-          {currentStep ? currentStep.label : "대기 중"}
+          {runState === "running"
+            ? "실행 중 - 박스 수에 따라 최대 20분 정도 걸릴 수 있습니다"
+            : resultText ?? "대기 중"}
         </div>
       </div>
 
       <div className={styles.statusSection}>
         <label className={styles.label}>현재 상태</label>
-        <span className={styles.statusBadge} data-status={runState} data-testid="pick-place-status">
-          {runState === "running" ? "Run" : "Stop"}
+        <span className={styles.statusBadge} data-status={badgeStatus} data-testid="pick-place-status">
+          {runState === "running" ? "Run" : isError ? "Warning" : "Stop"}
         </span>
       </div>
 
