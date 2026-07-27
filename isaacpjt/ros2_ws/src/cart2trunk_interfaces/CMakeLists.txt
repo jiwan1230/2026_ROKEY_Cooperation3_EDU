@@ -8,6 +8,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "action/TrunkScan.action"
   "action/CartScan.action"
   "action/PickAndPlace.action"
+  "srv/SendPlacementPlan.srv"
 )
 
 ament_package()

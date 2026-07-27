@@ -13,6 +13,7 @@ setup(
         ("share/" + package_name + "/config", [
             "config/trunk_scan_server.params.yaml",
             "config/cart_scan_server.params.yaml",
+            "config/send_placement_plan_service.params.yaml",
         ]),
     ],
     install_requires=["setuptools"],
@@ -30,6 +31,8 @@ setup(
             "cart_scan_client = cart2trunk_bridge.cart_scan_action_client:main",
             "pick_and_place_action_server = cart2trunk_bridge.pick_and_place_action_server:main",
             "pick_and_place_client = cart2trunk_bridge.pick_and_place_action_client:main",
+            "send_placement_plan_service = cart2trunk_bridge.send_placement_plan_service:main",
+            "send_placement_plan_client = cart2trunk_bridge.send_placement_plan_client:main",
         ],
     },
 )

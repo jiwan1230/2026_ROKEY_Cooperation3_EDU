@@ -1,12 +1,20 @@
 """
 routes/approval.py
-POST /api/approve, POST /api/send - 계획 승인 및 MSI2 전송(현재는 로컬 저장까지만).
+POST /api/approve, POST /api/send - 계획 승인 및 MSI2 전송.
+
+[2026-07-28] POST /api/send가 로컬 저장만 하고 실제로 MSI2에 아무것도 안 보내던
+문제를 고쳤다 - algorism_bridge.send_task()로 로컬에 저장(승인 게이트 + 감사
+기록용, 그대로 유지)한 뒤, robot_bridge.send_placement_plan()으로
+/cart2trunk/send_placement_plan 서비스를 호출해서 MSI2의
+results/holonomic_base/placement_result.json에 실제로 써넣는다.
 """
+import subprocess
 from datetime import datetime
 
 from flask import Blueprint, jsonify, request
 
 import algorism_bridge as bridge
+import robot_bridge
 from routes.plan import ApiError
 
 approval_bp = Blueprint("approval", __name__)
@@ -50,4 +58,16 @@ def post_send():
             400, "TASK_NOT_APPROVED", str(e),
             "POST /api/approve를 먼저 호출해서 approved=True인 task를 받은 뒤 다시 시도하세요.",
         )
-    return jsonify({"out_path": out_path})
+
+    try:
+        msi2_result = robot_bridge.send_placement_plan(task)
+    except (subprocess.TimeoutExpired, RuntimeError) as e:
+        return jsonify({
+            "status": "error", "message": f"MSI2 전송 실패: {e}", "out_path": out_path,
+        }), 502
+
+    return jsonify({
+        "out_path": out_path,
+        "msi2_message": msi2_result.get("message"),
+        "msi2_written_path": msi2_result.get("written_path"),
+    })

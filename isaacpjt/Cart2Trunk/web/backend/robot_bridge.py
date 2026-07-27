@@ -33,21 +33,12 @@ CART_SCAN_TIMEOUT_SEC = 180
 PICK_AND_PLACE_TIMEOUT_SEC = 1800
 
 
-def _run_scan_client(console_script: str, label: str, timeout_sec: int) -> dict:
-    """`ros2 run cart2trunk_bridge <console_script> --output-dir ... --timeout-sec ...`를
+def _run_client_subprocess(cmd: str, label: str, timeout_sec: int) -> dict:
+    """`cmd`(전체 셸 명령 문자열, 이미 source .../ros2 run ... 형태로 완성된 것)를
     서브프로세스로 실행하고, 마지막 stdout 줄을 JSON으로 파싱해서 반환한다.
-    trunk_scan_client/cart_scan_client 둘 다 이 함수를 거친다 - 둘 다 같은
+    trunk_scan_client/cart_scan_client/pick_and_place_client/
+    send_placement_plan_client 전부 이 함수를 거친다 - 다들 같은
     (success, message, ...) 계약으로 stdout에 JSON 한 줄을 찍기 때문."""
-    RECEIVED_SCANS_DIR.mkdir(parents=True, exist_ok=True)
-
-    cmd = (
-        f"source {shlex.quote(_ROS_SETUP)} && "
-        f"source {shlex.quote(_ROS2_WS_SETUP)} && "
-        f"ros2 run cart2trunk_bridge {console_script} "
-        f"--output-dir {shlex.quote(str(RECEIVED_SCANS_DIR))} "
-        f"--timeout-sec {timeout_sec}"
-    )
-
     try:
         proc = subprocess.run(
             ["bash", "-lc", cmd], capture_output=True, text=True, timeout=timeout_sec + 30)
@@ -70,6 +61,21 @@ def _run_scan_client(console_script: str, label: str, timeout_sec: int) -> dict:
         raise RuntimeError(result.get("message", f"{label} 실패(원인 불명)"))
 
     return result
+
+
+def _run_scan_client(console_script: str, label: str, timeout_sec: int) -> dict:
+    """`ros2 run cart2trunk_bridge <console_script> --output-dir ... --timeout-sec ...`를
+    실행한다. trunk_scan_client/cart_scan_client 둘 다 이 함수를 거친다."""
+    RECEIVED_SCANS_DIR.mkdir(parents=True, exist_ok=True)
+
+    cmd = (
+        f"source {shlex.quote(_ROS_SETUP)} && "
+        f"source {shlex.quote(_ROS2_WS_SETUP)} && "
+        f"ros2 run cart2trunk_bridge {console_script} "
+        f"--output-dir {shlex.quote(str(RECEIVED_SCANS_DIR))} "
+        f"--timeout-sec {timeout_sec}"
+    )
+    return _run_client_subprocess(cmd, label, timeout_sec)
 
 
 def run_trunk_scan(timeout_sec: int = TRUNK_SCAN_TIMEOUT_SEC) -> dict:
@@ -103,26 +109,33 @@ def run_pick_and_place(plan_id: str = "", timeout_sec: int = PICK_AND_PLACE_TIME
         f"--plan-id {shlex.quote(plan_id)} "
         f"--timeout-sec {timeout_sec}"
     )
+    return _run_client_subprocess(cmd, "pick_and_place", timeout_sec)
+
+
+def send_placement_plan(task_json: dict, timeout_sec: int = 30) -> dict:
+    """`/cart2trunk/send_placement_plan` 서비스를 호출해서, 승인된 Task JSON
+    (algorism/20_task_export.build_task_json() 출력)을 MSI2의
+    results/holonomic_base/placement_result.json에 직접 써넣는다 -
+    isaac_task_runner.py의 run_pick_and_place()가 다음 호출 때 이 파일을
+    그대로 읽는다(20_task_export.py가 만드는 스키마와 완전히 동일). Isaac Sim
+    세션과는 무관한 가벼운 서비스라, isaac_task_runner.py가 꺼져있어도
+    먼저 계획만 받아둘 수 있다. 성공 시
+    {"success": True, "message", "written_path"}를 반환하고, 실패 시
+    (approved=False였거나, 서비스에 연결 못 했거나 등) RuntimeError를 던진다."""
+    import tempfile
+
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as f:
+        json.dump(task_json, f, ensure_ascii=False)
+        tmp_path = f.name
 
     try:
-        proc = subprocess.run(
-            ["bash", "-lc", cmd], capture_output=True, text=True, timeout=timeout_sec + 30)
-    except subprocess.TimeoutExpired as e:
-        raise RuntimeError(f"pick_and_place 서브프로세스 타임아웃: {e}") from e
-
-    stdout_lines = [line for line in proc.stdout.splitlines() if line.strip()]
-    if not stdout_lines:
-        raise RuntimeError(
-            f"pick_and_place 서브프로세스가 출력이 없습니다(returncode={proc.returncode}). "
-            f"stderr 마지막 부분: {proc.stderr[-500:]}")
-
-    try:
-        result = json.loads(stdout_lines[-1])
-    except json.JSONDecodeError as e:
-        raise RuntimeError(
-            f"pick_and_place 결과를 JSON으로 파싱할 수 없습니다: {stdout_lines[-1]!r} ({e})") from e
-
-    if not result.get("success"):
-        raise RuntimeError(result.get("message", "pick_and_place 실패(원인 불명)"))
-
-    return result
+        cmd = (
+            f"source {shlex.quote(_ROS_SETUP)} && "
+            f"source {shlex.quote(_ROS2_WS_SETUP)} && "
+            f"ros2 run cart2trunk_bridge send_placement_plan_client "
+            f"--json-file {shlex.quote(tmp_path)} "
+            f"--timeout-sec {timeout_sec}"
+        )
+        return _run_client_subprocess(cmd, "적재 계획 전송", timeout_sec)
+    finally:
+        pathlib.Path(tmp_path).unlink(missing_ok=True)

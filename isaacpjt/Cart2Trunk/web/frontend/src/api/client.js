@@ -4,12 +4,16 @@ async function handleResponse(resp) {
   const body = await resp.json();
   if (!resp.ok) {
     // routes/plan.py 등은 {error_code, cause, action}(ApiError) 형식을 쓰고,
-    // routes/robot.py(cart-scan/trunk-scan/pick-and-place)는 {status, message}
+    // routes/robot.py(cart-scan/trunk-scan/pick-and-place/send)는 {status, message}
     // 형식을 쓴다 - 실제 로봇/Isaac Sim 에러 메시지(routes/robot.py의 message)가
     // 여기서 그냥 버려지고 있었다(cause만 보고 없으면 무조건 "요청이 실패했습니다").
-    const err = new Error(body.cause || body.message || "요청이 실패했습니다");
+    // err.cause에도 같은 폴백을 넣는다 - 컴포넌트들(ControlPanel.jsx 등)이 전부
+    // catch(err)에서 err.cause를 화면에 그대로 찍는 관례라, cause가 비어있으면
+    // {status,message} 형식 에러는 화면에 빈 문자열만 뜨는 문제가 있었다.
+    const cause = body.cause || body.message;
+    const err = new Error(cause || "요청이 실패했습니다");
     err.error_code = body.error_code;
-    err.cause = body.cause;
+    err.cause = cause;
     err.action = body.action;
     throw err;
   }

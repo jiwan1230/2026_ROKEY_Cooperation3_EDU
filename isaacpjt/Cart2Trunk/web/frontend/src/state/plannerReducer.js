@@ -140,7 +140,10 @@ export function plannerReducer(state, action) {
         "[거부] 계획을 거부했습니다 - 파라미터를 조정하고 다시 계산하세요.",
       );
     case "SEND_SUCCESS":
-      return appendLog(state, `[승인 및 실행] 로컬에 저장됨: ${action.payload.out_path} (MSI2 실전송 경로 확정 대기)`);
+      return appendLog(
+        state,
+        `[MSI2로 전송 완료] ${action.payload.msi2_message ?? action.payload.msi2_written_path ?? ""}`,
+      );
     case "EMERGENCY_STOP":
       return appendLog(
         { ...state, planState: "NOT_COMPUTED", pendingTask: null },

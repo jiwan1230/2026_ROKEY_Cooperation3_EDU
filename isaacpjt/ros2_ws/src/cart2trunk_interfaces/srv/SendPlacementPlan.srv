@@ -1,0 +1,22 @@
+# SendPlacementPlan.srv
+#
+# MSI1(UI)이 승인한 적재 계획(20_task_export.build_task_json() 결과, JSON 문자열)을
+# MSI2로 실제 전송한다. isaac_task_runner.py와는 별개의 가벼운 서비스 노드
+# (send_placement_plan_service.py)가 MSI2에서 받아서, isaac_task_runner.py의
+# run_pick_and_place()가 다음 호출 때 그대로 읽는 파일
+# (results/holonomic_base/placement_result.json)에 직접 써넣는다 - Isaac Sim
+# 세션 자체와는 무관하므로 isaac_task_runner.py가 켜져 있지 않아도 먼저
+# 받아둘 수 있다(그 다음 픽앤플레이스를 실행할 때 이 파일을 읽음).
+#
+# task_json은 algorism/20_task_export.py의 build_task_json() 출력 그대로 -
+# {"placements": [{"box_id":..., "position_base_frame":[x,y,z],
+# "dimensions":[w,d,h], ...}], ...} 스키마여야 한다(isaac_task_runner.py가
+# 기대하는 것과 완전히 동일, 2026-07-28 스키마 정합 작업 참고).
+
+# Request
+string task_json
+---
+# Response
+bool success
+string message
+string written_path
