@@ -2,10 +2,11 @@
 // 트렁크 Scan / 카트 Scan 칸 - 뼈대(토글+상태+버튼+3D 캔버스)가 완전히
 // 같아서 kind prop으로 내용만 갈아끼운다. 시뮬레이터 탭의 PlannerContext와
 // 무관하게 독립적으로 동작한다.
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Canvas } from "@react-three/fiber";
 import { Grid, OrbitControls } from "@react-three/drei";
-import { postCartScan, postTrunkScan } from "../api/client.js";
+import { PLYLoader } from "three/examples/jsm/loaders/PLYLoader.js";
+import { postCartScan, postTrunkScan, fetchTrunkScanPly } from "../api/client.js";
 import {
   TrunkWireframe, CartWireframe, SceneBoxMesh, BoundingBoxWireframe,
   layoutStagingBoxes, computeCartFootprint,
@@ -32,6 +33,32 @@ function RawTrunkPreview() {
 
 function ProcessedTrunkPreview() {
   return <TrunkWireframe trunk={DUMMY_TRUNK} />;
+}
+
+// 실제 ROS2 액션으로 받은 트렁크 스캔 PLY(float32, xyz만)를 로드해서 점군으로
+// 렌더링한다 - 카트 스캔/원본 토글은 아직 더미(SCENE_CONTENT)를 그대로 쓴다.
+function RealTrunkPointCloud({ url }) {
+  const [geometry, setGeometry] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchTrunkScanPly(url).then((buffer) => {
+      if (cancelled) return;
+      const loaded = new PLYLoader().parse(buffer);
+      loaded.computeBoundingSphere();
+      setGeometry(loaded);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [url]);
+
+  if (!geometry) return null;
+  return (
+    <points geometry={geometry}>
+      <pointsMaterial size={0.01} sizeAttenuation color="#4A90D9" />
+    </points>
+  );
 }
 
 function RawCartPreview() {
@@ -63,14 +90,19 @@ const SCENE_CONTENT = {
 export default function ScanViewerPanel({ kind, onLog = () => {} }) {
   const [status, setStatus] = useState("idle");
   const [viewMode, setViewMode] = useState("raw");
+  const [trunkScanUrl, setTrunkScanUrl] = useState(null);
 
   const handleTrigger = async () => {
     setStatus("running");
     try {
-      // TODO(비전팀 연동 시): 여기서 실제 스캔 결과를 받으면 DUMMY_TRUNK/
-      // DUMMY_CART_BOXES 대신 그 값을 써야 한다. 지금은 성공 여부만 보고
-      // 더미 message 내용은 쓰지 않는다.
-      await callScanTrigger(kind);
+      // TODO(비전팀 연동 시): 카트 스캔은 아직 더미라 DUMMY_CART_BOXES를 그대로
+      // 쓴다. 트렁크 스캔은 실제 ROS2 액션 결과(url)가 오면 그걸로 실제 점군을
+      // 렌더링한다(RealTrunkPointCloud) - url이 없으면(더미 응답) 기존
+      // DUMMY_TRUNK 경로로 자연스럽게 폴백한다.
+      const body = await callScanTrigger(kind);
+      if (kind === "trunk" && body.url) {
+        setTrunkScanUrl(body.url);
+      }
       setStatus("done");
       onLog(`${KIND_LABELS[kind]} 완료`);
     } catch {
@@ -79,7 +111,9 @@ export default function ScanViewerPanel({ kind, onLog = () => {} }) {
     }
   };
 
-  const Content = status === "done" ? SCENE_CONTENT[kind][viewMode] : null;
+  const showRealTrunkCloud =
+    status === "done" && kind === "trunk" && viewMode === "processed" && trunkScanUrl;
+  const Content = status === "done" && !showRealTrunkCloud ? SCENE_CONTENT[kind][viewMode] : null;
 
   return (
     <div className={styles.panel}>
@@ -103,6 +137,7 @@ export default function ScanViewerPanel({ kind, onLog = () => {} }) {
           <Grid position={[0, -0.001, 0]} args={[4, 4]} cellSize={0.25} cellThickness={0.5}
                 cellColor="#D8D8DC" sectionSize={1} sectionThickness={1} sectionColor="#B8B8C4"
                 fadeDistance={5} fadeStrength={1.2} infiniteGrid />
+          {showRealTrunkCloud && <RealTrunkPointCloud url={trunkScanUrl} />}
           {Content && <Content />}
         </Canvas>
       </div>
