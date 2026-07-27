@@ -6,7 +6,7 @@ import { useEffect, useState } from "react";
 import { Canvas } from "@react-three/fiber";
 import { Grid, OrbitControls } from "@react-three/drei";
 import { PLYLoader } from "three/examples/jsm/loaders/PLYLoader.js";
-import { postCartScan, postTrunkScan, fetchTrunkScanPly } from "../api/client.js";
+import { postCartScan, postTrunkScan, fetchScanFile } from "../api/client.js";
 import {
   TrunkWireframe, CartWireframe, SceneBoxMesh, BoundingBoxWireframe,
   layoutStagingBoxes, computeCartFootprint,
@@ -35,14 +35,16 @@ function ProcessedTrunkPreview() {
   return <TrunkWireframe trunk={DUMMY_TRUNK} />;
 }
 
-// 실제 ROS2 액션으로 받은 트렁크 스캔 PLY(float32, xyz만)를 로드해서 점군으로
-// 렌더링한다 - 카트 스캔/원본 토글은 아직 더미(SCENE_CONTENT)를 그대로 쓴다.
-function RealTrunkPointCloud({ url }) {
+// 실제 ROS2 액션으로 받은 스캔 PLY(트렁크: float32 xyz만 / 카트: ascii, 둘 다
+// PLYLoader가 그대로 파싱 가능)를 로드해서 점군으로 렌더링한다 - 트렁크/카트
+// 양쪽 "전처리" 모드에서 공용으로 쓴다. "원본" 토글은 아직 더미(SCENE_CONTENT)
+// 그대로 쓴다.
+function RealPointCloud({ url }) {
   const [geometry, setGeometry] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
-    fetchTrunkScanPly(url).then((buffer) => {
+    fetchScanFile(url).then((buffer) => {
       if (cancelled) return;
       const loaded = new PLYLoader().parse(buffer);
       loaded.computeBoundingSphere();
@@ -90,30 +92,34 @@ const SCENE_CONTENT = {
 export default function ScanViewerPanel({ kind, onLog = () => {} }) {
   const [status, setStatus] = useState("idle");
   const [viewMode, setViewMode] = useState("raw");
-  const [trunkScanUrl, setTrunkScanUrl] = useState(null);
+  const [scanPlyUrl, setScanPlyUrl] = useState(null);
 
   const handleTrigger = async () => {
     setStatus("running");
     try {
-      // TODO(비전팀 연동 시): 카트 스캔은 아직 더미라 DUMMY_CART_BOXES를 그대로
-      // 쓴다. 트렁크 스캔은 실제 ROS2 액션 결과(url)가 오면 그걸로 실제 점군을
-      // 렌더링한다(RealTrunkPointCloud) - url이 없으면(더미 응답) 기존
-      // DUMMY_TRUNK 경로로 자연스럽게 폴백한다.
+      // 트렁크/카트 스캔 둘 다 실제 ROS2 액션 결과가 오면(ply_url 또는 url)
+      // 그걸로 실제 점군을 렌더링한다(RealPointCloud) - 없으면(더미 응답)
+      // 기존 DUMMY_TRUNK/DUMMY_CART_BOXES 경로로 자연스럽게 폴백한다.
+      // 카트 스캔의 json_url(적재 알고리즘용, algorism_bridge.py의
+      // load_boxes_from_vision_json이 소비하는 스키마)은 백엔드가 이미
+      // /api/robot/cart-scan-file/<filename>으로 서빙해두므로, 이 컴포넌트는
+      // 뷰어 표시에 필요한 ply_url만 쓴다.
       const body = await callScanTrigger(kind);
-      if (kind === "trunk" && body.url) {
-        setTrunkScanUrl(body.url);
+      const plyUrl = kind === "trunk" ? body.url : body.ply_url;
+      if (plyUrl) {
+        setScanPlyUrl(plyUrl);
       }
       setStatus("done");
-      onLog(`${KIND_LABELS[kind]} 완료`);
+      const detail = kind === "cart" && body.box_count != null ? ` (박스 ${body.box_count}개)` : "";
+      onLog(`${KIND_LABELS[kind]} 완료${detail}`);
     } catch {
       setStatus("idle");
       onLog(`[오류] ${KIND_LABELS[kind]} 요청 실패`);
     }
   };
 
-  const showRealTrunkCloud =
-    status === "done" && kind === "trunk" && viewMode === "processed" && trunkScanUrl;
-  const Content = status === "done" && !showRealTrunkCloud ? SCENE_CONTENT[kind][viewMode] : null;
+  const showRealPointCloud = status === "done" && viewMode === "processed" && scanPlyUrl;
+  const Content = status === "done" && !showRealPointCloud ? SCENE_CONTENT[kind][viewMode] : null;
 
   return (
     <div className={styles.panel}>
@@ -137,7 +143,7 @@ export default function ScanViewerPanel({ kind, onLog = () => {} }) {
           <Grid position={[0, -0.001, 0]} args={[4, 4]} cellSize={0.25} cellThickness={0.5}
                 cellColor="#D8D8DC" sectionSize={1} sectionThickness={1} sectionColor="#B8B8C4"
                 fadeDistance={5} fadeStrength={1.2} infiniteGrid />
-          {showRealTrunkCloud && <RealTrunkPointCloud url={trunkScanUrl} />}
+          {showRealPointCloud && <RealPointCloud url={scanPlyUrl} />}
           {Content && <Content />}
         </Canvas>
       </div>

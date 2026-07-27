@@ -19,6 +19,10 @@ __pycache__/
 # requirements.txt로 재생성 가능
 isaacpjt/Cart2Trunk/perception/.venv/
 
+# multiview_scan.py --marker 인자로 만드는 1회성 완료 신호 파일 (실행할 때마다
+# 삭제 후 재생성, 내용은 "done" 고정 텍스트뿐이라 추적할 가치 없음)
+isaacpjt/Cart2Trunk/perception/scan_cache/*.marker
+
 # planner_gui.py가 실행할 때마다 덮어쓰는 비포/애프터 임시 이미지 (재생성 가능)
 isaacpjt/Cart2Trunk/algorism/local_test_data/_gui_output/
 
