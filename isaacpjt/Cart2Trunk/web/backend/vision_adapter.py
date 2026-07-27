@@ -17,6 +17,7 @@ docstring, 05_candidate_scoring.py 주석 등 참고) algorism/01_object3d_schem
     rests_on_id 매핑 (load_boxes_from_vision_json()은 이걸 안 함)
   - 좌표계가 안 맞을 때 "임의로 변환하지 않고 명확히 에러로 막기"
 """
+import math
 import sys
 import pathlib
 from importlib import import_module
@@ -87,12 +88,29 @@ def boxes_from_vision_corners(vision_data: dict) -> Tuple[List[dict], str]:
     boxes = []
     for b in raw_boxes:
         corners = b["corners_m"]
-        xs = [c[0] for c in corners]
-        ys = [c[1] for c in corners]
+        # [2026-07-28 수정] 예전엔 corners_m 8점 전체의 단순 min/max(AABB)로
+        # width/depth를 냈는데, 이건 algorism/19_run_full_pipeline_with_yaw.py가
+        # 이미 경고하는 그 버그다 - 박스가 축 정렬이 아니면(회전된 채로 스캔되면)
+        # AABB 변 길이가 실제 변 길이보다 부풀려진다(예: 정사각형을 45도 돌리면
+        # AABB 변이 대각선 길이가 됨). 19번과 동일하게 윗면 4점의 인접 변 길이로
+        # 계산해서 회전과 무관하게 정확한 크기를 낸다 - box_top_extractor.py가
+        # corners_m[:4](윗면)를 이미 일관된 회전 순서로 저장해두므로 인접한 두
+        # 코너 사이 거리가 곧 실제 변 길이다.
+        top = corners[:4]
+        edge01 = (top[1][0] - top[0][0], top[1][1] - top[0][1])
+        edge12 = (top[2][0] - top[1][0], top[2][1] - top[1][1])
+        width = math.hypot(*edge01)
+        depth = math.hypot(*edge12)
         zs = [c[2] for c in corners]
-        width = max(xs) - min(xs)
-        depth = max(ys) - min(ys)
         height = max(zs) - min(zs)
+        # 박스가 카트 위에서 원래 가지고 있던 yaw(도, [0,180) 범위 - 사각형은
+        # 180도 대칭이라 그 이상은 구분 불가) - 19번의 _oriented_footprint()와
+        # 동일 공식. algorism/01_object3d_schema.py의 Box.initial_yaw가 이
+        # 값을 받아서 07_placement_plan.py의 target_yaw 계산(box.initial_yaw +
+        # rotated?90:0)에 쓰인다 - 예전엔 이 필드가 없어서 항상 0.0으로 빠져
+        # 있었다(모든 박스가 축 정렬이라고 잘못 가정한 셈).
+        yaw_deg = math.degrees(math.atan2(edge01[1], edge01[0])) % 180.0
+        initial_yaw = math.radians(yaw_deg)
 
         support_candidate_id = b.get("support_candidate_id", -1)
         is_on_floor = b.get("support_type") == "floor" or support_candidate_id == -1
@@ -100,7 +118,7 @@ def boxes_from_vision_corners(vision_data: dict) -> Tuple[List[dict], str]:
 
         boxes.append({
             "id": str(b["box_id"]), "width": width, "depth": depth, "height": height,
-            "rests_on_id": rests_on_id,
+            "rests_on_id": rests_on_id, "initial_yaw": initial_yaw,
         })
 
     snapshot_id = vision_data.get("completed_ply_file") or f"vision_corners_{len(boxes)}boxes"

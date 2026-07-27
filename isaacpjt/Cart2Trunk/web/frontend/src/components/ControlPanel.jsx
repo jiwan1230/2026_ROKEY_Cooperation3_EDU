@@ -68,6 +68,9 @@ export default function ControlPanel() {
         trunk_map_id: state.result.trunk_map_id,
         parameters: approvedParameters,
         placed: state.result.placed,
+        // POST /api/plan 응답 그대로 - 트렁크 로컬 좌표(placed[].position)를
+        // m0609_base_link 좌표로 되돌리는 데 필요(algorism_bridge.build_approved_task 참고).
+        trunk_offset_base_frame: state.result.trunk_offset_base_frame,
       });
       dispatch({ type: "APPROVE_SUCCESS", payload: resp });
     } catch (err) {

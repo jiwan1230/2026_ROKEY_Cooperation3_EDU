@@ -21,7 +21,7 @@ node = import_module("trunk_map_planner_node")
 
 
 def test_rejects_unapproved_task():
-    task = {"plan_id": "p1", "approved": False, "tasks": []}
+    task = {"plan_id": "p1", "approved": False, "placements": []}
     with pytest.raises(ValueError, match="approved"):
         node._send_task_to_msi2(task)
 
@@ -29,7 +29,7 @@ def test_rejects_unapproved_task():
 def test_writes_approved_task_to_local_file(tmp_path):
     task = {
         "plan_id": "load_plan_001", "box_snapshot_id": "s1", "trunk_map_id": "t1",
-        "approved": True, "parameters": {}, "tasks": [],
+        "approved": True, "parameters": {}, "placements": [],
     }
 
     out_path = node._send_task_to_msi2(task, out_dir=tmp_path)

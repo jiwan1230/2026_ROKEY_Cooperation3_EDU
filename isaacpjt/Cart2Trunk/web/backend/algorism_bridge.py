@@ -37,6 +37,7 @@ _m20 = import_module("20_task_export")
 
 load_trunk_from_world_map = _m02.load_trunk_from_world_map
 load_obstacles_from_world_map = _m02.load_obstacles_from_world_map
+local_to_base_frame = _m02.local_to_base_frame
 Box = _m03.Box
 PlacedBox = _m03.PlacedBox
 replan_after_rescan = _m09.replan_after_rescan
@@ -284,14 +285,28 @@ def compute_plan(
         "log_lines": log_lines,
         "trunk_map_id": trunk_map_data.get("run_id", "?"),
         "box_snapshot_id": box_snapshot_id or f"manual_input:{box_source_label}",
+        # algorism/19_run_full_pipeline_with_yaw.py의 trunk_offset_base_frame과 같은 값 -
+        # PlacementPlan.position은 트렁크 로컬 좌표(0,0,0 코너 기준)라, MSI2로 최종
+        # 전달할 때는 이 offset을 더해 m0609_base_link 좌표로 되돌려야 한다
+        # (02_trunk_space_state.local_to_base_frame 참고). 승인(POST /api/approve)
+        # 요청에 그대로 실어 보내야 build_approved_task()가 이 변환을 할 수 있다.
+        "trunk_offset_base_frame": list(offset),
     }
 
 
 def build_approved_task(plan_id: str, box_snapshot_id: str, trunk_map_id: str,
-                         parameters: dict, placed: List[dict]) -> dict:
+                         parameters: dict, placed: List[dict],
+                         offset: Optional[tuple] = None) -> dict:
     """승인 단계 - 20_task_export.build_task_json을 그대로 쓰기 위해,
     프론트가 보낸 placed(POST /api/plan 응답의 placed 배열 그대로)를
-    잠깐 PlacementPlan 객체로 복원한다."""
+    잠깐 PlacementPlan 객체로 복원한다.
+
+    [offset] POST /api/plan 응답의 trunk_offset_base_frame을 그대로 받아야
+    한다 - build_task_json()이 이 값으로 트렁크 로컬 좌표를 m0609_base_link
+    좌표로 변환한다(MSI2/isaac_task_runner.py가 실제로 읽는 좌표계).
+    offset이 없으면(예: 구버전 프론트) (0,0,0)으로 처리 - 트렁크 로컬
+    원점이 우연히 base 원점과 같은 경우가 아니면 틀린 좌표가 나가므로,
+    호출부에서 반드시 채워 보내야 한다."""
     _m07 = import_module("07_placement_plan")
     PlacementPlan = _m07.PlacementPlan
 
@@ -305,7 +320,8 @@ def build_approved_task(plan_id: str, box_snapshot_id: str, trunk_map_id: str,
     ]
     return build_task_json(
         plan_id=plan_id, box_snapshot_id=box_snapshot_id, trunk_map_id=trunk_map_id,
-        parameters=parameters, plans=plans, approved=True,
+        parameters=parameters, plans=plans, offset=tuple(offset) if offset else (0.0, 0.0, 0.0),
+        approved=True,
     )
 
 

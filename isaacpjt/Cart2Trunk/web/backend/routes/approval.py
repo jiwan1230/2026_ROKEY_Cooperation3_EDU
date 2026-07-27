@@ -29,6 +29,7 @@ def post_approve():
         trunk_map_id=body.get("trunk_map_id", "unknown"),
         parameters=body.get("parameters", {}),
         placed=placed,
+        offset=body.get("trunk_offset_base_frame"),
     )
     return jsonify({"plan_id": plan_id, "task": task})
 

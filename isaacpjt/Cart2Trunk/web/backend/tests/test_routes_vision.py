@@ -66,5 +66,5 @@ def test_post_parse_vision_corners_happy_path():
     assert resp.status_code == 200
     body = resp.get_json()
     assert body["boxes"] == [
-        {"id": "0", "width": 0.5, "depth": 0.35, "height": 0.2, "rests_on_id": None},
+        {"id": "0", "width": 0.5, "depth": 0.35, "height": 0.2, "rests_on_id": None, "initial_yaw": 0.0},
     ]

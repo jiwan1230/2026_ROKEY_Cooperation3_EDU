@@ -43,8 +43,9 @@ def test_boxes_from_box_scan_rejects_wrong_frame():
 
 
 # 실제 준형 샘플(~/Downloads/all_boxes_corners_20260721_174311_555644.json)과 같은 구조로,
-# 좌표계만 올바르게(m0609_base_link) 바꿔서 만든 합성 데이터 - 로직(AABB, rests_on_id 매핑)을
-# 검증하기 위함. box_id=2(바닥)의 top_candidate_id=0 위에 box_id=0,1이 나란히 얹혀 있다.
+# 좌표계만 올바르게(m0609_base_link) 바꿔서 만든 합성 데이터 - 로직(오리엔티드 풋프린트,
+# rests_on_id 매핑)을 검증하기 위함. box_id=2(바닥)의 top_candidate_id=0 위에 box_id=0,1이
+# 나란히 얹혀 있다.
 def _corner_box(box_id, top_candidate_id, support_candidate_id, support_type, x0, y0, z0, w, d, h):
     return {
         "box_id": box_id, "support_type": support_type,
@@ -72,7 +73,7 @@ _VISION_CORNERS_JSON = {
 }
 
 
-def test_boxes_from_vision_corners_computes_aabb_and_snapshot_id():
+def test_boxes_from_vision_corners_computes_oriented_footprint_and_snapshot_id():
     boxes, snapshot_id = vision_adapter.boxes_from_vision_corners(_VISION_CORNERS_JSON)
 
     assert snapshot_id == "run_test.ply"
@@ -80,6 +81,45 @@ def test_boxes_from_vision_corners_computes_aabb_and_snapshot_id():
     assert by_id["2"]["width"] == pytest.approx(0.5)
     assert by_id["2"]["depth"] == pytest.approx(0.35)
     assert by_id["2"]["height"] == pytest.approx(0.2)
+    assert by_id["2"]["initial_yaw"] == pytest.approx(0.0)  # 축 정렬 박스라 yaw=0
+
+
+def test_boxes_from_vision_corners_uses_oriented_footprint_not_aabb_for_rotated_box():
+    """[2026-07-28 회귀 테스트] 예전엔 corners_m 8점 전체의 단순 min/max(AABB)로
+    width/depth를 냈는데, 박스가 회전돼 있으면 대각선 길이가 섞여 들어가서 실제
+    변 길이보다 부풀려졌다(algorism/19_run_full_pipeline_with_yaw.py가 이미 경고한
+    버그). 0.5x0.35 박스를 30도 회전시켜서, 오리엔티드 풋프린트로는 회전과 무관하게
+    정확한 변 길이가 나오는지 확인."""
+    import math
+
+    w, d, h = 0.5, 0.35, 0.2
+    theta = math.radians(30.0)
+    local_corners = [(0, 0), (w, 0), (w, d), (0, d)]
+
+    def _rot(pt):
+        x, y = pt
+        return (x * math.cos(theta) - y * math.sin(theta), x * math.sin(theta) + y * math.cos(theta))
+
+    rotated_xy = [_rot(p) for p in local_corners]
+    corners_m = [[x, y, h] for x, y in rotated_xy] + [[x, y, 0.0] for x, y in rotated_xy]
+
+    data = {
+        "coordinate_frame": "m0609_base_link", "unit": "meter", "box_count": 1,
+        "completed_ply_file": "rotated_test.ply",
+        "boxes": [{
+            "box_id": 9, "support_type": "floor", "top_candidate_id": 0, "support_candidate_id": -1,
+            "corners_m": corners_m,
+        }],
+    }
+
+    boxes, _ = vision_adapter.boxes_from_vision_corners(data)
+    box = boxes[0]
+
+    # AABB였다면 30도 회전한 0.5x0.35 박스의 min/max 폭/깊이가 실제 변 길이보다
+    # 커진다 - 오리엔티드 풋프린트는 회전과 무관하게 정확한 변 길이를 낸다.
+    assert box["width"] == pytest.approx(0.5, abs=1e-9)
+    assert box["depth"] == pytest.approx(0.35, abs=1e-9)
+    assert box["initial_yaw"] == pytest.approx(theta, abs=1e-9)
 
 
 def test_boxes_from_vision_corners_maps_support_candidate_to_the_box_that_owns_that_top_candidate():

@@ -11,10 +11,13 @@ _PLACED = [{
 
 
 def test_build_approved_task_marks_approved_true():
-    task = bridge.build_approved_task("plan_1", "snap_1", "trunk_1", {"mode": "large_first"}, _PLACED)
+    task = bridge.build_approved_task(
+        "plan_1", "snap_1", "trunk_1", {"mode": "large_first"}, _PLACED, offset=(1.0, 0.5, 0.2))
     assert task["approved"] is True
-    assert task["tasks"][0]["box_id"] == "A"
-    assert task["tasks"][0]["sequence"] == 1
+    assert task["placements"][0]["box_id"] == "A"
+    assert task["placements"][0]["order"] == 1
+    # position(로컬)+offset = position_base_frame
+    assert task["placements"][0]["position_base_frame"] == [1.1, 0.7, 0.2]
 
 
 def test_send_task_writes_file(tmp_path, monkeypatch):
