@@ -20,7 +20,16 @@ vi.mock("./sceneMeshes.jsx", () => ({
 vi.mock("three/examples/jsm/loaders/PLYLoader.js", () => ({
   PLYLoader: class {
     parse() {
-      return { computeBoundingSphere: () => {} };
+      // ScanViewerPanel의 RealPointCloud가 로드 직후 좌표축 순환 치환
+      // (applyMatrix4) + 바닥 정렬(computeBoundingBox/translate)을 호출하므로
+      // 실제 THREE.BufferGeometry가 갖는 이 메서드들을 최소한으로 흉내낸다.
+      return {
+        applyMatrix4: () => {},
+        computeBoundingBox: () => {},
+        computeBoundingSphere: () => {},
+        translate: () => {},
+        boundingBox: { min: { y: 0 }, max: { y: 0 } },
+      };
     }
   },
 }));
