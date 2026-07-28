@@ -27,7 +27,9 @@ describe("SummaryCard", () => {
     render(<PlannerProvider><Loader payload={payload} /><SummaryCard /></PlannerProvider>);
     await userEvent.click(screen.getByText("load"));
     expect(screen.getByText("25.0%")).toBeInTheDocument();
-    expect(screen.getByText("우수")).toBeInTheDocument();
+    // "우수"는 등급 배지 말고도 등급 기준 목록(예: "우수: 22% 이상")에도 나오므로
+    // 배지 자체(data-grade 속성)로 좁혀서 찾는다.
+    expect(screen.getByText("우수", { selector: '[data-grade="우수"]' })).toBeInTheDocument();
   });
 
   it("shows an average-score grade badge next to 평균 점수 when all placed boxes use the weighted formula", async () => {
