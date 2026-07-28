@@ -5442,7 +5442,14 @@ try:
     for _ in range(10):
         simulation_app.update()
 
-    _live_camera_prim_path, _live_camera_candidates = find_camera_prim_path(stage, m0609_path, "Depth")
+    # [실측 확인 - 3] "Depth" 힌트로 찾은 Camera_Pseudo_Depth는 이름 그대로 실제
+    # 색상을 렌더링하지 않는 깊이 전용(가짜) 카메라라, OmniGraph 렌더 프로덕트가
+    # rgb AOV를 못 만들어 /camera/rgb가 계속 빈 채였다(10초간 0프레임 실측 확인 -
+    # QoS/워밍업 문제가 아니었음). run_cart_scan()/run_trunk_scan()은 depth
+    # 스캔이 목적이라 "Depth" 힌트가 맞지만, 실시간 RGB 스트리밍은 "Color" 힌트로
+    # 진짜 컬러 카메라(Camera_OmniVision_OV9782_Color, 후보 목록에서 실측 확인)를
+    # 찾아야 한다.
+    _live_camera_prim_path, _live_camera_candidates = find_camera_prim_path(stage, m0609_path, "Color")
     _node.get_logger().info(f"[실시간 카메라] 발견된 카메라 프림 후보: {_live_camera_candidates}")
     if _live_camera_prim_path is None:
         _node.get_logger().warn("[실시간 카메라] 카메라 프림을 못 찾아 /camera/rgb 스트리밍을 건너뜁니다")
