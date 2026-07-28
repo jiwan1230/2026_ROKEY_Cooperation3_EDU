@@ -39,10 +39,14 @@
 
 /* 세로 해상도가 낮은 화면(노트북, 작은 모니터 등) - 패딩/줄간격을 줄여서
    Header/TabBar/여백이 차지하는 "고정 비용"을 최대한 줄이고, 그만큼을
-   3D 뷰어·요약 카드에 돌려준다. */
-@media (max-height: 760px) {
+   3D 뷰어·요약 카드에 돌려준다.
+   [2026-07-28] 임계값을 760px에서 950px로 올렸다 - 실제로 1920x1080으로
+   "선언"된 화면에서도 브라우저 자체 UI(주소창/탭 등)가 차지하는 만큼 실제
+   페이지에 남는 세로 공간은 1080px보다 작아서, 얼핏 "충분히 큰 해상도"로
+   보여도 이 여백 절약이 필요한 경우가 흔하다(사용자 확인). */
+@media (max-height: 950px) {
   .resultArea { padding: 8px 12px; gap: 6px; }
   .topRow { gap: 8px; }
   .leftColumn { gap: 6px; }
-  .bottomRow { height: clamp(90px, 18vh, 160px); gap: 8px; }
+  .bottomRow { height: clamp(90px, 18vh, 170px); gap: 8px; }
 }

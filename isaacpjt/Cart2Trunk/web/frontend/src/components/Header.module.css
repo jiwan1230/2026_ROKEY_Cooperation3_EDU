@@ -27,3 +27,9 @@
 .estop:hover {
   opacity: 0.85;
 }
+
+/* 세로 해상도가 낮은 화면에서 헤더가 차지하는 "고정 비용"을 줄여서 그만큼을
+   본문(3D 뷰어·요약 카드)에 돌려준다(App.module.css의 같은 임계값과 짝).*/
+@media (max-height: 950px) {
+  .header { padding: 10px 20px; }
+}

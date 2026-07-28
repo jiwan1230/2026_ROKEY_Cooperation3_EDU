@@ -65,9 +65,14 @@ export default function SummaryCard() {
         </div>
       )}
 
-      <div className={styles.row}><span>전체</span><strong>{summary ? summary.total : "-"}</strong></div>
-      <div className={styles.row}><span>적재됨</span><strong>{summary ? summary.placed : "-"}</strong></div>
-      <div className={styles.row}><span>미적재</span><strong>{summary ? summary.unplaced : "-"}</strong></div>
+      {/* 전체/적재됨/미적재는 배지가 안 붙는 단순 숫자라(잘릴 위험이 없음)
+          공간 절약을 위해 라벨+값을 한 줄에 놓는 compact 행을 쓴다 - 1920x1080
+          같은 흔한 해상도에서도 스크롤 없이 한 화면에 다 들어와야 한다는
+          피드백(브라우저 자체 chrome 만큼 실제 페이지 높이가 줄어드는 경우도
+          있어 여유를 넉넉히 둠). */}
+      <div className={styles.rowCompact}><span>전체</span><strong>{summary ? summary.total : "-"}</strong></div>
+      <div className={styles.rowCompact}><span>적재됨</span><strong>{summary ? summary.placed : "-"}</strong></div>
+      <div className={styles.rowCompact}><span>미적재</span><strong>{summary ? summary.unplaced : "-"}</strong></div>
       <div className={styles.row}>
         <span>공간 활용률</span>
         <strong>
@@ -109,7 +114,7 @@ export default function SummaryCard() {
           최선~최악 범위 중 상위 <span>{scoreGrade.pct.toFixed(0)}%</span>
         </div>
       )}
-      <div className={styles.row}><span>계산 시간</span><strong>{summary ? `${summary.calc_time_ms.toFixed(0)}ms` : "-"}</strong></div>
+      <div className={styles.rowCompact}><span>계산 시간</span><strong>{summary ? `${summary.calc_time_ms.toFixed(0)}ms` : "-"}</strong></div>
       <div className={styles.status}>상태: {STATUS_LABEL[state.planState]}</div>
       {advancedOpen && summary && (
         <div className={styles.criteria}>

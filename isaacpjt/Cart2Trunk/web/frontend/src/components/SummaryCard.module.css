@@ -1,12 +1,18 @@
 /* src/components/SummaryCard.module.css */
 /* "우리 알고리즘을 점수화한 핵심 화면이니 크게 보여달라"는 피드백 - 패딩/
-   글자 크기를 전반적으로 키움. */
-.card { background: var(--color-surface); border-radius: 12px; padding: 20px; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+   글자 크기를 전반적으로 키움. 단, 1920x1080처럼 흔한 해상도에서도 스크롤
+   없이 한 화면에 다 들어와야 한다는 후속 피드백으로(브라우저 자체 UI가
+   차지하는 만큼 실제 페이지 높이는 선언한 해상도보다 작을 수 있음) 카드
+   패딩/행 간격은 다시 조금 좁혔다(2026-07-28) - 글자 크기는 그대로 두고
+   "숫자가 몇 개 안 되는 단순 항목"만 compact 행(.rowCompact)으로 바꿔서
+   높이를 줄이는 쪽을 택했다. */
+.card { background: var(--color-surface); border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 
 /* 라벨을 값 옆(가로)에 두면, 카드 폭이 좁을 때(요약 카드 칸은 260px대) 라벨
    min-width만으로 남는 폭이 줄어들어 등급 배지("양호" 등)가 안에서 줄바꿈
    되며 잘려 보이는 문제가 있었다(사용자 스크린샷으로 확인) - 라벨을 값 위
-   캡션으로 올려서 값+배지가 카드 폭을 온전히 다 쓰게 바꿨다. */
+   캡션으로 올려서 값+배지가 카드 폭을 온전히 다 쓰게 바꿨다. 배지가 붙는
+   행(종합 점수/공간 활용률/평균 점수)에만 쓴다. */
 .row { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .row > span:first-child {
   font-size: 13px; font-weight: 700; color: var(--color-text-secondary);
@@ -16,6 +22,15 @@
   display: flex; align-items: center; gap: 8px; font-size: 24px;
   color: var(--color-text-primary); min-width: 0;
 }
+
+/* 배지가 안 붙는 단순 숫자 행(전체/적재됨/미적재/계산 시간) - 잘릴 위험이
+   없으니 라벨+값을 한 줄에 놓아 세로 공간을 아낀다. */
+.rowCompact { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.rowCompact > span:first-child {
+  font-size: 13px; font-weight: 700; color: var(--color-text-secondary);
+  text-transform: uppercase; letter-spacing: 0.03em;
+}
+.rowCompact strong { font-size: 17px; font-weight: 700; color: var(--color-text-primary); }
 
 /* "종합 점수"는 사용자가 이 화면에서 제일 먼저 봐야 하는 숫자라(완주율 x
    품질을 0~100 양수로 합친 값) - 배경을 살짝 얹고 글자를 키워서 다른 행과

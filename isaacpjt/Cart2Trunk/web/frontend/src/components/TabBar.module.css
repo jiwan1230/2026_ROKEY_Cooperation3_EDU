@@ -9,3 +9,8 @@
   border-bottom: 2px solid transparent;
 }
 .tabActive { color: var(--color-accent); border-bottom-color: var(--color-accent); }
+
+/* Header.module.css와 같은 임계값 - 탭바가 차지하는 세로 공간도 줄인다. */
+@media (max-height: 950px) {
+  .tab, .tabActive { padding: 8px 18px; }
+}
