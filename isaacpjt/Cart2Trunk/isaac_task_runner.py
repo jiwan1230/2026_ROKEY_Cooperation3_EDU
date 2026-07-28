@@ -5410,6 +5410,62 @@ class _IsaacTaskRunnerNode(Node):
 rclpy.init()
 _node = _IsaacTaskRunnerNode()
 _STATUS_PUB = _node.status_pub
+
+# ---- 실시간 로봇 카메라(RGB) ROS2 스트리밍 - [2026-07-28] 로봇 제어 UI의
+# "로봇 카메라 실시간" 패널용(우선 Pick & Place 작업 화면 용도). run_cart_scan()
+# 안의 setup_ros2_camera_bridge()와 완전히 같은 패턴(OnPlaybackTick으로
+# 구동되는 OmniGraph - Isaac Sim 자체 ROS2 카메라 브리지)을 재사용하되 depth
+# 대신 rgb, 별도 그래프 경로/토픽을 쓴다(그쪽 /World/ROS2_Cart_Scan_Camera_Graph
+# 와 안 겹침).
+#
+# 이 블록은 world.step()이나 idle 디스패치 루프(아래 while)를 전혀 안
+# 건드린다 - OnPlaybackTick은 world.step(render=True)가 실제로 렌더링을
+# 수행할 때만 발화하는데, idle 루프는 대기 중엔 world.step()을 아예 안 부르니
+# (RMPflow 발산 버그 재발 방지를 위해 일부러 그렇게 설계됨 - 이 섹션 맨 위
+# 주석 참고) 이 스트림은 "자연히" 실제 작업(스캔/픽앤플레이스) 중에만
+# 갱신되고 대기 중엔 마지막 프레임에서 멈춘다 - 대기 루프 자체의 동작은
+# 손끝 하나 안 바꿔서 안전하다.
+#
+# og.Controller.edit() 실패(카메라 프림 못 찾음, OGN 노드 타입 이름 불일치
+# 등)가 나도 cart_scan/trunk_scan/pick_and_place 자체는 계속 동작해야 하므로
+# (카메라 스트리밍은 부가 기능이지 핵심 기능이 아님) 여기서만 넓게 예외
+# 처리하고 넘어간다.
+try:
+    _live_camera_prim_path, _live_camera_candidates = find_camera_prim_path(stage, m0609_path, "Depth")
+    if _live_camera_prim_path is None:
+        _node.get_logger().warn(
+            f"[실시간 카메라] 카메라 프림을 못 찾아 /camera/rgb 스트리밍을 건너뜁니다 "
+            f"(후보: {_live_camera_candidates})")
+    else:
+        _og_keys = og.Controller.Keys
+        og.Controller.edit(
+            {"graph_path": "/World/ROS2_Live_RGB_Camera_Graph", "evaluator_name": "execution"},
+            {
+                _og_keys.CREATE_NODES: [
+                    ("OnPlaybackTick", "omni.graph.action.OnPlaybackTick"),
+                    ("CreateRenderProduct", "isaacsim.core.nodes.IsaacCreateRenderProduct"),
+                    ("RgbPublish", "isaacsim.ros2.bridge.ROS2CameraHelper"),
+                ],
+                _og_keys.CONNECT: [
+                    ("OnPlaybackTick.outputs:tick", "CreateRenderProduct.inputs:execIn"),
+                    ("CreateRenderProduct.outputs:execOut", "RgbPublish.inputs:execIn"),
+                    ("CreateRenderProduct.outputs:renderProductPath", "RgbPublish.inputs:renderProductPath"),
+                ],
+                _og_keys.SET_VALUES: [
+                    ("CreateRenderProduct.inputs:cameraPrim", _live_camera_prim_path),
+                    ("CreateRenderProduct.inputs:width", 640),
+                    ("CreateRenderProduct.inputs:height", 480),
+                    ("RgbPublish.inputs:type", "rgb"),
+                    ("RgbPublish.inputs:topicName", "/camera/rgb"),
+                    ("RgbPublish.inputs:frameId", "m0609_depth_camera_optical_frame"),
+                    ("RgbPublish.inputs:resetSimulationTimeOnStop", True),
+                ],
+            },
+        )
+        _node.get_logger().info(f"[실시간 카메라] {_live_camera_prim_path} -> /camera/rgb 스트리밍 그래프 생성 완료")
+except Exception as _camera_setup_err:  # noqa: BLE001 - 부가 기능이라 실패해도 본 기능엔 영향 없어야 함
+    _node.get_logger().warn(f"[실시간 카메라] 스트리밍 설정 실패(무시하고 계속 진행): {_camera_setup_err}")
+
 _TASKS = {"cart_scan": run_cart_scan, "trunk_scan": run_trunk_scan, "pick_and_place": run_pick_and_place}
 
 try:
