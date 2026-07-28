@@ -96,11 +96,6 @@ export default function SummaryCard() {
           점수·등급 계산 기준 {advancedOpen ? "숨기기 ▴" : "자세히 보기 ▾"}
         </button>
       )}
-      {advancedOpen && summary && (
-        <div className={styles.criteria}>
-          원점수 <span>{summary.avg_score.toFixed(3)}</span>(낮을수록 좋은 자리 → 등급으로 환산)
-        </div>
-      )}
       {advancedOpen && scoreGrade && (
         <div className={styles.criteria}>
           점수 등급: {uniformFormula === "weighted" ? "지금 우선순위 설정" : "지금 트렁크 크기"} 기준

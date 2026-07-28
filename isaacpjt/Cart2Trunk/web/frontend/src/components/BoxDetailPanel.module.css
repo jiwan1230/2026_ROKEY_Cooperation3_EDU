@@ -5,7 +5,6 @@
   height: 100%; min-height: 0; overflow-y: auto;
   background: var(--color-surface); border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 10px;
 }
-.label { font-size: 11px; font-weight: 700; color: var(--color-text-secondary); text-transform: uppercase; }
 .select { border: 1px solid var(--color-border); border-radius: 8px; padding: 6px 8px; }
 .detail { font-size: 12px; display: flex; flex-direction: column; gap: 6px; }
 /* <table>은 부모 flex 컨테이너가 너비를 꽉 채우도록(align-items:stretch)
@@ -20,8 +19,9 @@
 .breakdownRow span:first-child { min-width: 130px; }
 .placeholder { font-size: 12px; color: var(--color-text-secondary); }
 
-/* 다른 "고급 설정" 토글들과 같은 스타일 - 점수 계산식 상세(breakdown)는
-   기본은 접어둬서 이 칸이 스크롤 없이도 들어오게 한다. */
+/* 다른 "고급 설정" 토글들과 같은 스타일 - 박스 상세 조회 칸 전체(선택
+   드롭다운/상세정보/breakdown)를 기본은 접어둬서 이 칸이 스크롤 없이도
+   들어오게 한다. */
 .detailToggle {
   align-self: flex-start; border: none; background: transparent; padding: 2px 0;
   font-size: 12px; font-weight: 700; color: var(--color-accent); cursor: pointer;
