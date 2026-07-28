@@ -52,12 +52,12 @@ function PlanningBody({ ControlComponent, showScenarios }) {
         <div className={styles.topRow}>
           <div className={styles.leftColumn}>
             <SummaryCard />
-            <LogPanel />
           </div>
           <Scene3DViewer showScenarios={showScenarios} />
         </div>
         <div className={styles.bottomRow}>
           <BoxDetailPanel />
+          <LogPanel />
         </div>
       </div>
     </div>

@@ -12,7 +12,7 @@ const WALL_BC_WEIGHT = 0.2;
 const COUNT_FIRST_HEIGHT_WEIGHT = 1.0;
 const COUNT_FIRST_FOOTPRINT_GROWTH_WEIGHT = 5.0;
 
-function labelForPct(pct) {
+export function labelForPct(pct) {
   if (pct >= 80) return "우수";
   if (pct >= 50) return "양호";
   if (pct >= 25) return "보통";

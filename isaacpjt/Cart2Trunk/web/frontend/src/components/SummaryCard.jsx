@@ -1,6 +1,6 @@
 // src/components/SummaryCard.jsx
 import { usePlannerState } from "../state/PlannerContext.jsx";
-import { gradeBoxScore, gradeUtilization } from "../utils/scoreGrading.js";
+import { gradeBoxScore, gradeUtilization, labelForPct } from "../utils/scoreGrading.js";
 import styles from "./SummaryCard.module.css";
 
 const STATUS_LABEL = {
@@ -31,8 +31,34 @@ export default function SummaryCard() {
       })
     : null;
 
+  // "종합 점수" = 완주율(몇 개나 실었는지) × 배치 품질(평균 점수를 등급 계산과
+  // 같은 0~100 스케일로 환산한 값) - 원점수(낮을수록 좋음, 마이너스일 수 있음)를
+  // 그대로 보여주면 "왜 마이너스냐"는 혼란이 생긴다는 피드백으로, 첫눈에 보이는
+  // 숫자는 항상 0~100 양수로 통일한다.
+  const completionRate = summary && summary.total > 0 ? summary.placed / summary.total : 0;
+  const overallPct = scoreGrade ? completionRate * scoreGrade.pct : null;
+  const overallGrade = overallPct != null ? labelForPct(overallPct) : null;
+
   return (
     <div className={styles.card}>
+      {summary && (
+        <div className={`${styles.row} ${styles.overallRow}`}>
+          <span>종합 점수</span>
+          <strong>
+            {overallPct != null ? `${overallPct.toFixed(0)}점` : "-"}
+            {overallGrade && (
+              <span className={styles.grade} data-grade={overallGrade}>{overallGrade}</span>
+            )}
+          </strong>
+        </div>
+      )}
+      {summary && overallPct != null && (
+        <div className={styles.criteria}>
+          적재율 {summary.placed}/{summary.total}({(completionRate * 100).toFixed(0)}%)
+          × 배치 품질 {scoreGrade.pct.toFixed(0)}점
+        </div>
+      )}
+
       <div className={styles.row}><span>전체</span><strong>{summary ? summary.total : "-"}</strong></div>
       <div className={styles.row}><span>적재됨</span><strong>{summary ? summary.placed : "-"}</strong></div>
       <div className={styles.row}><span>미적재</span><strong>{summary ? summary.unplaced : "-"}</strong></div>
@@ -50,12 +76,17 @@ export default function SummaryCard() {
       <div className={styles.row}>
         <span>평균 점수</span>
         <strong>
-          {summary ? summary.avg_score.toFixed(3) : "-"}
+          {summary ? (scoreGrade ? `${scoreGrade.pct.toFixed(0)}점` : "-") : "-"}
           {scoreGrade && (
             <span className={styles.grade} data-grade={scoreGrade.label}>{scoreGrade.label}</span>
           )}
         </strong>
       </div>
+      {summary && (
+        <div className={styles.criteria}>
+          원점수 <span>{summary.avg_score.toFixed(3)}</span>(낮을수록 좋은 자리 → 등급으로 환산)
+        </div>
+      )}
       {scoreGrade && (
         <div className={styles.criteria}>
           점수 등급: {uniformFormula === "weighted" ? "지금 우선순위 설정" : "지금 트렁크 크기"} 기준 이론상 최선~최악 범위 중 상위 {scoreGrade.pct.toFixed(0)}%

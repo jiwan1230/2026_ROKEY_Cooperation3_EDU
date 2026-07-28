@@ -9,26 +9,25 @@
 .body { display: grid; grid-template-columns: 300px 1fr; flex: 1; min-height: 0; overflow: hidden; }
 .resultArea { display: flex; flex-direction: column; gap: 10px; padding: 12px 16px; min-height: 0; overflow: hidden; }
 
-/* "화면 1"(요약 카드+결과 로그) 좁게 + "메인 화면 - 2"(3D 뷰어) 넓게 나란히
-   - 좁은 화면(랩탑 등)에서는 옆으로 나란히 두면 둘 다 너무 좁아지므로
-   세로로 다시 쌓는다. */
+/* "화면 1"(요약 카드) 좁게 + "메인 화면 - 2"(3D 뷰어) 넓게 나란히 - 좁은
+   화면(랩탑 등)에서는 옆으로 나란히 두면 둘 다 너무 좁아지므로 세로로
+   다시 쌓는다. */
 .topRow { display: flex; gap: 12px; align-items: stretch; flex: 1 1 auto; min-height: 0; }
-/* stretch로 3D 뷰어와 높이를 맞춘다. 요약 카드는 위쪽에 자기 높이만큼만
-   차지하고, 결과 로그는 margin-top:auto로 나머지 빈 공간을 밀어내면서
-   칸 맨 밑에 붙는다(사용자 피드백 - "결과 로그를 쭉 내려서 칸 맨 밑에
-   배치") - LogPanel.module.css의 max-height와 짝을 이뤄, 로그가 길어져도
-   칸 밖으로 넘치지 않고 그 안에서 스크롤된다. */
 .leftColumn { flex: 0 0 260px; display: flex; flex-direction: column; gap: 10px; min-height: 0; overflow-y: auto; }
-.leftColumn > :last-child { margin-top: auto; }
 .topRow > :last-child { flex: 1; min-width: 0; min-height: 0; }
 
-/* 박스 상세 조회 - 남은 세로 공간 중 한 화면에 다 들어가는 만큼만 쓰고,
-   그래도 내용이 길면(채점 항목이 많은 박스 등) 이 안에서만 스크롤된다 -
-   페이지 전체가 밀려 내려가는 것보다 낫다는 판단(LogPanel과 같은 안전망
-   패턴). */
-.bottomRow { flex: 0 0 auto; max-height: 26vh; overflow-y: auto; }
+/* 박스 상세 조회(왼쪽) + 결과 로그(오른쪽) - 예전엔 결과 로그가 왼쪽 칸
+   맨 밑에 붙어있었는데, 박스 상세 조회 옆(맨 아래 줄)으로 옮겨달라는
+   피드백. 두 칸 다 이 줄의 고정 높이(26vh)를 꽉 채우고, 내용이 길어지면
+   그 안에서만 스크롤된다 - 페이지 전체가 밀려 내려가지 않는다(한 화면
+   유지). */
+.bottomRow { flex: 0 0 auto; height: 26vh; display: flex; gap: 12px; min-height: 0; }
+.bottomRow > :first-child { flex: 3; min-width: 0; min-height: 0; }
+.bottomRow > :last-child { flex: 2; min-width: 0; min-height: 0; }
 
 @media (max-width: 900px) {
   .topRow { flex-direction: column; }
   .leftColumn { flex: none; width: 100%; }
+  .bottomRow { flex-direction: column; height: auto; max-height: 52vh; }
+  .bottomRow > :first-child, .bottomRow > :last-child { flex: none; }
 }

@@ -11,6 +11,12 @@
    올림. */
 .row span { min-width: 110px; color: var(--color-text-primary); }
 .row strong { font-size: 20px; }
+
+/* "종합 점수"는 사용자가 이 화면에서 제일 먼저 봐야 하는 숫자라(완주율 x
+   품질을 0~100 양수로 합친 값) - 배경을 살짝 얹고 글자를 키워서 다른 행과
+   구분되게 한다. */
+.overallRow { background: var(--color-canvas); border-radius: 8px; padding: 10px 12px; margin-bottom: 2px; }
+.overallRow strong { font-size: 28px; }
 .status { margin-top: 8px; font-size: 14px; color: var(--color-text-primary); }
 .criteria { font-size: 13px; color: var(--color-text-primary); }
 /* 괄호 설명이 등급 기준 문장 중간에서 줄바꿈되면 줄 폭이 들쭉날쭉해 보인다는
