@@ -1,0 +1,20 @@
+/* src/components/ScanningPanel.module.css */
+.panel {
+  display: grid; gap: 16px; padding: 20px; flex: 1; min-height: 0;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: minmax(0, 1fr) minmax(160px, 220px);
+  grid-template-areas:
+    "trunk cart"
+    "log   log";
+}
+.trunk { grid-area: trunk; min-height: 0; }
+.cart { grid-area: cart; min-height: 0; }
+.log { grid-area: log; min-height: 0; }
+
+@media (max-width: 900px) {
+  .panel {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(320px, 1fr) minmax(320px, 1fr) minmax(160px, 220px);
+    grid-template-areas: "trunk" "cart" "log";
+  }
+}

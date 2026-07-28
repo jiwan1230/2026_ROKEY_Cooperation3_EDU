@@ -21,12 +21,16 @@ describe("ControlPanel", () => {
         <ModeProbe />
       </PlannerProvider>,
     );
+    // 적재 모드는 "고급 설정" 아래 접혀있다(2026-07-28, 왼쪽 바 간략화) - 먼저 펼친다.
+    await userEvent.click(screen.getByTestId("advanced-toggle"));
     await userEvent.click(screen.getByText("개수 우선"));
     expect(screen.getByTestId("mode").textContent).toBe("count_first");
   });
 
   it("generating random boxes fills the box editor with 6 entries", async () => {
     render(<PlannerProvider><ControlPanel /></PlannerProvider>);
+    // 박스 목록도 "고급 설정" 아래 접혀있다(2026-07-28) - 먼저 펼친다.
+    await userEvent.click(screen.getByTestId("advanced-toggle"));
     await userEvent.click(screen.getByText("무작위 6개 생성"));
     const editor = screen.getByTestId("box-editor");
     const boxes = JSON.parse(editor.value);
@@ -35,6 +39,7 @@ describe("ControlPanel", () => {
 
   it("adjusting the box count input changes how many random boxes are generated", async () => {
     render(<PlannerProvider><ControlPanel /></PlannerProvider>);
+    await userEvent.click(screen.getByTestId("advanced-toggle"));
     const countInput = screen.getByTestId("box-count-input");
     fireEvent.change(countInput, { target: { value: "3" } });
 

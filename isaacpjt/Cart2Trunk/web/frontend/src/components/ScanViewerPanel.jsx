@@ -3,7 +3,7 @@
 // 같아서 kind prop으로 내용만 갈아끼운다. 시뮬레이터 탭의 PlannerContext와
 // 무관하게 독립적으로 동작한다.
 import { useEffect, useState } from "react";
-import { Canvas } from "@react-three/fiber";
+import { Canvas, useThree } from "@react-three/fiber";
 import { Grid, OrbitControls } from "@react-three/drei";
 import { Matrix4 } from "three";
 import { PLYLoader } from "three/examples/jsm/loaders/PLYLoader.js";
@@ -43,6 +43,11 @@ function ProcessedTrunkPreview() {
 // 둘 다 청크로 보내준다, 2026-07-28).
 function RealPointCloud({ url }) {
   const [geometry, setGeometry] = useState(null);
+  // 예전엔 카메라가 [1.2, 1.0, 1.6] 고정이라, 스캔 스케일/위치에 따라 매번
+  // 사용자가 손으로 확대/이동해야 잘 보였다("계속 확대해서 봐야 하는" 문제)
+  // - 실제 데이터가 로드되면 그 bounding sphere에 맞춰 카메라 위치와
+  // OrbitControls target을 자동으로 다시 잡아서 바로 전체가 보이게 한다.
+  const { camera, controls } = useThree();
 
   useEffect(() => {
     let cancelled = false;
@@ -68,11 +73,33 @@ function RealPointCloud({ url }) {
       if (minY < 0) loaded.translate(0, -minY, 0);
       loaded.computeBoundingSphere();
       setGeometry(loaded);
+
+      const sphere = loaded.boundingSphere;
+      if (sphere && camera) {
+        // fov 기준으로 bounding sphere 전체가 화면에 들어오는 거리를 구하고,
+        // 여유를 좀 둔다(1.7배) - 딱 맞으면 점군 가장자리가 화면 끝에
+        // 붙어서 잘려 보이기 쉽다.
+        const fitDistance = (sphere.radius * 1.7) / Math.sin((camera.fov * Math.PI) / 360);
+        const [ux, uy, uz] = [0.9, 0.7, 1.1];
+        const ulen = Math.hypot(ux, uy, uz);
+        camera.position.set(
+          sphere.center.x + (ux / ulen) * fitDistance,
+          sphere.center.y + (uy / ulen) * fitDistance,
+          sphere.center.z + (uz / ulen) * fitDistance,
+        );
+        camera.near = Math.max(0.01, fitDistance / 100);
+        camera.far = fitDistance * 100;
+        camera.updateProjectionMatrix();
+        if (controls) {
+          controls.target.set(sphere.center.x, sphere.center.y, sphere.center.z);
+          controls.update();
+        }
+      }
     });
     return () => {
       cancelled = true;
     };
-  }, [url]);
+  }, [url, camera, controls]);
 
   if (!geometry) return null;
   return (
@@ -110,7 +137,10 @@ const SCENE_CONTENT = {
 
 export default function ScanViewerPanel({ kind, onLog = () => {} }) {
   const [status, setStatus] = useState("idle");
-  const [viewMode, setViewMode] = useState("raw");
+  // 스캔 완료 시 사용자가 바로 알아볼 수 있는 형태(장애물/치수가 정리된
+  // 전처리 결과)를 먼저 보여준다 - "원본"은 필요할 때 눌러서 보는 보조
+  // 화면이라 기본값이 아니다.
+  const [viewMode, setViewMode] = useState("processed");
   const [processedPlyUrl, setProcessedPlyUrl] = useState(null);
   const [rawPlyUrl, setRawPlyUrl] = useState(null);
 
@@ -161,7 +191,7 @@ export default function ScanViewerPanel({ kind, onLog = () => {} }) {
         <Canvas camera={{ position: [1.2, 1.0, 1.6], fov: 50 }}>
           <ambientLight intensity={0.7} />
           <directionalLight position={[3, 5, 3]} intensity={0.6} />
-          <OrbitControls />
+          <OrbitControls makeDefault />
           <Grid position={[0, -0.001, 0]} args={[4, 4]} cellSize={0.25} cellThickness={0.5}
                 cellColor="#D8D8DC" sectionSize={1} sectionThickness={1} sectionColor="#B8B8C4"
                 fadeDistance={5} fadeStrength={1.2} infiniteGrid />

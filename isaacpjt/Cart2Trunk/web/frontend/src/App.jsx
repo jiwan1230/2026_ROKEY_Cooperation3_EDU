@@ -11,7 +11,8 @@ import SummaryCard from "./components/SummaryCard.jsx";
 import Scene3DViewer from "./components/Scene3DViewer.jsx";
 import BoxDetailPanel from "./components/BoxDetailPanel.jsx";
 import LogPanel from "./components/LogPanel.jsx";
-import RobotControlPanel from "./components/RobotControlPanel.jsx";
+import ScanningPanel from "./components/ScanningPanel.jsx";
+import PickAndPlaceTab from "./components/PickAndPlaceTab.jsx";
 import styles from "./App.module.css";
 
 // Header의 EMERGENCY STOP은 PlannerProvider 밖(App() 최상단)에서 렌더링돼
@@ -76,7 +77,10 @@ function TabSlot({ active, children }) {
 }
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState("verify");
+  // 실제 작업 흐름(스캔 -> 계획 -> 적재) 순서를 그대로 따라 "스캐닝" 탭을
+  // 기본 화면으로 연다 - "알고리즘 검증"은 개발/검증용이라 더 이상 첫
+  // 화면이 아니다(TabBar.jsx 참고).
+  const [activeTab, setActiveTab] = useState("scan");
   // Header의 EMERGENCY STOP이 "지금 보고 있는 탭"의 계획을 취소하도록,
   // DispatchRegistrar가 채워주는 각 탭의 dispatch를 ref로 들고 있다가
   // activeTab 기준으로 골라 쓴다. "로봇 제어" 탭은 PlannerContext를 아예
@@ -94,11 +98,8 @@ export default function App() {
     <div className={styles.layout}>
       <Header onEmergencyStop={handleEmergencyStop} />
       <TabBar activeTab={activeTab} onSelect={setActiveTab} />
-      <TabSlot active={activeTab === "verify"}>
-        <PlannerProvider>
-          <DispatchRegistrar registerRef={verifyDispatchRef} />
-          <PlanningBody ControlComponent={ControlPanel} showScenarios />
-        </PlannerProvider>
+      <TabSlot active={activeTab === "scan"}>
+        <ScanningPanel />
       </TabSlot>
       <TabSlot active={activeTab === "realtime"}>
         <PlannerProvider>
@@ -106,8 +107,14 @@ export default function App() {
           <PlanningBody ControlComponent={RealtimeControlPanel} showScenarios={false} />
         </PlannerProvider>
       </TabSlot>
-      <TabSlot active={activeTab === "robot"}>
-        <RobotControlPanel />
+      <TabSlot active={activeTab === "pickplace"}>
+        <PickAndPlaceTab />
+      </TabSlot>
+      <TabSlot active={activeTab === "verify"}>
+        <PlannerProvider>
+          <DispatchRegistrar registerRef={verifyDispatchRef} />
+          <PlanningBody ControlComponent={ControlPanel} showScenarios />
+        </PlannerProvider>
       </TabSlot>
     </div>
   );

@@ -1,6 +1,6 @@
 /* src/components/PickPlacePanel.module.css */
 .panel {
-  flex: 1; background: var(--color-surface); border-radius: 12px; padding: 16px;
+  flex: 1; height: 100%; min-height: 0; background: var(--color-surface); border-radius: 12px; padding: 16px;
   display: flex; flex-direction: column; gap: 16px; min-width: 0;
 }
 .title { font-size: 13px; font-weight: 700; color: var(--color-text-primary); }

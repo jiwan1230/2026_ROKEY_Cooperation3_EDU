@@ -10,22 +10,22 @@ describe("TabBar", () => {
     render(<TabBar activeTab="verify" onSelect={onSelect} />);
 
     expect(screen.getByTestId("tab-verify").getAttribute("aria-current")).toBe("page");
-    expect(screen.getByTestId("tab-robot").getAttribute("aria-current")).toBeNull();
+    expect(screen.getByTestId("tab-scan").getAttribute("aria-current")).toBeNull();
 
-    fireEvent.click(screen.getByTestId("tab-robot"));
-    expect(onSelect).toHaveBeenCalledWith("robot");
+    fireEvent.click(screen.getByTestId("tab-scan"));
+    expect(onSelect).toHaveBeenCalledWith("scan");
   });
 
   it("activeTab이 realtime이면 realtime 탭에 aria-current가 표시된다", () => {
     render(<TabBar activeTab="realtime" onSelect={() => {}} />);
     expect(screen.getByTestId("tab-realtime").getAttribute("aria-current")).toBe("page");
     expect(screen.getByTestId("tab-verify").getAttribute("aria-current")).toBeNull();
-    expect(screen.getByTestId("tab-robot").getAttribute("aria-current")).toBeNull();
+    expect(screen.getByTestId("tab-scan").getAttribute("aria-current")).toBeNull();
   });
 
-  it("activeTab이 robot이면 robot 탭에 aria-current가 표시된다", () => {
-    render(<TabBar activeTab="robot" onSelect={() => {}} />);
-    expect(screen.getByTestId("tab-robot").getAttribute("aria-current")).toBe("page");
+  it("activeTab이 pickplace이면 pickplace 탭에 aria-current가 표시된다", () => {
+    render(<TabBar activeTab="pickplace" onSelect={() => {}} />);
+    expect(screen.getByTestId("tab-pickplace").getAttribute("aria-current")).toBe("page");
     expect(screen.getByTestId("tab-verify").getAttribute("aria-current")).toBeNull();
   });
 });
