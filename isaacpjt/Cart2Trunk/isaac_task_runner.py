@@ -5443,10 +5443,9 @@ try:
         simulation_app.update()
 
     _live_camera_prim_path, _live_camera_candidates = find_camera_prim_path(stage, m0609_path, "Depth")
+    _node.get_logger().info(f"[실시간 카메라] 발견된 카메라 프림 후보: {_live_camera_candidates}")
     if _live_camera_prim_path is None:
-        _node.get_logger().warn(
-            f"[실시간 카메라] 카메라 프림을 못 찾아 /camera/rgb 스트리밍을 건너뜁니다 "
-            f"(후보: {_live_camera_candidates})")
+        _node.get_logger().warn("[실시간 카메라] 카메라 프림을 못 찾아 /camera/rgb 스트리밍을 건너뜁니다")
     else:
         _og_keys = og.Controller.Keys
         og.Controller.edit(
@@ -5473,6 +5472,15 @@ try:
                 ],
             },
         )
+        # [실측 확인 - 2] 그래프를 막 만든 직후엔 topic hz가 "does not appear to be
+        # published yet"였다 - simulation_app.update()(순수 익스텐션/OGN 로딩용)만으론
+        # 렌더 프로덕트가 실제로 프레임을 만들어내기 시작하기엔 부족했다. run_cart_scan()의
+        # 동일 그래프는 이미 60스텝 이상 실제로 world.step(render=True)를 반복해 안정화된
+        # 뒤에(step_hold(60)) 만들어져서 문제가 없었던 것으로 보인다 - 여기서도 그래프
+        # 생성 직후 실제 world.step(render=True)를 여러 번 돌려서 렌더 파이프라인이
+        # 첫 프레임을 만들어낼 시간을 준다.
+        for _ in range(30):
+            world.step(render=True)
         _node.get_logger().info(f"[실시간 카메라] {_live_camera_prim_path} -> /camera/rgb 스트리밍 그래프 생성 완료")
 except Exception as _camera_setup_err:  # noqa: BLE001 - 부가 기능이라 실패해도 본 기능엔 영향 없어야 함
     _node.get_logger().warn(f"[실시간 카메라] 스트리밍 설정 실패(무시하고 계속 진행): {_camera_setup_err}")
