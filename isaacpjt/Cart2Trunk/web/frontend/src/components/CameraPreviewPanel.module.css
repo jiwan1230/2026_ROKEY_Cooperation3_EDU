@@ -4,8 +4,12 @@
   display: flex; flex-direction: column; gap: 10px; min-width: 0;
 }
 .title { font-size: 13px; font-weight: 700; color: var(--color-text-primary); }
+/* 고정 px min-height는 뷰포트 세로 해상도가 낮은 컴퓨터에서 전체 레이아웃이
+   화면보다 커져 스크롤이 생기는 원인이 된다(Scene3DViewer.module.css와 같은
+   문제, 2026-07-28) - min()으로 뷰포트 비율 상한을 같이 둬서 화면이 작으면
+   같이 줄어들게 한다. */
 .placeholder {
-  flex: 1; min-height: 140px; border-radius: 8px; background: var(--color-canvas);
+  flex: 1; min-height: min(140px, 18vh); border-radius: 8px; background: var(--color-canvas);
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
   color: var(--color-text-secondary); font-size: 13px;
 }
@@ -16,6 +20,6 @@
   padding: 4px 12px; font-size: 12px; cursor: pointer; color: var(--color-text-primary);
 }
 .stream {
-  flex: 1; min-height: 140px; width: 100%; border-radius: 8px; background: var(--color-canvas);
+  flex: 1; min-height: min(140px, 18vh); width: 100%; border-radius: 8px; background: var(--color-canvas);
   object-fit: contain;
 }

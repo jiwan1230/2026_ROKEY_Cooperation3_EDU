@@ -18,10 +18,15 @@
 
 /* 박스 상세 조회(왼쪽) + 결과 로그(오른쪽) - 예전엔 결과 로그가 왼쪽 칸
    맨 밑에 붙어있었는데, 박스 상세 조회 옆(맨 아래 줄)으로 옮겨달라는
-   피드백. 두 칸 다 이 줄의 고정 높이(26vh)를 꽉 채우고, 내용이 길어지면
-   그 안에서만 스크롤된다 - 페이지 전체가 밀려 내려가지 않는다(한 화면
-   유지). */
-.bottomRow { flex: 0 0 auto; height: 26vh; display: flex; gap: 12px; min-height: 0; }
+   피드백. 두 칸 다 이 줄 높이를 꽉 채우고, 내용이 길어지면 그 안에서만
+   스크롤된다 - 페이지 전체가 밀려 내려가지 않는다(한 화면 유지).
+   순수 26vh 고정이었을 때, 세로 해상도가 낮은 다른 컴퓨터(노트북 등)에서
+   Scene3DViewer의 최소 높이(300px 고정값, Scene3DViewer.module.css)와
+   합쳐지면 뷰포트보다 커져서 페이지 스크롤이 생기는 문제가 있었다(사용자
+   확인) - clamp()로 최소/최대 절대값을 두어 낮은 해상도에서 자동으로
+   더 작아지게 한다(120px 밑으로는 안 내려가되, 화면이 작으면 22vh를
+   그대로 따름). */
+.bottomRow { flex: 0 0 auto; height: clamp(110px, 22vh, 220px); display: flex; gap: 12px; min-height: 0; }
 .bottomRow > :first-child { flex: 3; min-width: 0; min-height: 0; }
 .bottomRow > :last-child { flex: 2; min-width: 0; min-height: 0; }
 
@@ -30,4 +35,14 @@
   .leftColumn { flex: none; width: 100%; }
   .bottomRow { flex-direction: column; height: auto; max-height: 52vh; }
   .bottomRow > :first-child, .bottomRow > :last-child { flex: none; }
+}
+
+/* 세로 해상도가 낮은 화면(노트북, 작은 모니터 등) - 패딩/줄간격을 줄여서
+   Header/TabBar/여백이 차지하는 "고정 비용"을 최대한 줄이고, 그만큼을
+   3D 뷰어·요약 카드에 돌려준다. */
+@media (max-height: 760px) {
+  .resultArea { padding: 8px 12px; gap: 6px; }
+  .topRow { gap: 8px; }
+  .leftColumn { gap: 6px; }
+  .bottomRow { height: clamp(90px, 18vh, 160px); gap: 8px; }
 }

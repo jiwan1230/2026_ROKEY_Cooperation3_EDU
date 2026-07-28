@@ -12,7 +12,11 @@
 }
 .toggleActive { background: var(--color-accent); color: white; }
 
-.canvasWrap { flex: 1; min-height: 320px; border-radius: 8px; overflow: hidden; background: var(--color-canvas); }
+/* 고정 px min-height는 뷰포트 세로 해상도가 낮은 컴퓨터에서 전체 레이아웃이
+   화면보다 커져 스크롤이 생기는 원인이 된다(Scene3DViewer.module.css와 같은
+   문제, 2026-07-28) - min()으로 뷰포트 비율 상한을 같이 둬서 화면이 작으면
+   같이 줄어들게 한다. */
+.canvasWrap { flex: 1; min-height: min(320px, 22vh); border-radius: 8px; overflow: hidden; background: var(--color-canvas); }
 
 .panel > button {
   border: none; border-radius: 8px; padding: 10px 16px; font-size: 13px; font-weight: 700;
