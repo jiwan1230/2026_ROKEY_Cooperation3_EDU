@@ -15,8 +15,11 @@ function Loader({ payload }) {
 
 describe("SummaryCard", () => {
   it("shows placeholders before any plan is computed", () => {
+    // "상태" 문구는 UI에서 제거했다(2026-07-28) - "종합 점수" 행 자체는
+    // summary가 있을 때만 렌더링되므로, 항상 렌더링되는 "전체" 행이
+    // "-" placeholder인지로 계획 계산 전 상태를 확인한다.
     render(<PlannerProvider><SummaryCard /></PlannerProvider>);
-    expect(screen.getByText(/① 파라미터를 입력하면 자동으로 계산됩니다/)).toBeInTheDocument();
+    expect(screen.getByText("전체").nextSibling.textContent).toBe("-");
   });
 
   it("shows a utilization grade badge once a plan is computed", async () => {

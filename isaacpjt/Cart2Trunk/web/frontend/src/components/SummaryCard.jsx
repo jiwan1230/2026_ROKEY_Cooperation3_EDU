@@ -4,13 +4,6 @@ import { usePlannerState } from "../state/PlannerContext.jsx";
 import { gradeBoxScore, gradeUtilization, labelForPct } from "../utils/scoreGrading.js";
 import styles from "./SummaryCard.module.css";
 
-const STATUS_LABEL = {
-  NOT_COMPUTED: "① 파라미터를 입력하면 자동으로 계산됩니다",
-  COMPUTING: "계산 중...",
-  COMPUTED: "계산됨 - 승인하거나 파라미터를 조정하세요",
-  APPROVED: "승인됨 - 파라미터 잠김 - MSI2로 전송할 수 있습니다",
-};
-
 export default function SummaryCard() {
   const state = usePlannerState();
   const summary = state.result?.summary;
@@ -114,8 +107,6 @@ export default function SummaryCard() {
           최선~최악 범위 중 상위 <span>{scoreGrade.pct.toFixed(0)}%</span>
         </div>
       )}
-      <div className={styles.rowCompact}><span>계산 시간</span><strong>{summary ? `${summary.calc_time_ms.toFixed(0)}ms` : "-"}</strong></div>
-      <div className={styles.status}>상태: {STATUS_LABEL[state.planState]}</div>
       {advancedOpen && summary && (
         <div className={styles.criteria}>
           <div className={styles.criteriaLabel}>공간 활용률 등급 기준</div>

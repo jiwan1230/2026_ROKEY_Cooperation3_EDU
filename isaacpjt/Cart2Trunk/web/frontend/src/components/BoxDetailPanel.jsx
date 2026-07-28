@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { usePlannerDispatch, usePlannerState } from "../state/PlannerContext.jsx";
 import { gradeBoxScore } from "../utils/scoreGrading.js";
 import styles from "./BoxDetailPanel.module.css";
@@ -5,6 +6,10 @@ import styles from "./BoxDetailPanel.module.css";
 export default function BoxDetailPanel() {
   const state = usePlannerState();
   const dispatch = usePlannerDispatch();
+  // 점수 계산식 상세(항목별 breakdown)는 자주 안 보는 세부 정보라 기본은
+  // 접어둔다 - 항상 펼쳐두면 이 칸 높이가 넘쳐서 계속 스크롤이 생겼다는
+  // 피드백(다른 "고급 설정" 토글들과 같은 패턴).
+  const [detailOpen, setDetailOpen] = useState(false);
   const placed = state.result?.placed || [];
   const selected = placed.find((p) => p.box_id === state.selectedBoxId);
   const grade = selected
@@ -50,7 +55,15 @@ export default function BoxDetailPanel() {
               </span>
             )}
           </p>
-          {grade && (
+          <button
+            type="button"
+            className={styles.detailToggle}
+            data-testid="box-detail-toggle"
+            onClick={() => setDetailOpen((open) => !open)}
+          >
+            점수 계산식 상세 {detailOpen ? "숨기기 ▴" : "보기 ▾"}
+          </button>
+          {detailOpen && grade && (
             <p className={styles.gradeCaption}>
               점수 등급: {selected.score_breakdown.formula === "weighted"
                 ? "지금 우선순위 설정"
@@ -60,7 +73,7 @@ export default function BoxDetailPanel() {
           {/* score_breakdown.formula: "count_first" 모드는 내부적으로 서로 다른 두 채점
               공식 중 하나를 실제로 쓸 수 있어서(백엔드 algorism_bridge.compute_plan()
               참고), 두 형태를 분기해서 보여준다. */}
-          {selected.score_breakdown.formula === "count_first_density" ? (
+          {detailOpen && (selected.score_breakdown.formula === "count_first_density" ? (
             <div className={styles.breakdown}>
               <div className={styles.breakdownRow}><span>높이 항(불리)</span><span>{selected.score_breakdown.height_term.toFixed(3)}</span></div>
               <div className={styles.breakdownRow}><span>새 영역 확장 항(불리)</span><span>{selected.score_breakdown.footprint_growth_term.toFixed(3)}</span></div>
@@ -72,7 +85,7 @@ export default function BoxDetailPanel() {
               <div className={styles.breakdownRow}><span>안쪽 벽(A) 항(유리)</span><span>-{selected.score_breakdown.wall_a_term.toFixed(3)}</span></div>
               <div className={styles.breakdownRow}><span>측면 벽(B/C) 항(유리)</span><span>-{selected.score_breakdown.wall_bc_term.toFixed(3)}</span></div>
             </div>
-          )}
+          ))}
         </div>
       ) : (
         <p className={styles.placeholder}>계획 계산 후 박스를 선택하면 상세정보가 표시됩니다</p>

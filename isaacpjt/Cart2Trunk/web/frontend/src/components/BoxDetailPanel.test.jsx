@@ -42,9 +42,11 @@ describe("BoxDetailPanel", () => {
     );
     await userEvent.click(screen.getByText("load"));
     expect(screen.getByText(/적재순서 1/)).toBeInTheDocument();
-    expect(screen.getByText("-0.250")).toBeInTheDocument();
     // score=0.42, 기본 우선순위(1.0/1.0/1.0) 범위[-1.6, 1.0] 기준 상위 22.3% -> 개선 필요
     expect(screen.getByText("개선 필요")).toBeInTheDocument();
+    // breakdown은 "점수 계산식 상세" 토글 뒤로 접혀있다(2026-07-28) - 먼저 펼친다.
+    await userEvent.click(screen.getByTestId("box-detail-toggle"));
+    expect(screen.getByText("-0.250")).toBeInTheDocument();
   });
 
   it("shows count-first-density formula score breakdown and a trunk-size-based grade", async () => {
@@ -55,10 +57,11 @@ describe("BoxDetailPanel", () => {
       </PlannerProvider>,
     );
     await userEvent.click(screen.getByText("load"));
-    expect(screen.getByText("새 영역 확장 항(불리)")).toBeInTheDocument();
-    expect(screen.getByText("1.000")).toBeInTheDocument();
     // score=1.5, trunk(0.85x1.25) 기준 범위[0, 11.5]에서 상위 87% -> 우수
     expect(screen.getByText("우수")).toBeInTheDocument();
+    await userEvent.click(screen.getByTestId("box-detail-toggle"));
+    expect(screen.getByText("새 영역 확장 항(불리)")).toBeInTheDocument();
+    expect(screen.getByText("1.000")).toBeInTheDocument();
     expect(screen.getByText(/점수 등급: 지금 트렁크 크기 기준/)).toBeInTheDocument();
   });
 });

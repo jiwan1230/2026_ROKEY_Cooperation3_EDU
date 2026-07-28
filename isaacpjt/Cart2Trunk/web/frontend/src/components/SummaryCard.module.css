@@ -23,8 +23,8 @@
   color: var(--color-text-primary); min-width: 0;
 }
 
-/* 배지가 안 붙는 단순 숫자 행(전체/적재됨/미적재/계산 시간) - 잘릴 위험이
-   없으니 라벨+값을 한 줄에 놓아 세로 공간을 아낀다. */
+/* 배지가 안 붙는 단순 숫자 행(전체/적재됨/미적재) - 잘릴 위험이 없으니
+   라벨+값을 한 줄에 놓아 세로 공간을 아낀다. */
 .rowCompact { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
 .rowCompact > span:first-child {
   font-size: 13px; font-weight: 700; color: var(--color-text-secondary);
@@ -39,7 +39,6 @@
 .overallRow > span:first-child { font-size: 14px; }
 .overallRow strong { font-size: 32px; }
 
-.status { margin-top: 2px; font-size: 15px; color: var(--color-text-primary); line-height: 1.5; }
 /* 점수/등급 계산 근거는 "고급 설정"(advancedOpen)으로 접어두는 세부 정보라
    기본은 숨어있지만, 펼쳤을 때는 충분히 읽기 편해야 한다는 피드백으로
    본문 색+글자 크기를 올렸다(예전엔 흐린 보조색+더 작은 글자였음). */

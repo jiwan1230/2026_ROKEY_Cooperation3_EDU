@@ -8,14 +8,6 @@
 import { usePlannerDispatch, usePlannerState } from "../state/PlannerContext.jsx";
 import styles from "./ControlPanel.module.css";
 
-const MARGIN_FIELDS = [
-  { key: "margin", label: "박스 간격" },
-  { key: "wallMargin", label: "벽면 간격" },
-  { key: "ceilingMargin", label: "천장 여유" },
-  { key: "obstacleMargin", label: "장애물 간격" },
-  { key: "entranceMargin", label: "입구 여유거리" },
-];
-
 const PREFERENCE_FIELDS = [
   { key: "entrancePreference", label: "입구 ↔ 깊은 위치", min: -1, max: 1, step: 0.1 },
   { key: "contactPreference", label: "공간활용 ↔ 안정성", min: 0, max: 2, step: 0.1 },
@@ -31,23 +23,6 @@ export default function PlanParamFields() {
 
   return (
     <>
-      <section className={styles.section}>
-        <label className={styles.label}>마진 (m, 비우면 기본값)</label>
-        {MARGIN_FIELDS.map(({ key, label }) => (
-          <div key={key} className={styles.fieldRow}>
-            <span className={styles.fieldLabel}>{label}</span>
-            <input
-              type="text"
-              inputMode="decimal"
-              className={styles.input}
-              disabled={locked}
-              value={state.params[key]}
-              onChange={(e) => setParam(key, e.target.value)}
-            />
-          </div>
-        ))}
-      </section>
-
       <section className={styles.section}>
         <label className={styles.label}>우선순위</label>
         {PREFERENCE_FIELDS.map(({ key, label, min, max, step }) => (
