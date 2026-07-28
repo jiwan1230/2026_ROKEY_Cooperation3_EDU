@@ -6,10 +6,10 @@
 import styles from "./TabBar.module.css";
 
 const TABS = [
-  { key: "scan", label: "스캐닝" },
-  { key: "realtime", label: "플래닝" },
-  { key: "pickplace", label: "픽앤플레이스" },
-  { key: "verify", label: "알고리즘 검증" },
+  { key: "scan", label: "Scanning" },
+  { key: "realtime", label: "Planning" },
+  { key: "pickplace", label: "Pick & Place" },
+  { key: "verify", label: "Algorithm Verification" },
 ];
 
 export default function TabBar({ activeTab, onSelect }) {

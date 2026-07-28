@@ -65,7 +65,7 @@ export default function ControlPanel() {
         data-testid="advanced-toggle"
         onClick={() => setAdvancedOpen((open) => !open)}
       >
-        고급 설정(적재 모드·마진·우선순위) {advancedOpen ? "숨기기 ▴" : "보기 ▾"}
+        고급 설정(적재 모드·마진·우선순위·박스 목록) {advancedOpen ? "숨기기 ▴" : "보기 ▾"}
       </button>
 
       {advancedOpen && (
@@ -88,47 +88,47 @@ export default function ControlPanel() {
           </section>
 
           <PlanParamFields />
+
+          <section className={styles.section}>
+            <label className={styles.label}>박스 목록 (JSON)</label>
+            <VisionDataLoader disabled={locked} />
+            {state.boxSnapshotId && (
+              <div className={styles.fieldRow}>
+                <span className={styles.fieldLabel}>비전 스냅샷 ID</span>
+                <span className={styles.fieldLabel}>{state.boxSnapshotId}</span>
+              </div>
+            )}
+            <div className={styles.generateRow}>
+              <input
+                type="number"
+                min={1}
+                max={50}
+                className={styles.boxCountInput}
+                disabled={locked}
+                value={randomBoxCount}
+                data-testid="box-count-input"
+                onChange={(e) => {
+                  const n = Math.round(Number(e.target.value));
+                  setRandomBoxCount(Number.isFinite(n) ? Math.min(50, Math.max(1, n)) : 1);
+                }}
+              />
+              <button type="button" disabled={locked} onClick={() => dispatch({
+                type: "GENERATE_RANDOM_BOXES", payload: generateRandomBoxes(randomBoxCount),
+              })}>
+                무작위 {randomBoxCount}개 생성
+              </button>
+            </div>
+            <textarea
+              className={styles.boxEditor}
+              data-testid="box-editor"
+              rows={10}
+              disabled={locked}
+              value={state.boxesText}
+              onChange={(e) => dispatch({ type: "SET_BOXES_TEXT", payload: e.target.value })}
+            />
+          </section>
         </>
       )}
-
-      <section className={styles.section}>
-        <label className={styles.label}>박스 목록 (JSON)</label>
-        <VisionDataLoader disabled={locked} />
-        {state.boxSnapshotId && (
-          <div className={styles.fieldRow}>
-            <span className={styles.fieldLabel}>비전 스냅샷 ID</span>
-            <span className={styles.fieldLabel}>{state.boxSnapshotId}</span>
-          </div>
-        )}
-        <div className={styles.generateRow}>
-          <input
-            type="number"
-            min={1}
-            max={50}
-            className={styles.boxCountInput}
-            disabled={locked}
-            value={randomBoxCount}
-            data-testid="box-count-input"
-            onChange={(e) => {
-              const n = Math.round(Number(e.target.value));
-              setRandomBoxCount(Number.isFinite(n) ? Math.min(50, Math.max(1, n)) : 1);
-            }}
-          />
-          <button type="button" disabled={locked} onClick={() => dispatch({
-            type: "GENERATE_RANDOM_BOXES", payload: generateRandomBoxes(randomBoxCount),
-          })}>
-            무작위 {randomBoxCount}개 생성
-          </button>
-        </div>
-        <textarea
-          className={styles.boxEditor}
-          data-testid="box-editor"
-          rows={10}
-          disabled={locked}
-          value={state.boxesText}
-          onChange={(e) => dispatch({ type: "SET_BOXES_TEXT", payload: e.target.value })}
-        />
-      </section>
 
       <section className={styles.section}>
         <div className={styles.actions}>
