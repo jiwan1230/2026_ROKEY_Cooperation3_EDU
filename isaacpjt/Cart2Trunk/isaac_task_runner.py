@@ -5431,6 +5431,17 @@ _STATUS_PUB = _node.status_pub
 # (카메라 스트리밍은 부가 기능이지 핵심 기능이 아님) 여기서만 넓게 예외
 # 처리하고 넘어간다.
 try:
+    # [실측 확인] SimulationApp() 직후(이 시점)엔 isaacsim.ros2.bridge 익스텐션이
+    # "활성화 예정"이어도 OGN 노드 타입 등록이 아직 안 끝나 있어서
+    # ROS2CameraHelper 생성이 "unrecognized type"으로 실패했다 - run_cart_scan()의
+    # 같은 코드는 한참 뒤(사용자가 실제로 스캔을 트리거한 시점)에 실행돼서
+    # 그때는 이미 다 로드돼 있어 문제없이 동작한다. enable_extension()을 명시적으로
+    # 부르고 simulation_app.update()를 몇 번 돌려서 등록이 끝날 시간을 준다.
+    from isaacsim.core.utils.extensions import enable_extension
+    enable_extension("isaacsim.ros2.bridge")
+    for _ in range(10):
+        simulation_app.update()
+
     _live_camera_prim_path, _live_camera_candidates = find_camera_prim_path(stage, m0609_path, "Depth")
     if _live_camera_prim_path is None:
         _node.get_logger().warn(
