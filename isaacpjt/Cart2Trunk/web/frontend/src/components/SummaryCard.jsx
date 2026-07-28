@@ -13,13 +13,16 @@ export default function SummaryCard() {
   // 피드백으로, 기본은 접어두고 필요할 때만 펼친다(ControlPanel의 "고급
   // 설정"과 같은 패턴).
   const [advancedOpen, setAdvancedOpen] = useState(false);
-  // 평균 점수 등급은 모든 박스가 "같은" 채점 공식을 썼을 때만 의미가 있다 -
-  // count_first 모드는 내부적으로 weighted/count_first_density 두 공식 중
-  // 하나를 박스마다 다르게 쓸 수 있는데, 두 공식이 섞이면 스케일이 완전히
-  // 달라(예: 섭씨/화씨를 같이 평균내는 것과 같음) 평균 자체가 무의미해진다.
-  // 반면 "개수 우선 모드에서도 평균 점수/등급을 보고 싶다"는 피드백대로,
-  // 전부 같은 공식(weighted만, 또는 count_first_density만)이면 그 공식
-  // 기준으로 등급을 매길 수 있으므로 formula가 균일한 경우까지 확장한다.
+  // "배치 품질"(예전엔 "평균 점수"라는 이름이었으나 종합 점수 캡션의
+  // "배치 품질"과 같은 값인데 이름만 달라 헷갈린다는 피드백으로 워딩을
+  // 통일함, 2026-07-28) 등급은 모든 박스가 "같은" 채점 공식을 썼을 때만
+  // 의미가 있다 - count_first 모드는 내부적으로 weighted/count_first_density
+  // 두 공식 중 하나를 박스마다 다르게 쓸 수 있는데, 두 공식이 섞이면
+  // 스케일이 완전히 달라(예: 섭씨/화씨를 같이 평균내는 것과 같음) 평균
+  // 자체가 무의미해진다. 반면 "개수 우선 모드에서도 배치 품질/등급을 보고
+  // 싶다"는 피드백대로, 전부 같은 공식(weighted만, 또는 count_first_density만)
+  // 이면 그 공식 기준으로 등급을 매길 수 있으므로 formula가 균일한 경우까지
+  // 확장한다.
   const uniformFormula = placed.length > 0 && placed.every(
     (p) => p.score_breakdown.formula === placed[0].score_breakdown.formula,
   ) ? placed[0].score_breakdown.formula : null;
@@ -30,8 +33,8 @@ export default function SummaryCard() {
       })
     : null;
 
-  // "종합 점수" = 완주율(몇 개나 실었는지) × 배치 품질(평균 점수를 등급 계산과
-  // 같은 0~100 스케일로 환산한 값) - 원점수(낮을수록 좋음, 마이너스일 수 있음)를
+  // "종합 점수" = 완주율(몇 개나 실었는지) × 배치 품질(박스들 원점수 평균을
+  // 등급 계산과 같은 0~100 스케일로 환산한 값) - 원점수(낮을수록 좋음, 마이너스일 수 있음)를
   // 그대로 보여주면 "왜 마이너스냐"는 혼란이 생긴다는 피드백으로, 첫눈에 보이는
   // 숫자는 항상 0~100 양수로 통일한다.
   const completionRate = summary && summary.total > 0 ? summary.placed / summary.total : 0;
@@ -78,7 +81,7 @@ export default function SummaryCard() {
         </strong>
       </div>
       <div className={styles.row}>
-        <span>평균 점수</span>
+        <span>배치 품질</span>
         <strong>
           {summary ? (scoreGrade ? `${scoreGrade.pct.toFixed(0)}점` : "-") : "-"}
           {scoreGrade && (

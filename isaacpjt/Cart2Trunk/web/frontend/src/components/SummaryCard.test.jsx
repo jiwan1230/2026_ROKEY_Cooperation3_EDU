@@ -35,7 +35,7 @@ describe("SummaryCard", () => {
     expect(screen.getByText("우수", { selector: '[data-grade="우수"]' })).toBeInTheDocument();
   });
 
-  it("shows an average-score grade badge next to 평균 점수 when all placed boxes use the weighted formula", async () => {
+  it("shows a grade badge next to 배치 품질 when all placed boxes use the weighted formula", async () => {
     const payload = {
       log_lines: [],
       placed: [
