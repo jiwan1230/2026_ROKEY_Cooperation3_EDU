@@ -1,15 +1,14 @@
-// src/components/RobotControlPanel.jsx
-// 로봇 제어 탭 - 2x2 그리드(트렁크/카트 Scan 위, 카메라+Pick&Place+관제
-// 로그 아래). 관제 로그 상태를 여기서 소유하고, 자식들이 onLog로 보고하는
-// 이벤트를 시간순으로 쌓는다.
+// src/components/ScanningPanel.jsx
+// "스캐닝" 탭 - 트렁크/카트 Scan 뷰어 두 개 + 관제 로그만 보여준다(예전
+// RobotControlPanel의 카메라/Pick&Place는 "픽앤플레이스" 탭으로 옮겼다,
+// PickAndPlaceTab.jsx 참고). 관제 로그 상태는 여기서 소유하고, 두 스캔
+// 패널이 onLog로 보고하는 이벤트를 시간순으로 쌓는다.
 import { useState } from "react";
 import ScanViewerPanel from "./ScanViewerPanel.jsx";
-import PickPlacePanel from "./PickPlacePanel.jsx";
-import CameraPreviewPanel from "./CameraPreviewPanel.jsx";
 import RobotLogPanel from "./RobotLogPanel.jsx";
-import styles from "./RobotControlPanel.module.css";
+import styles from "./ScanningPanel.module.css";
 
-export default function RobotControlPanel() {
+export default function ScanningPanel() {
   const [logs, setLogs] = useState([]);
 
   const appendLog = (message) => {
@@ -21,8 +20,6 @@ export default function RobotControlPanel() {
     <div className={styles.panel}>
       <div className={styles.trunk}><ScanViewerPanel kind="trunk" onLog={appendLog} /></div>
       <div className={styles.cart}><ScanViewerPanel kind="cart" onLog={appendLog} /></div>
-      <div className={styles.camera}><CameraPreviewPanel /></div>
-      <div className={styles.pick}><PickPlacePanel onLog={appendLog} /></div>
       <div className={styles.log}><RobotLogPanel logs={logs} /></div>
     </div>
   );

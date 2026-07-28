@@ -1,0 +1,15 @@
+/* src/components/PickAndPlaceTab.module.css */
+.panel {
+  display: grid; gap: 16px; padding: 20px; flex: 1; min-height: 0;
+  grid-template-columns: 1fr 1fr;
+  grid-template-areas: "camera pick";
+}
+.camera { grid-area: camera; min-height: 0; }
+.pick { grid-area: pick; min-height: 0; }
+
+@media (max-width: 900px) {
+  .panel {
+    grid-template-columns: 1fr;
+    grid-template-areas: "camera" "pick";
+  }
+}

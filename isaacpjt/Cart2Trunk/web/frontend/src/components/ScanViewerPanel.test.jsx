@@ -6,7 +6,21 @@ import * as client from "../api/client.js";
 // <Canvas>는 실제 WebGL이 필요해서 jsdom에서 직접 렌더링하지 않는 프로젝트
 // 관례(Scene3DViewer.jsx)를 따르되, 이 컴포넌트의 상태 전이/토글 로직은
 // r3f 프리미티브를 간단한 div로 대체해서 검증한다.
-vi.mock("@react-three/fiber", () => ({ Canvas: ({ children }) => <div data-testid="canvas">{children}</div> }));
+vi.mock("@react-three/fiber", () => {
+  // RealPointCloud가 로드 후 카메라를 자동으로 맞추려고 useThree()의
+  // camera/controls를 쓴다 - 매 호출마다 새 객체를 반환하면 그 참조가
+  // useEffect 의존성 배열([url, camera, controls])에 걸려 렌더마다 effect가
+  // 다시 돌면서 무한 루프가 난다(실제 r3f는 store에서 안정적인 참조를 주지만,
+  // 이 스텁은 클로저에 고정된 같은 객체를 계속 반환해야 그 안정성을 흉내낼
+  // 수 있다). 호출만 안 터지면 되므로 최소한의 체이닝 가능한 스텁만 제공한다.
+  const fakeCamera = {
+    fov: 50, position: { set: () => {} }, near: 0.1, far: 1000, updateProjectionMatrix: () => {},
+  };
+  return {
+    Canvas: ({ children }) => <div data-testid="canvas">{children}</div>,
+    useThree: () => ({ camera: fakeCamera, controls: null }),
+  };
+});
 vi.mock("@react-three/drei", () => ({ Grid: () => null, OrbitControls: () => null }));
 vi.mock("./sceneMeshes.jsx", () => ({
   toThreeCenter: () => [0, 0, 0],
@@ -21,14 +35,16 @@ vi.mock("three/examples/jsm/loaders/PLYLoader.js", () => ({
   PLYLoader: class {
     parse() {
       // ScanViewerPanel의 RealPointCloud가 로드 직후 좌표축 순환 치환
-      // (applyMatrix4) + 바닥 정렬(computeBoundingBox/translate)을 호출하므로
-      // 실제 THREE.BufferGeometry가 갖는 이 메서드들을 최소한으로 흉내낸다.
+      // (applyMatrix4) + 바닥 정렬(computeBoundingBox/translate) + 카메라
+      // 자동 맞춤(boundingSphere)을 호출하므로 실제 THREE.BufferGeometry가
+      // 갖는 이 메서드들을 최소한으로 흉내낸다.
       return {
         applyMatrix4: () => {},
         computeBoundingBox: () => {},
         computeBoundingSphere: () => {},
         translate: () => {},
         boundingBox: { min: { y: 0 }, max: { y: 0 } },
+        boundingSphere: { center: { x: 0, y: 0, z: 0 }, radius: 1 },
       };
     }
   },
@@ -37,7 +53,7 @@ vi.mock("three/examples/jsm/loaders/PLYLoader.js", () => ({
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 describe("ScanViewerPanel", () => {
-  it("완료 전에는 3D 콘텐츠가 안 보이다가, 완료되면 기본(원본) 콘텐츠가 나타난다", async () => {
+  it("완료 전에는 3D 콘텐츠가 안 보이다가, 완료되면 기본(전처리) 콘텐츠가 나타난다", async () => {
     vi.spyOn(client, "postTrunkScan").mockResolvedValue({ status: "ok", dummy: true, message: "트렁크 스캔 완료" });
 
     render(<ScanViewerPanel kind="trunk" />);
@@ -50,8 +66,8 @@ describe("ScanViewerPanel", () => {
     expect(screen.getByTestId("trigger-trunk")).toBeDisabled();
 
     await waitFor(() => expect(screen.getByTestId("status-trunk").textContent).toBe("완료"));
-    expect(screen.getByTestId("raw-mesh")).toBeInTheDocument();
-    expect(screen.queryByTestId("trunk-mesh")).toBeNull();
+    expect(screen.getByTestId("trunk-mesh")).toBeInTheDocument();
+    expect(screen.queryByTestId("raw-mesh")).toBeNull();
   });
 
   it("전처리 토글을 누르면 완료 후 디테일 렌더링(TrunkWireframe)으로 바뀐다", async () => {
@@ -143,7 +159,7 @@ describe("ScanViewerPanel", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it("트렁크 스캔 응답에 raw_url이 있으면 (기본값인) 원본 모드에서 실제 PLY를 불러와 렌더링하고, 더미 BoundingBox는 안 쓴다", async () => {
+  it("트렁크 스캔 응답에 raw_url이 있으면 원본 토글에서 실제 PLY를 불러와 렌더링하고, 더미 BoundingBox는 안 쓴다", async () => {
     vi.spyOn(client, "postTrunkScan").mockResolvedValue({
       status: "ok", message: "트렁크 스캔 완료",
       url: "/api/robot/trunk-scan-file/trunk_scan_test.ply",
@@ -155,7 +171,8 @@ describe("ScanViewerPanel", () => {
     fireEvent.click(screen.getByTestId("trigger-trunk"));
     await waitFor(() => expect(screen.getByTestId("status-trunk").textContent).toBe("완료"));
 
-    // 원본 토글이 기본 선택값이라 따로 클릭할 필요 없음.
+    // 전처리가 기본값이라(2026-07-28) 원본을 보려면 토글을 눌러야 한다.
+    fireEvent.click(screen.getByTestId("trunk-viewmode-raw"));
     await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith("/api/robot/trunk-scan-file/trunk_scan_raw_test.ply"));
     expect(screen.queryByTestId("raw-mesh")).toBeNull();
   });
@@ -172,6 +189,7 @@ describe("ScanViewerPanel", () => {
     fireEvent.click(screen.getByTestId("trigger-cart"));
     await waitFor(() => expect(screen.getByTestId("status-cart").textContent).toBe("완료"));
 
+    fireEvent.click(screen.getByTestId("cart-viewmode-raw"));
     await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith("/api/robot/cart-scan-file/cart_scan_raw_test.ply"));
     expect(screen.queryByTestId("raw-mesh")).toBeNull();
   });
@@ -187,10 +205,11 @@ describe("ScanViewerPanel", () => {
     render(<ScanViewerPanel kind="trunk" />);
     fireEvent.click(screen.getByTestId("trigger-trunk"));
     await waitFor(() => expect(screen.getByTestId("status-trunk").textContent).toBe("완료"));
-    await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith("/api/robot/trunk-scan-file/raw.ply"));
-
-    fireEvent.click(screen.getByTestId("trunk-viewmode-processed"));
+    // 전처리가 기본값이라 따로 안 눌러도 processed.ply부터 불러온다.
     await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith("/api/robot/trunk-scan-file/processed.ply"));
+
+    fireEvent.click(screen.getByTestId("trunk-viewmode-raw"));
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith("/api/robot/trunk-scan-file/raw.ply"));
   });
 
   it("실패하면 onLog가 오류 메시지로 호출된다", async () => {
