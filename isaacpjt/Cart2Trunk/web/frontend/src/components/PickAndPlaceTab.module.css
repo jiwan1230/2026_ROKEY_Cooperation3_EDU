@@ -1,15 +1,9 @@
 /* src/components/PickAndPlaceTab.module.css */
 .panel {
   display: grid; gap: 16px; padding: 20px; flex: 1; min-height: 0;
-  grid-template-columns: 1fr 1fr;
-  grid-template-areas: "camera pick";
+  grid-template-columns: 1fr;
+  grid-template-rows: 3fr 2fr;
+  grid-template-areas: "pick" "camera";
 }
-.camera { grid-area: camera; min-height: 0; }
 .pick { grid-area: pick; min-height: 0; }
-
-@media (max-width: 900px) {
-  .panel {
-    grid-template-columns: 1fr;
-    grid-template-areas: "camera" "pick";
-  }
-}
+.camera { grid-area: camera; min-height: 0; }

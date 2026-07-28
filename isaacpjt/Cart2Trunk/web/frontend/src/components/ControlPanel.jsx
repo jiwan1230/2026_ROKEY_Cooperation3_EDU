@@ -28,6 +28,10 @@ export default function ControlPanel() {
   // 무작위 생성 개수는 계산에 쓰이는 파라미터가 아니라(생성 시점에만 쓰는
   // 입력값) 전역 리듀서가 아닌 이 컴포넌트 로컬 상태로 둔다.
   const [randomBoxCount, setRandomBoxCount] = useState(6);
+  // 적재 모드/마진/우선순위/체크박스(총 13개 입력)를 항상 펼쳐두면 왼쪽
+  // 바가 버튼/입력으로 꽉 차 복잡해 보인다는 피드백 - 자주 안 바꾸는
+  // 세부 옵션이라 기본은 접어두고, 필요할 때만 펼친다.
+  const [advancedOpen, setAdvancedOpen] = useState(false);
 
   const setParam = (key, value) => dispatch({ type: "SET_PARAM", payload: { key, value } });
 
@@ -55,24 +59,37 @@ export default function ControlPanel() {
         </select>
       </section>
 
-      <section className={styles.section}>
-        <label className={styles.label}>적재 모드</label>
-        <div className={styles.segmented}>
-          {[["large_first", "큰 것 우선"], ["count_first", "개수 우선"]].map(([value, text]) => (
-            <button
-              key={value}
-              type="button"
-              disabled={locked}
-              className={state.params.mode === value ? styles.segmentActive : styles.segment}
-              onClick={() => setParam("mode", value)}
-            >
-              {text}
-            </button>
-          ))}
-        </div>
-      </section>
+      <button
+        type="button"
+        className={styles.advancedToggle}
+        data-testid="advanced-toggle"
+        onClick={() => setAdvancedOpen((open) => !open)}
+      >
+        고급 설정(적재 모드·마진·우선순위) {advancedOpen ? "숨기기 ▴" : "보기 ▾"}
+      </button>
 
-      <PlanParamFields />
+      {advancedOpen && (
+        <>
+          <section className={styles.section}>
+            <label className={styles.label}>적재 모드</label>
+            <div className={styles.segmented}>
+              {[["large_first", "큰 것 우선"], ["count_first", "개수 우선"]].map(([value, text]) => (
+                <button
+                  key={value}
+                  type="button"
+                  disabled={locked}
+                  className={state.params.mode === value ? styles.segmentActive : styles.segment}
+                  onClick={() => setParam("mode", value)}
+                >
+                  {text}
+                </button>
+              ))}
+            </div>
+          </section>
+
+          <PlanParamFields />
+        </>
+      )}
 
       <section className={styles.section}>
         <label className={styles.label}>박스 목록 (JSON)</label>

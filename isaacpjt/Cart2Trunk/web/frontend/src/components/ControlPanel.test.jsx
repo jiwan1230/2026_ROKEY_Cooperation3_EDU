@@ -21,6 +21,8 @@ describe("ControlPanel", () => {
         <ModeProbe />
       </PlannerProvider>,
     );
+    // 적재 모드는 "고급 설정" 아래 접혀있다(2026-07-28, 왼쪽 바 간략화) - 먼저 펼친다.
+    await userEvent.click(screen.getByTestId("advanced-toggle"));
     await userEvent.click(screen.getByText("개수 우선"));
     expect(screen.getByTestId("mode").textContent).toBe("count_first");
   });

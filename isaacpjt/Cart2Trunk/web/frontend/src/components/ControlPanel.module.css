@@ -48,6 +48,11 @@
 
 .toggleRow { display: flex; align-items: center; gap: 8px; font-size: 13px; }
 
+.advancedToggle {
+  align-self: flex-start; border: none; background: transparent; padding: 4px 0;
+  font-size: 12px; font-weight: 700; color: var(--color-accent); cursor: pointer;
+}
+
 .actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .actions button {
   flex: 1; min-width: 100px; padding: 10px; border-radius: 8px; border: none;
