@@ -13,7 +13,7 @@
    화면(랩탑 등)에서는 옆으로 나란히 두면 둘 다 너무 좁아지므로 세로로
    다시 쌓는다. */
 .topRow { display: flex; gap: 12px; align-items: stretch; flex: 1 1 auto; min-height: 0; }
-.leftColumn { flex: 0 0 260px; display: flex; flex-direction: column; gap: 10px; min-height: 0; overflow-y: auto; }
+.leftColumn { flex: 0 0 280px; display: flex; flex-direction: column; gap: 10px; min-height: 0; overflow-y: auto; }
 .topRow > :last-child { flex: 1; min-width: 0; min-height: 0; }
 
 /* 박스 상세 조회(왼쪽) + 결과 로그(오른쪽) - 예전엔 결과 로그가 왼쪽 칸

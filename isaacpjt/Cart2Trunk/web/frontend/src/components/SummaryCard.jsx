@@ -89,16 +89,23 @@ export default function SummaryCard() {
       )}
       {scoreGrade && (
         <div className={styles.criteria}>
-          점수 등급: {uniformFormula === "weighted" ? "지금 우선순위 설정" : "지금 트렁크 크기"} 기준 이론상 최선~최악 범위 중 상위 {scoreGrade.pct.toFixed(0)}%
+          점수 등급: {uniformFormula === "weighted" ? "지금 우선순위 설정" : "지금 트렁크 크기"} 기준
+          최선~최악 범위 중 상위 <span>{scoreGrade.pct.toFixed(0)}%</span>
         </div>
       )}
       <div className={styles.row}><span>계산 시간</span><strong>{summary ? `${summary.calc_time_ms.toFixed(0)}ms` : "-"}</strong></div>
       <div className={styles.status}>상태: {STATUS_LABEL[state.planState]}</div>
       {summary && (
         <div className={styles.criteria}>
-          <div>공간 활용률 기준: 22%↑ 우수 · 14~22% 양호 · 8~14% 보통 · 8%↓ 개선 필요</div>
+          <div className={styles.criteriaLabel}>공간 활용률 등급 기준</div>
+          <ul className={styles.thresholdList}>
+            <li><span>우수</span><span>22% 이상</span></li>
+            <li><span>양호</span><span>14% ~ 22%</span></li>
+            <li><span>보통</span><span>8% ~ 14%</span></li>
+            <li><span>개선 필요</span><span>8% 미만</span></li>
+          </ul>
           <div className={styles.criteriaNote}>
-            (박스를 전부 실어도 트렁크 규모상 활용률이 높게 나오기 어려움 - 실측 기준)
+            박스를 전부 실어도 트렁크 규모상 활용률이 높게 나오기 어려움(실측 기준)
           </div>
         </div>
       )}
