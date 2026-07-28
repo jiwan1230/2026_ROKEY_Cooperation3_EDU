@@ -72,7 +72,7 @@ export default function BoxDetailPanel() {
                 <p className={styles.gradeCaption}>
                   점수 등급: {selected.score_breakdown.formula === "weighted"
                     ? "지금 우선순위 설정"
-                    : "지금 트렁크 크기"} 기준 최악을 0점, 최선을 100점으로 봤을 때 {grade.pct.toFixed(0)}점 위치
+                    : "지금 트렁크 크기"} 기준 최악을 0점, 최선을 100점으로 봤을 때 {grade.pct.toFixed(0)}점
                 </p>
               )}
               {/* score_breakdown.formula: "count_first" 모드는 내부적으로 서로 다른 두 채점

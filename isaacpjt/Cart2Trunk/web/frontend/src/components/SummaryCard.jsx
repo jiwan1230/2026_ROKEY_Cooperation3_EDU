@@ -106,7 +106,7 @@ export default function SummaryCard() {
               피드백으로 "상위" 표현을 빼고 "몇 점 위치"로 바꿨다
               (2026-07-28). */}
           배치 품질: {uniformFormula === "weighted" ? "지금 우선순위 설정" : "지금 트렁크 크기"} 기준
-          최악을 0점, 최선을 100점으로 봤을 때 <span>{scoreGrade.pct.toFixed(0)}점</span> 위치
+          최악을 0점, 최선을 100점으로 봤을 때 <span>{scoreGrade.pct.toFixed(0)}점</span>
         </div>
       )}
       {advancedOpen && summary && (
