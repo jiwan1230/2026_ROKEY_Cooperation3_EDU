@@ -66,10 +66,13 @@ export default function BoxDetailPanel() {
                 )}
               </p>
               {grade && (
+                // "상위 N%"는 석차 표현(작을수록 좋음)이라 - 100에 가까울수록
+                // 좋은 이 값(최악=0점, 최선=100점)과 방향이 반대라 헷갈린다는
+                // 피드백으로 "상위" 표현을 빼고 "몇 점 위치"로 바꿨다(2026-07-28).
                 <p className={styles.gradeCaption}>
                   점수 등급: {selected.score_breakdown.formula === "weighted"
                     ? "지금 우선순위 설정"
-                    : "지금 트렁크 크기"} 기준 이론상 최선~최악 범위 중 상위 {grade.pct.toFixed(0)}%
+                    : "지금 트렁크 크기"} 기준 최악을 0점, 최선을 100점으로 봤을 때 {grade.pct.toFixed(0)}점 위치
                 </p>
               )}
               {/* score_breakdown.formula: "count_first" 모드는 내부적으로 서로 다른 두 채점

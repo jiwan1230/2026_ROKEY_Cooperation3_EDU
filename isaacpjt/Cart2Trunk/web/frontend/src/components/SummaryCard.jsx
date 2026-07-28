@@ -101,8 +101,12 @@ export default function SummaryCard() {
       )}
       {advancedOpen && scoreGrade && (
         <div className={styles.criteria}>
+          {/* "상위 N%"는 석차 표현(작을수록 좋음)이라 - 100에 가까울수록
+              좋은 이 값(최악=0점, 최선=100점)과 방향이 반대라 헷갈린다는
+              피드백으로 "상위" 표현을 빼고 "몇 점 위치"로 바꿨다
+              (2026-07-28). */}
           배치 품질: {uniformFormula === "weighted" ? "지금 우선순위 설정" : "지금 트렁크 크기"} 기준
-          최선~최악 범위 중 상위 <span>{scoreGrade.pct.toFixed(0)}%</span>
+          최악을 0점, 최선을 100점으로 봤을 때 <span>{scoreGrade.pct.toFixed(0)}점</span> 위치
         </div>
       )}
       {advancedOpen && summary && (
