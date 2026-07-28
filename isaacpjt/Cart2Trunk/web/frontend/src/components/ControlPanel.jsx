@@ -61,34 +61,58 @@ export default function ControlPanel() {
         </select>
       </section>
 
+      {/* 적재 모드 토글과 무작위 생성 버튼은 자주 만지는 조작이라(사용자
+          요청, 2026-07-28) 고급 설정 밖으로 뺐다 - 매번 펼치지 않고도 바로
+          쓸 수 있어야 한다는 피드백. */}
+      <section className={styles.section}>
+        <label className={styles.label}>적재 모드</label>
+        <div className={styles.segmented}>
+          {[["large_first", "큰 것 우선"], ["count_first", "개수 우선"]].map(([value, text]) => (
+            <button
+              key={value}
+              type="button"
+              disabled={locked}
+              className={state.params.mode === value ? styles.segmentActive : styles.segment}
+              onClick={() => setParam("mode", value)}
+            >
+              {text}
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <div className={styles.generateRow}>
+        <input
+          type="number"
+          min={1}
+          max={50}
+          className={styles.boxCountInput}
+          disabled={locked}
+          value={randomBoxCount}
+          data-testid="box-count-input"
+          onChange={(e) => {
+            const n = Math.round(Number(e.target.value));
+            setRandomBoxCount(Number.isFinite(n) ? Math.min(50, Math.max(1, n)) : 1);
+          }}
+        />
+        <button type="button" disabled={locked} onClick={() => dispatch({
+          type: "GENERATE_RANDOM_BOXES", payload: generateRandomBoxes(randomBoxCount),
+        })}>
+          무작위 {randomBoxCount}개 생성
+        </button>
+      </div>
+
       <button
         type="button"
         className={styles.advancedToggle}
         data-testid="advanced-toggle"
         onClick={() => setAdvancedOpen((open) => !open)}
       >
-        고급 설정(적재 모드·우선순위·박스 목록) {advancedOpen ? "숨기기 ▴" : "보기 ▾"}
+        고급 설정(우선순위·박스 목록 JSON) {advancedOpen ? "숨기기 ▴" : "보기 ▾"}
       </button>
 
       {advancedOpen && (
         <>
-          <section className={styles.section}>
-            <label className={styles.label}>적재 모드</label>
-            <div className={styles.segmented}>
-              {[["large_first", "큰 것 우선"], ["count_first", "개수 우선"]].map(([value, text]) => (
-                <button
-                  key={value}
-                  type="button"
-                  disabled={locked}
-                  className={state.params.mode === value ? styles.segmentActive : styles.segment}
-                  onClick={() => setParam("mode", value)}
-                >
-                  {text}
-                </button>
-              ))}
-            </div>
-          </section>
-
           <PlanParamFields />
 
           <section className={styles.section}>
@@ -100,26 +124,6 @@ export default function ControlPanel() {
                 <span className={styles.fieldLabel}>{state.boxSnapshotId}</span>
               </div>
             )}
-            <div className={styles.generateRow}>
-              <input
-                type="number"
-                min={1}
-                max={50}
-                className={styles.boxCountInput}
-                disabled={locked}
-                value={randomBoxCount}
-                data-testid="box-count-input"
-                onChange={(e) => {
-                  const n = Math.round(Number(e.target.value));
-                  setRandomBoxCount(Number.isFinite(n) ? Math.min(50, Math.max(1, n)) : 1);
-                }}
-              />
-              <button type="button" disabled={locked} onClick={() => dispatch({
-                type: "GENERATE_RANDOM_BOXES", payload: generateRandomBoxes(randomBoxCount),
-              })}>
-                무작위 {randomBoxCount}개 생성
-              </button>
-            </div>
             <textarea
               className={styles.boxEditor}
               data-testid="box-editor"
