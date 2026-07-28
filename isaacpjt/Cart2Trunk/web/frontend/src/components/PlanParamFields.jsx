@@ -5,6 +5,7 @@
 // usePlannerState/usePlannerDispatch로 컨텍스트에서 직접 읽고 쓰므로 props가
 // 필요 없다 - 어느 탭의 PlannerProvider 아래 렌더링되는지에 따라 자동으로
 // 그 탭의 상태에 연결된다.
+import { useEffect, useRef, useState } from "react";
 import { usePlannerDispatch, usePlannerState } from "../state/PlannerContext.jsx";
 import styles from "./ControlPanel.module.css";
 
@@ -13,6 +14,7 @@ const PREFERENCE_FIELDS = [
   { key: "contactPreference", label: "공간활용 ↔ 안정성", min: 0, max: 2, step: 0.1 },
   { key: "heightPreference", label: "바닥부터 채우기 강도", min: 0, max: 2, step: 0.1 },
 ];
+const DEFAULT_PREFERENCE = 1.0;
 
 export default function PlanParamFields() {
   const state = usePlannerState();
@@ -21,8 +23,41 @@ export default function PlanParamFields() {
 
   const setParam = (key, value) => dispatch({ type: "SET_PARAM", payload: { key, value } });
 
+  // "개수 우선" 모드의 기본 채점 공식(트렁크 크기 기준)은 우선순위 슬라이더를
+  // 아예 안 쓴다 - 그래서 슬라이더를 기본값(1.0)에서 하나라도 움직이면
+  // 백엔드가 조용히 우선순위 기준 채점(weighted 공식)으로 바꿔치기한다
+  // (08_unloadable_reason.py). 막지는 않되(정당한 조합 - "많이 담되 입구는
+  // 신경써줘" 같은 요청), 이 전환이 일어나는 순간만 짧게 알려준다 - 계속
+  // 떠있지 않고 "확인" 누르면 사라짐, 조건이 새로 발생할 때만 다시 뜬다.
+  const isCountFirstOverridden = state.params.mode === "count_first" && (
+    state.params.entrancePreference !== DEFAULT_PREFERENCE ||
+    state.params.contactPreference !== DEFAULT_PREFERENCE ||
+    state.params.heightPreference !== DEFAULT_PREFERENCE
+  );
+  const [noticeVisible, setNoticeVisible] = useState(false);
+  const wasOverriddenRef = useRef(false);
+
+  useEffect(() => {
+    if (isCountFirstOverridden && !wasOverriddenRef.current) {
+      setNoticeVisible(true);
+    } else if (!isCountFirstOverridden) {
+      setNoticeVisible(false);
+    }
+    wasOverriddenRef.current = isCountFirstOverridden;
+  }, [isCountFirstOverridden]);
+
   return (
     <>
+      {noticeVisible && (
+        <div className={styles.notice} data-testid="count-first-override-notice">
+          <p>
+            "개수 우선" 모드에서 우선순위를 조정하면, 트렁크 크기 기준 채점
+            대신 지금 설정한 우선순위 기준 채점으로 전환됩니다.
+          </p>
+          <button type="button" onClick={() => setNoticeVisible(false)}>확인</button>
+        </div>
+      )}
+
       <section className={styles.section}>
         <label className={styles.label}>우선순위</label>
         {PREFERENCE_FIELDS.map(({ key, label, min, max, step }) => (

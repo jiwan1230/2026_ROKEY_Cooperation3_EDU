@@ -53,6 +53,19 @@
   font-size: 12px; font-weight: 700; color: var(--color-accent); cursor: pointer;
 }
 
+/* "개수 우선" 모드에서 우선순위 슬라이더를 만지면 채점 기준이 조용히
+   바뀐다는 걸 짧게 알려주는 배너 - 막지는 않고 알려주기만 하고, "확인"
+   누르면 사라진다. */
+.notice {
+  background: #FFF6DE; border: 1px solid #F0D68A; border-radius: 8px;
+  padding: 10px 12px; display: flex; flex-direction: column; gap: 8px;
+}
+.notice p { margin: 0; font-size: 12.5px; line-height: 1.5; color: #7A5B00; }
+.notice button {
+  align-self: flex-end; border: none; border-radius: 6px; padding: 5px 14px;
+  background: #B98900; color: white; font-size: 12px; font-weight: 700; cursor: pointer;
+}
+
 .actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .actions button {
   flex: 1; min-width: 100px; padding: 10px; border-radius: 8px; border: none;
