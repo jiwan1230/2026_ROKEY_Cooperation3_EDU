@@ -56,11 +56,24 @@ def _run_client_subprocess(cmd: str, label: str, timeout_sec: int) -> dict:
             f"{label} 서브프로세스가 출력이 없습니다(returncode={proc.returncode}). "
             f"stderr 마지막 부분: {proc.stderr[-500:]}")
 
-    try:
-        result = json.loads(stdout_lines[-1])
-    except json.JSONDecodeError as e:
+    # 클라이언트 스크립트 자신은 항상 stdout 마지막 줄에 JSON 한 줄을 찍지만,
+    # (서비스에 연결 못 해 sys.exit(1)로 정상 종료하는 경우처럼) 비정상
+    # 종료로 보이면 `ros2 run`이 그 뒤에 자기 트레일러 메시지("[ros2run]:
+    # Process exited with failure N")를 stdout 마지막 줄로 덧붙인다 - 실측
+    # 확인(send_placement_plan_client가 서비스 미연결로 _fail()을 정상 출력
+    # 했는데도, 진짜 오류 메시지 대신 이 트레일러 때문에 "JSON 파싱 실패"로만
+    # 보였다). 뒤에서부터 실제로 JSON으로 파싱되는 줄을 찾는다.
+    result = None
+    for line in reversed(stdout_lines):
+        try:
+            result = json.loads(line)
+            break
+        except json.JSONDecodeError:
+            continue
+
+    if result is None:
         raise RuntimeError(
-            f"{label} 결과를 JSON으로 파싱할 수 없습니다: {stdout_lines[-1]!r} ({e})") from e
+            f"{label} 결과를 JSON으로 파싱할 수 없습니다: {stdout_lines[-1]!r}")
 
     if not result.get("success"):
         raise RuntimeError(result.get("message", f"{label} 실패(원인 불명)"))
