@@ -61,6 +61,52 @@ describe("layoutStagingBoxes", () => {
     const [, small] = layoutStagingBoxes(boxes, trunk);
     expect(small.position[1]).toBeCloseTo(0.55); // spanOffset 0.45 + (0.4-0.2)/2 정렬 여백 0.1
   });
+
+  // [사용자 피드백 - 2026-07-28] "medium/small 박스가 large 박스 위에 생성이
+  // 되진 않잖아" - 실제 카트 스캔에서 rests_on_id(vision_adapter.py가
+  // corners_m로 기하학적으로 계산)가 채워지는데, 그리드 배치가 이걸 무시하고
+  // 있었다.
+  it("stacks a box directly on top of the box it rests_on_id references, centered on its footprint", () => {
+    const boxes = [
+      { id: "Large", width: 0.5, depth: 0.35, height: 0.3, rests_on_id: null },
+      { id: "Small", width: 0.2, depth: 0.15, height: 0.1, rests_on_id: "Large" },
+    ];
+    const [large, small] = layoutStagingBoxes(boxes, trunk);
+    expect(large.position[2]).toBe(0); // 부모는 격자(바닥)에 배치
+    expect(small.position[0]).toBeCloseTo(large.position[0] + (large.dimensions[0] - small.dimensions[0]) / 2);
+    expect(small.position[1]).toBeCloseTo(large.position[1] + (large.dimensions[1] - small.dimensions[1]) / 2);
+    expect(small.position[2]).toBeCloseTo(large.position[2] + large.dimensions[2]); // 딱 붙어서 얹힘
+  });
+
+  it("resolves multi-level stacking (box on box on box) in dependency order", () => {
+    const boxes = [
+      { id: "Small", width: 0.15, depth: 0.15, height: 0.08, rests_on_id: "Medium" },
+      { id: "Large", width: 0.5, depth: 0.35, height: 0.3, rests_on_id: null },
+      { id: "Medium", width: 0.3, depth: 0.25, height: 0.15, rests_on_id: "Large" },
+    ];
+    const staged = layoutStagingBoxes(boxes, trunk);
+    const byId = Object.fromEntries(staged.map((b) => [b.id, b]));
+    expect(byId.Medium.position[2]).toBeCloseTo(byId.Large.position[2] + byId.Large.dimensions[2]);
+    expect(byId.Small.position[2]).toBeCloseTo(byId.Medium.position[2] + byId.Medium.dimensions[2]);
+  });
+
+  it("does not stack a box whose rests_on_id points outside the current box list (e.g. already loaded)", () => {
+    // 이미 트렁크에 실려서 카트 목록에서 빠진 박스를 가리키면 안전하게
+    // 바닥(격자)으로 취급해야 한다 - 부모가 없다고 화면에서 사라지면 안 됨.
+    const boxes = [{ id: "Orphan", width: 0.2, depth: 0.2, height: 0.1, rests_on_id: "AlreadyLoaded" }];
+    const [staged] = layoutStagingBoxes(boxes, trunk);
+    expect(staged.position[2]).toBe(0);
+  });
+
+  it("treats boxes without rests_on_id exactly as before (no accidental stacking)", () => {
+    const boxes = [
+      { id: "A", width: 0.2, depth: 0.2, height: 0.1 },
+      { id: "B", width: 0.2, depth: 0.2, height: 0.1, rests_on_id: null },
+    ];
+    const staged = layoutStagingBoxes(boxes, trunk);
+    staged.forEach((b) => expect(b.position[2]).toBe(0));
+    expect(staged[0].position[1]).not.toBe(staged[1].position[1]); // 서로 다른 칸(span 방향)에 배정됨
+  });
 });
 
 describe("computeCartFootprint", () => {
