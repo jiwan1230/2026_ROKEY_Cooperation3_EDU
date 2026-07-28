@@ -3,6 +3,7 @@ import { useCallback, useRef, useState } from "react";
 import { PlannerProvider, usePlannerDispatch } from "./state/PlannerContext.jsx";
 import { useResourceLoader } from "./hooks/useResourceLoader.js";
 import { useDebouncedPlan } from "./hooks/useDebouncedPlan.js";
+import { useScenarioPreview } from "./hooks/useScenarioPreview.js";
 import Header from "./components/Header.jsx";
 import TabBar from "./components/TabBar.jsx";
 import ControlPanel from "./components/ControlPanel.jsx";
@@ -37,10 +38,16 @@ function PlanningBody({ ControlComponent, showScenarios }) {
   // 탭 2개로 확장).
   useResourceLoader();
   useDebouncedPlan();
+  // SummaryCard(시나리오 안내 문구)·ControlComponent(파라미터 잠금)·
+  // Scene3DViewer(3D 미리보기) 셋 다 필요해서 공통 부모인 여기서 한 번만
+  // 만들어 내려준다 - PlannerContext(state.result)와는 별개라 지금 작업
+  // 중인 실시간 계획은 안 건드린다. "실시간 제어" 탭(showScenarios=false)은
+  // 시나리오 버튼 자체가 없어 activeScenarioId가 계속 null로만 남는다.
+  const scenario = useScenarioPreview();
 
   return (
     <div className={styles.body}>
-      <ControlComponent />
+      <ControlComponent activeScenarioId={scenario.activeScenarioId} />
       {/* 사용자 손그림 피드백 - 요약 카드("화면 1")는 좁게, 3D 뷰어("메인
           화면 - 2")는 넓게 나란히 배치한다. 예전엔 세로로 쌓아서 요약
           카드가 위쪽 공간을 다 차지하고 3D 뷰어(툴바+캔버스)가 스크롤을
@@ -51,9 +58,9 @@ function PlanningBody({ ControlComponent, showScenarios }) {
       <div className={styles.resultArea}>
         <div className={styles.topRow}>
           <div className={styles.leftColumn}>
-            <SummaryCard />
+            <SummaryCard activeScenarioId={scenario.activeScenarioId} />
           </div>
-          <Scene3DViewer showScenarios={showScenarios} />
+          <Scene3DViewer showScenarios={showScenarios} scenario={scenario} />
         </div>
         <div className={styles.bottomRow}>
           <BoxDetailPanel />

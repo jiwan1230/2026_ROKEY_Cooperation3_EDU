@@ -74,3 +74,11 @@
 .grade[data-grade="양호"] { background: #E6F1FF; color: var(--color-accent); }
 .grade[data-grade="보통"] { background: #FFF6DE; color: #B98900; }
 .grade[data-grade="개선 필요"] { background: #FFEEEC; color: var(--color-danger); }
+
+/* 산업현장 시나리오 미리보기 중 "왜 이 파라미터를 골랐는지" 안내 문구 -
+   요약 카드 맨 아래 빈 공간에 표시한다. */
+.scenarioNote {
+  margin-top: 8px; padding: 12px; border-radius: 10px; background: var(--color-canvas);
+  font-size: 13px; color: var(--color-text-primary); line-height: 1.5;
+}
+.scenarioNoteTitle { font-weight: 700; margin-bottom: 4px; }

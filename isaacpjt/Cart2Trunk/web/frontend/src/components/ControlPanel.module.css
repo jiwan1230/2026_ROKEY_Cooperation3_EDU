@@ -66,6 +66,13 @@
   background: #B98900; color: white; font-size: 12px; font-weight: 700; cursor: pointer;
 }
 
+/* 산업현장 시나리오 미리보기 중엔 아래 파라미터가 전부 잠긴다는 걸 알려주는
+   배너 - "확인" 후 사라지는 .notice와 달리 시나리오를 보는 내내 계속 떠있다. */
+.scenarioBanner {
+  background: #E6F1FF; border: 1px solid var(--color-accent); border-radius: 8px;
+  padding: 10px; font-size: 12px; color: var(--color-text-primary); line-height: 1.5;
+}
+
 .actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .actions button {
   flex: 1; min-width: 100px; padding: 10px; border-radius: 8px; border: none;

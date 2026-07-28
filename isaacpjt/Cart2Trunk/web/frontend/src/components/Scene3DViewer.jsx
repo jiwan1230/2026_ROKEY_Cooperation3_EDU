@@ -3,7 +3,6 @@ import { Canvas } from "@react-three/fiber";
 import { Grid, OrbitControls } from "@react-three/drei";
 import { usePlannerState } from "../state/PlannerContext.jsx";
 import { colorForBoxId } from "../utils/color.js";
-import { postScenarioPlan } from "../api/client.js";
 import {
   toThreeCenter, TrunkWireframe, computeCartFootprint, CartWireframe, SceneBoxMesh, layoutStagingBoxes,
   BoundingBoxWireframe,
@@ -55,39 +54,25 @@ const CAMERA_PRESETS = {
 // 피드백: "알고리즘 검증 탭에서 3D 뷰어에 있는 택배배송트럭 이런거는
 // 살려두고 실시간 제어 탭에서는 삭제해줘"). false여도 Before/After・카메라
 // 프리셋・순서대로 재생・카트 적재 시각화 등 나머지 로직은 전부 그대로다.
-export default function Scene3DViewer({ showScenarios = true }) {
+// scenario가 없을 때(예: 단독 렌더링하는 테스트)도 안전하게 동작하도록 완전
+// 비활성 상태의 기본값을 둔다 - 실제 앱에서는 항상 App.jsx가 useScenarioPreview()
+// 결과를 넘겨준다.
+const NOOP_SCENARIO = {
+  activeScenarioId: null, scenarioResult: null, scenarioError: null, scenarioLoading: false,
+  selectScenario: () => {}, randomizeScenario: () => {}, exitScenario: () => {},
+};
+
+// 산업현장 시나리오 미리보기 상태는 App.jsx의 PlanningBody가
+// useScenarioPreview()로 만들어서 SummaryCard(안내 문구)·ControlPanel(파라미터
+// 잠금)·이 컴포넌트 셋 다에 내려준다 - 여기서 로컬로 안 만드는 이유는 세
+// 컴포넌트가 같은 상태를 공유해야 하기 때문. state.result(지금 작업 중인
+// 계획)는 이 prop과 무관하게 전혀 안 건드린다.
+export default function Scene3DViewer({ showScenarios = true, scenario = NOOP_SCENARIO }) {
   const state = usePlannerState();
-
-  // 산업현장 시나리오 미리보기 - state.result(지금 작업 중인 계획)는 전혀
-  // 건드리지 않는 완전히 별도의 로컬 상태다. 활성화되면 effectiveResult가
-  // scenarioResult를 가리키게 되어, 아래 Before/After・카트 적재・순서대로
-  // 재생 로직을 실시간 계획과 완전히 동일하게 재사용한다("실시간 계획하고
-  // 똑같이 해줘야지"라는 사용자 피드백 반영 - 처음엔 별도의 단순 렌더링
-  // 경로를 따로 만들었었는데, 카트/Before/재생이 전부 빠져서 부족했다).
-  const [activeScenarioId, setActiveScenarioId] = useState(null);
-  const [scenarioResult, setScenarioResult] = useState(null);
-  const [scenarioError, setScenarioError] = useState(null);
-  const [scenarioLoading, setScenarioLoading] = useState(false);
-
-  const handleSelectScenario = async (id) => {
-    setScenarioLoading(true);
-    setScenarioError(null);
-    try {
-      const result = await postScenarioPlan(id);
-      setActiveScenarioId(id);
-      setScenarioResult(result);
-    } catch (err) {
-      setScenarioError(err.cause || err.message || "시나리오를 불러오지 못했습니다.");
-    } finally {
-      setScenarioLoading(false);
-    }
-  };
-
-  const handleExitScenario = () => {
-    setActiveScenarioId(null);
-    setScenarioResult(null);
-    setScenarioError(null);
-  };
+  const {
+    activeScenarioId, scenarioResult, scenarioError, scenarioLoading,
+    selectScenario, randomizeScenario, exitScenario,
+  } = scenario;
 
   // ControlPanel의 "무작위 N개 생성"(또는 프리셋 선택, 직접 수정)은
   // state.boxesText를 바꾸는데, 시나리오 미리보기 중엔 그게 화면에 전혀
@@ -98,7 +83,7 @@ export default function Scene3DViewer({ showScenarios = true }) {
   useEffect(() => {
     if (state.boxesText !== prevBoxesTextRef.current) {
       prevBoxesTextRef.current = state.boxesText;
-      if (activeScenarioId) handleExitScenario();
+      if (activeScenarioId) exitScenario();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.boxesText]);
@@ -264,13 +249,18 @@ export default function Scene3DViewer({ showScenarios = true }) {
                   type="button"
                   disabled={scenarioLoading}
                   className={activeScenarioId === s.id ? styles.scenarioActive : undefined}
-                  onClick={() => handleSelectScenario(s.id)}
+                  onClick={() => selectScenario(s.id)}
                 >
                   {s.label}
                 </button>
               ))}
               {activeScenarioId && (
-                <button type="button" onClick={handleExitScenario}>실시간 계획으로 돌아가기</button>
+                <>
+                  <button type="button" disabled={scenarioLoading} onClick={randomizeScenario}>
+                    🔀 무작위로 다시 생성
+                  </button>
+                  <button type="button" onClick={exitScenario}>실시간 계획으로 돌아가기</button>
+                </>
               )}
             </div>
           )}

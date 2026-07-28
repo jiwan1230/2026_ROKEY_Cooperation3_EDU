@@ -7,6 +7,7 @@
 // 그 탭의 상태에 연결된다.
 import { useEffect, useRef, useState } from "react";
 import { usePlannerDispatch, usePlannerState } from "../state/PlannerContext.jsx";
+import { scenarioParams } from "./scenarioTheme.js";
 import styles from "./ControlPanel.module.css";
 
 const PREFERENCE_FIELDS = [
@@ -16,10 +17,16 @@ const PREFERENCE_FIELDS = [
 ];
 const DEFAULT_PREFERENCE = 1.0;
 
-export default function PlanParamFields() {
+// activeScenarioId: 산업현장 시나리오(ControlPanel.jsx) 미리보기 중엔
+// 우선순위 슬라이더·체크박스도 실시간 계획 값(state.params) 대신 그
+// 시나리오의 고정값을 보여주고 잠근다 - "실시간 제어" 탭은 이 prop을 아예
+// 안 넘기므로(undefined) 기존 동작 그대로 유지된다.
+export default function PlanParamFields({ activeScenarioId } = {}) {
   const state = usePlannerState();
   const dispatch = usePlannerDispatch();
-  const locked = state.planState === "APPROVED";
+  const scenarioLocked = Boolean(activeScenarioId);
+  const locked = state.planState === "APPROVED" || scenarioLocked;
+  const displayParams = scenarioLocked ? scenarioParams(activeScenarioId) : state.params;
 
   const setParam = (key, value) => dispatch({ type: "SET_PARAM", payload: { key, value } });
 
@@ -29,7 +36,9 @@ export default function PlanParamFields() {
   // (08_unloadable_reason.py). 막지는 않되(정당한 조합 - "많이 담되 입구는
   // 신경써줘" 같은 요청), 이 전환이 일어나는 순간만 짧게 알려준다 - 계속
   // 떠있지 않고 "확인" 누르면 사라짐, 조건이 새로 발생할 때만 다시 뜬다.
-  const isCountFirstOverridden = state.params.mode === "count_first" && (
+  // 시나리오 미리보기 중엔 슬라이더가 항상 시나리오 고정값(기본 1.0)을
+  // 보여주므로 이 배너는 필요 없다.
+  const isCountFirstOverridden = !scenarioLocked && state.params.mode === "count_first" && (
     state.params.entrancePreference !== DEFAULT_PREFERENCE ||
     state.params.contactPreference !== DEFAULT_PREFERENCE ||
     state.params.heightPreference !== DEFAULT_PREFERENCE
@@ -62,12 +71,12 @@ export default function PlanParamFields() {
         <label className={styles.label}>우선순위</label>
         {PREFERENCE_FIELDS.map(({ key, label, min, max, step }) => (
           <div key={key} className={styles.fieldRow}>
-            <span className={styles.fieldLabel}>{label} ({Number(state.params[key]).toFixed(1)})</span>
+            <span className={styles.fieldLabel}>{label} ({Number(displayParams[key]).toFixed(1)})</span>
             <input
               type="range"
               min={min} max={max} step={step}
               disabled={locked}
-              value={state.params[key]}
+              value={displayParams[key]}
               onChange={(e) => setParam(key, Number(e.target.value))}
             />
           </div>
@@ -76,17 +85,17 @@ export default function PlanParamFields() {
 
       <section className={styles.section}>
         <label className={styles.toggleRow}>
-          <input type="checkbox" disabled={locked} checked={state.params.allowStacking}
+          <input type="checkbox" disabled={locked} checked={displayParams.allowStacking}
                  onChange={(e) => setParam("allowStacking", e.target.checked)} />
           2층 이상 쌓기 허용
         </label>
         <label className={styles.toggleRow}>
-          <input type="checkbox" disabled={locked} checked={state.params.allowRotation}
+          <input type="checkbox" disabled={locked} checked={displayParams.allowRotation}
                  onChange={(e) => setParam("allowRotation", e.target.checked)} />
           90도 회전 허용
         </label>
         <label className={styles.toggleRow}>
-          <input type="checkbox" disabled={locked} checked={state.params.fixedOrder}
+          <input type="checkbox" disabled={locked} checked={displayParams.fixedOrder}
                  onChange={(e) => setParam("fixedOrder", e.target.checked)} />
           적재 순서 고정 (박스 목록 순서 그대로)
         </label>

@@ -156,11 +156,11 @@ export async function fetchPickAndPlaceProgress() {
 }
 
 // 산업현장 시나리오 미리보기 - routes/scenarios.py 참고. 요청 바디는 필요 없다.
-export async function postScenarioPlan(scenarioId) {
+export async function postScenarioPlan(scenarioId, options = {}) {
   const resp = await fetch(`${BASE}/scenarios/${scenarioId}/plan`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({}),
+    body: JSON.stringify(options),
   });
   return handleResponse(resp);
 }

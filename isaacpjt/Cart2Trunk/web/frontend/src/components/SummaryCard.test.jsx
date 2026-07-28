@@ -79,4 +79,15 @@ describe("SummaryCard", () => {
     await userEvent.click(screen.getByText("load"));
     expect(screen.queryByText(/배치 품질:/)).not.toBeInTheDocument();
   });
+
+  it("shows the scenario description note when a scenario is active", () => {
+    render(<PlannerProvider><SummaryCard activeScenarioId="hazmat" /></PlannerProvider>);
+    expect(screen.getByTestId("scenario-note").textContent).toContain("위험물 창고");
+    expect(screen.getByTestId("scenario-note").textContent).toContain("안전거리");
+  });
+
+  it("hides the scenario note when no scenario is active", () => {
+    render(<PlannerProvider><SummaryCard /></PlannerProvider>);
+    expect(screen.queryByTestId("scenario-note")).not.toBeInTheDocument();
+  });
 });

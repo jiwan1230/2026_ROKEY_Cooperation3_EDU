@@ -50,4 +50,20 @@ describe("ControlPanel", () => {
     const boxes = JSON.parse(editor.value);
     expect(boxes).toHaveLength(3);
   });
+
+  it("locks mode/random-generate and shows a banner while a scenario is active", async () => {
+    render(<PlannerProvider><ControlPanel activeScenarioId="warehouse" /></PlannerProvider>);
+    expect(screen.getByTestId("scenario-banner").textContent).toContain("창고/물류센터");
+    // 시나리오 고정값(count_first)이 실시간 계획 값(기본 large_first) 대신 표시된다.
+    expect(screen.getByText("개수 우선").className).toMatch(/segmentActive/);
+    expect(screen.getByText("개수 우선")).toBeDisabled();
+    expect(screen.getByText("큰 것 우선")).toBeDisabled();
+    expect(screen.getByTestId("box-count-input")).toBeDisabled();
+  });
+
+  it("does not show the scenario banner when no scenario is active", () => {
+    render(<PlannerProvider><ControlPanel /></PlannerProvider>);
+    expect(screen.queryByTestId("scenario-banner")).not.toBeInTheDocument();
+    expect(screen.getByText("큰 것 우선")).not.toBeDisabled();
+  });
 });

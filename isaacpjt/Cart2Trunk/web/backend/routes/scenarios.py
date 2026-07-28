@@ -24,11 +24,21 @@ for _p in (str(_ALGORISM_DIR), str(_SCENARIOS_DIR)):
 
 Trunk = import_module("02_trunk_space_state").Trunk
 Box = import_module("03_extreme_point_candidates").Box
+ExtremePointState = import_module("03_extreme_point_candidates").ExtremePointState
 generate_loading_plan = import_module("08_unloadable_reason").generate_loading_plan
-# 위험물 창고만 범용 함수에 없는 하드 컷(비호환 물질 안전거리, extra_validity_fn)이
-# 필요해서 전용 함수를 그대로 쓴다 - 이게 그 시나리오의 핵심 우선순위(안전
-# 최우선)라 다른 파라미터로 대체할 수 없다.
-_generate_hazmat = import_module("scenario4_hazmat").generate_loading_plan_hazmat
+classify_unloadable_reason = import_module("08_unloadable_reason").classify_unloadable_reason
+UnloadableItem = import_module("08_unloadable_reason").UnloadableItem
+decide_loading_order = import_module("06_loading_order_decision").decide_loading_order
+make_weighted_score_fn = import_module("05_candidate_scoring").make_weighted_score_fn
+place_one_box = import_module("07_placement_plan").place_one_box
+# 위험물 창고는 범용 함수에 없는 하드 컷(비호환 물질 안전거리)이 필요해서
+# 전용 안전거리 함수(has_hazmat_clearance)만 재사용하고, 우선순위(contact_
+# preference)를 같이 반영할 수 있게 place_one_box 호출 루프는 여기서 직접
+# 짠다 - generate_loading_plan_hazmat() 자체는 우선순위 파라미터를 안 받아서
+# (scenario4_hazmat.py를 수정하지 않는 한) 그대로는 못 씀. 로직은 그 함수
+# 내부와 완전히 동일하고 score_fn만 추가했다.
+_hazmat_module = import_module("scenario4_hazmat")
+has_hazmat_clearance = _hazmat_module.has_hazmat_clearance
 
 
 def _lifo_delivery_order(boxes):
@@ -37,6 +47,25 @@ def _lifo_delivery_order(boxes):
     # generate_loading_plan()의 fixed_order로 같은 결과를 재현한다.
     ordered = sorted(boxes, key=lambda b: (b.delivery_stop is None, -(b.delivery_stop or 0)))
     return [b.id for b in ordered]
+
+
+def _generate_hazmat_weighted(boxes, trunk, contact_preference=1.0):
+    # scenario4_hazmat.generate_loading_plan_hazmat()과 동일한 루프(순서 결정
+    # + place_one_box + 미적재 분류)에 우선순위 score_fn만 추가한 버전.
+    order = decide_loading_order(boxes)
+    score_fn = make_weighted_score_fn(contact_preference=contact_preference)
+    state = ExtremePointState()
+    plans, unloadable = [], []
+    order_counter = 1
+    for box in order:
+        plan = place_one_box(box, trunk, state, order_counter, score_fn=score_fn, extra_validity_fn=has_hazmat_clearance)
+        if plan is not None:
+            plans.append(plan)
+            order_counter += 1
+        else:
+            reason = classify_unloadable_reason(box, trunk, state)
+            unloadable.append(UnloadableItem(box_id=box.id, reason=reason, detail=f"{box.id} - 사유: {reason.value}"))
+    return plans, unloadable
 
 
 scenarios_bp = Blueprint("scenarios", __name__)
@@ -56,11 +85,11 @@ SCENARIO_DEFS = {
             Box("정류장4_박스", 0.3, 0.25, 0.2, delivery_stop=4),
         ],
         # 나중 배송지 박스부터 고정 순서로 실어서 LIFO(문 열자마자 첫
-        # 배송지가 바로 손에 닿음)를 재현. entrance_preference는 기본값
-        # (1.0=깊은 자리 우선)으로 충분 - fixed_order 자체가 "먼저 놓이는
-        # 박스가 깊은 자리를 차지"하는 구조를 이미 만든다.
+        # 배송지가 바로 손에 닿음)를 재현. + 운행 중 흔들림에 대비해 접촉면
+        # (안정성) 우선순위를 최대(2.0)로 - 트럭은 도로를 달리므로 박스가
+        # 최대한 서로/벽에 맞닿아 흔들리지 않아야 한다.
         "generate": lambda boxes, trunk: generate_loading_plan(
-            boxes, trunk, fixed_order=_lifo_delivery_order(boxes),
+            boxes, trunk, fixed_order=_lifo_delivery_order(boxes), contact_preference=2.0,
         ),
     },
     "warehouse": {
@@ -71,7 +100,13 @@ SCENARIO_DEFS = {
             + [Box(f"대{i}", 0.3, 0.2, 0.2) for i in range(2)]
         ),
         # 공간활용 최대화 - count_first 모드(개수 우선) + 마진을 기본(2cm)보다
-        # 타이트하게(1cm) 줘서 최대한 빽빽하게 채운다.
+        # 타이트하게(1cm) 줘서 최대한 빽빽하게 채운다. 우선순위(entrance/
+        # contact/height preference)는 일부러 기본값 그대로 둔다 -
+        # generate_loading_plan()은 이 값들 중 하나라도 기본값이 아니면
+        # count_first 전용 밀도 점수(score_count_first) 대신 범용 가중치
+        # 점수로 바뀌어버려서(08_unloadable_reason.py 참고), 오히려 이
+        # 시나리오의 핵심인 "최대 개수 적재"가 손해를 본다 - 마진/모드가
+        # 이 시나리오의 진짜 손잡이다.
         "generate": lambda boxes, trunk: generate_loading_plan(boxes, trunk, mode="count_first", margin=0.01),
     },
     "cold_chain": {
@@ -80,7 +115,9 @@ SCENARIO_DEFS = {
         "make_boxes": lambda: [Box(f"냉동박스{i}", 0.3, 0.25, 0.2) for i in range(3)],
         # 냉기 순환 - 마진을 기본(2cm)보다 훨씬 크게(5cm, 팀이 실측 검증한
         # 냉동/냉장 컨테이너 기준값) 줘서 박스 사이 공기 흐름을 확보한다.
-        "generate": lambda boxes, trunk: generate_loading_plan(boxes, trunk, margin=0.05),
+        # + 유통기한 회전율 관리를 위해 입구 쪽을 살짝 선호(entrance_
+        # preference를 음수 쪽으로).
+        "generate": lambda boxes, trunk: generate_loading_plan(boxes, trunk, margin=0.05, entrance_preference=-0.3),
     },
     "hazmat": {
         "label": "위험물 창고",
@@ -90,7 +127,9 @@ SCENARIO_DEFS = {
             Box("인화물_드럼1", 0.3, 0.3, 0.3, hazard_class="flammable"),
             Box("일반박스1", 0.3, 0.3, 0.3),
         ],
-        "generate": _generate_hazmat,
+        # 안전거리 하드컷(핵심 우선순위) + 드럼통이 넘어지지 않도록 접촉면
+        # (안정성) 우선순위도 높게(1.8).
+        "generate": lambda boxes, trunk: _generate_hazmat_weighted(boxes, trunk, contact_preference=1.8),
     },
 }
 

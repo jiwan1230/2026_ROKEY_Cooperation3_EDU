@@ -2,10 +2,12 @@
 import { useState } from "react";
 import { usePlannerState } from "../state/PlannerContext.jsx";
 import { gradeBoxScore, gradeUtilization, labelForPct } from "../utils/scoreGrading.js";
+import { SCENARIOS } from "./scenarioTheme.js";
 import styles from "./SummaryCard.module.css";
 
-export default function SummaryCard() {
+export default function SummaryCard({ activeScenarioId }) {
   const state = usePlannerState();
+  const activeScenario = SCENARIOS.find((s) => s.id === activeScenarioId);
   const summary = state.result?.summary;
   const placed = state.result?.placed || [];
   // 원점수/등급 계산 근거/등급 기준표는 알고리즘 내부 계산을 설명하는
@@ -121,6 +123,12 @@ export default function SummaryCard() {
           <div className={styles.criteriaNote}>
             박스를 전부 실어도 트렁크 규모상 활용률이 높게 나오기 어려움(실측 기준)
           </div>
+        </div>
+      )}
+      {activeScenario && (
+        <div className={styles.scenarioNote} data-testid="scenario-note">
+          <div className={styles.scenarioNoteTitle}>📋 {activeScenario.label} 시나리오</div>
+          <div>{activeScenario.description}</div>
         </div>
       )}
     </div>
