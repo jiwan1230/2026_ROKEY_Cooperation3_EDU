@@ -90,7 +90,7 @@ import numpy as np
 import omni.usd
 import omni.kit.viewport.utility as vp_util
 from omni.physx import get_physx_scene_query_interface
-from pxr import Usd, UsdGeom, UsdPhysics, PhysxSchema, UsdLux, UsdShade, Sdf, Gf
+from pxr import Usd, UsdGeom, UsdPhysics, PhysxSchema, UsdLux, UsdShade, Sdf, Gf, Vt
 
 from isaacsim.core.api import World
 from isaacsim.core.api.materials.physics_material import PhysicsMaterial
@@ -282,6 +282,67 @@ def add_sdf_collision(stage, root_prim_path, sdf_resolution=SDF_RESOLUTION):
             sdf_api.CreateSdfResolutionAttr().Set(sdf_resolution)
             n += 1
     print(f"[SDF] {root_prim_path}: {n} mesh", flush=True)
+
+
+def add_static_collision(stage, root_prim_path):
+    """배경 환경(GarageEnvironment.usd)용 - SDF가 아니라 기본 삼각형 메시 콜리전을 쓴다.
+    차량(add_sdf_collision)과 달리 이 메시는 항상 정적(RigidBodyAPI 없음)이라 동적 바디와의
+    concave-vs-concave 충돌이 발생하지 않으므로 SDF 베이크(메시 77개 x 256 해상도, 매우 느림)가
+    필요 없다 - 정적 삼각형 메시 콜리전은 동적 바디(로봇 바퀴/박스)와 문제없이 충돌한다."""
+    root_prim = stage.GetPrimAtPath(root_prim_path)
+    n = 0
+    for prim in Usd.PrimRange(root_prim):
+        if prim.GetTypeName() == "Mesh":
+            UsdPhysics.CollisionAPI.Apply(prim)
+            n += 1
+    print(f"[정적 콜리전] {root_prim_path}: {n} mesh", flush=True)
+
+
+def add_textured_sign(stage, prim_path, texture_path, position, size, rot_z=0.0):
+    """GarageEnvironment.usd 안의 /World/SignRokeyMart는 원본 SignRokeyMart.usd 참조가 빠져있어
+    (사용자가 로고 이미지(png) 파일만 제공함) 빈 프림으로 남는다 - 대신 그 png를 텍스처로 쓰는
+    평면(XY 아님, XZ 평면 - 벽에 거는 사인판이라 세워서 배치)을 직접 만들어 붙인다."""
+    w, h = size
+    mesh = UsdGeom.Mesh.Define(stage, prim_path)
+    mesh.CreatePointsAttr([
+        Gf.Vec3f(-w / 2, 0.0, -h / 2), Gf.Vec3f(w / 2, 0.0, -h / 2),
+        Gf.Vec3f(w / 2, 0.0, h / 2), Gf.Vec3f(-w / 2, 0.0, h / 2),
+    ])
+    mesh.CreateFaceVertexCountsAttr([4])
+    mesh.CreateFaceVertexIndicesAttr([0, 1, 2, 3])
+    mesh.CreateExtentAttr([(-w / 2, 0.0, -h / 2), (w / 2, 0.0, h / 2)])
+    mesh.CreateDoubleSidedAttr(True)
+    uv = UsdGeom.PrimvarsAPI(mesh).CreatePrimvar(
+        "st", Sdf.ValueTypeNames.TexCoord2fArray, UsdGeom.Tokens.faceVarying)
+    uv.Set([Gf.Vec2f(0, 0), Gf.Vec2f(1, 0), Gf.Vec2f(1, 1), Gf.Vec2f(0, 1)])
+    uv.SetIndices(Vt.IntArray([0, 1, 2, 3]))
+
+    xform = UsdGeom.Xformable(mesh)
+    xform.ClearXformOpOrder()
+    xform.AddTranslateOp().Set(Gf.Vec3d(*position))
+    if rot_z:
+        xform.AddRotateZOp().Set(rot_z)
+
+    mat_path = f"{prim_path}/Material"
+    material = UsdShade.Material.Define(stage, mat_path)
+    shader = UsdShade.Shader.Define(stage, f"{mat_path}/Shader")
+    shader.CreateIdAttr("UsdPreviewSurface")
+    st_reader = UsdShade.Shader.Define(stage, f"{mat_path}/STReader")
+    st_reader.CreateIdAttr("UsdPrimvarReader_float2")
+    st_reader.CreateInput("varname", Sdf.ValueTypeNames.Token).Set("st")
+    tex = UsdShade.Shader.Define(stage, f"{mat_path}/Texture")
+    tex.CreateIdAttr("UsdUVTexture")
+    tex.CreateInput("file", Sdf.ValueTypeNames.Asset).Set(texture_path)
+    tex.CreateInput("sourceColorSpace", Sdf.ValueTypeNames.Token).Set("sRGB")
+    tex.CreateInput("st", Sdf.ValueTypeNames.Float2).ConnectToSource(
+        st_reader.ConnectableAPI(), "result")
+    tex.CreateOutput("rgb", Sdf.ValueTypeNames.Float3)
+    shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).ConnectToSource(
+        tex.ConnectableAPI(), "rgb")
+    shader.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(0.9)
+    material.CreateSurfaceOutput().ConnectToSource(shader.ConnectableAPI(), "surface")
+    UsdShade.MaterialBindingAPI.Apply(mesh.GetPrim()).Bind(material)
+    return mesh
 
 
 def bbox_of(stage, prim_path):
@@ -742,10 +803,50 @@ def box_needs_tilt(box_height_z, ceiling_z=CEILING_WORLD_Z, floor_ref_z=TRUNK_FL
 
 # ================= 씬 구성 =================
 world = World(stage_units_in_meters=1.0)
-world.scene.add_default_ground_plane()
 stage = omni.usd.get_context().get_stage()
 target_mpu = UsdGeom.GetStageMetersPerUnit(stage)
 target_up = UsdGeom.GetStageUpAxis(stage)
+
+# 배경 환경(지하주차장, 사용자 제공 GarageEnvironment.usd) - 카트(CART_POS)/차량(CAR_POS)/로봇
+# 스폰(CHASSIS_SPAWN_XY, cart_center_xy 기준으로 아래에서 계산됨)은 전부 이 배경과 무관하게
+# 정해지는 고정 좌표라 절대 건드리지 않는다 - 배경 쪽을 그 좌표들 위에 얹기만 한다.
+# GARAGE_POS=(0,0,0)/스케일 1.0/회전 0으로 그대로 둬도 되는 이유(사용자 실측 확인) - 원본
+# GarageEnvironment.usd를 열어 /World/Garage의 world bbox를 재보면 x=[-14.8, 19.8],
+# y=[-12.1, 11.0], 바닥 z≈0(이미 target 스테이지와 동일 Z-up/미터 단위라 add_asset()의 축
+# 변환도 필요 없음)이라 카트(x=0)와 차량(x=5)이 둘 다 넉넉히 안에 들어온다.
+# world.scene.add_default_ground_plane()이 암묵적으로 제공하던 장면 전체 조명이 배경 교체로
+# 같이 사라져서(실측 확인 - 배경 제거 전엔 안 보이던 문제) 직접 라이트를 추가한다. 기존
+# area_light(SphereLight, 트렁크 근처 국소 조명)와는 별개로 카트/차량/배경 전체를 비추는
+# 광역 조명이 필요하다.
+_env_sun = UsdLux.DistantLight.Define(stage, "/World/DefaultSunLight")
+_env_sun.CreateIntensityAttr(3000.0)
+_env_sun.CreateAngleAttr(1.0)
+UsdGeom.Xformable(_env_sun).AddRotateXOp().Set(-60.0)
+UsdGeom.Xformable(_env_sun).AddRotateYOp().Set(20.0)
+_env_dome = UsdLux.DomeLight.Define(stage, "/World/DefaultDomeLight")
+_env_dome.CreateIntensityAttr(1000.0)
+
+GARAGE_USD = os.environ.get("GARAGE_USD", "/home/rokey/Downloads/GarageEnvironment.usd")
+GARAGE_POS = (0.0, 0.0, 0.0)
+GARAGE_EXTRA_SCALE = 1.0
+GARAGE_ROT_Z = 0.0
+
+if Path(GARAGE_USD).exists():
+    add_asset(stage, "/World/Environment", GARAGE_USD, Gf.Vec3d(*GARAGE_POS), GARAGE_EXTRA_SCALE,
+              target_mpu, target_up, rot_z=GARAGE_ROT_Z)
+    for _ in range(20):
+        simulation_app.update()
+    add_static_collision(stage, "/World/Environment")
+
+    # GarageEnvironment.usd 안의 /World/SignRokeyMart는 원본 SignRokeyMart.usd 참조가 빠져있어
+    # 빈 프림으로 남는다(사용자가 로고 이미지 파일만 줬음) - 대신 그 png로 직접 사인판을 만든다.
+    SIGN_PNG = str(_THIS_DIR / "assets/rokey_mart_sign.png")
+    if Path(SIGN_PNG).exists():
+        add_textured_sign(stage, "/World/RokeyMartSign", SIGN_PNG,
+                           position=(2.5, 3.0, 2.2), size=(2.0, 1.0), rot_z=0.0)
+else:
+    print(f"[배경] {GARAGE_USD} 없음 - 기본 그리드 지면으로 대체", flush=True)
+    world.scene.add_default_ground_plane()
 
 add_asset(stage, "/World/Vehicle", CAR_USD, Gf.Vec3d(*CAR_POS), CAR_EXTRA_SCALE, target_mpu, target_up, rot_z=CAR_ROT_Z)
 for _ in range(20):
