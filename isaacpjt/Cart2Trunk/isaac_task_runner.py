@@ -840,10 +840,19 @@ if Path(GARAGE_USD).exists():
 
     # GarageEnvironment.usd 안의 /World/SignRokeyMart는 원본 SignRokeyMart.usd 참조가 빠져있어
     # 빈 프림으로 남는다(사용자가 로고 이미지 파일만 줬음) - 대신 그 png로 직접 사인판을 만든다.
-    SIGN_PNG = str(_THIS_DIR / "assets/rokey_mart_sign.png")
+    # 실측 확인 - add_textured_sign()의 double-sided 평면을 기본 GUI Perspective 카메라로
+    # 보면 글자가 좌우 반전되어 보여서(뷰포트 파일 캡처(vp_util.capture_viewport_to_file)로
+    # 재확인해보니 그쪽은 오히려 항상 반전 저장되는 별개의 버그였다 - 실제 라이브 GUI 창을
+    # X11로 직접 캡처해 대조한 뒤에야 확인됨), 3D 지오메트리 대신 텍스처 자체를 미리
+    # 좌우 반전해 상쇄시킨다.
+    SIGN_PNG = str(_THIS_DIR / "assets/rokey_mart_sign_mirrored.png")
     if Path(SIGN_PNG).exists():
+        # 벽에 거는 형태(z=2.2, 배경 벽 메시에 의존) 대신 바닥에 서 있는 독립 사인판으로
+        # 배치한다 - 배경(GarageEnvironment.usd)의 실제 벽 위치/존재 여부와 무관하게 항상
+        # 보이도록 size 하단(= position z - size_h/2)을 지면(z=0)에 맞춘다.
+        _SIGN_SIZE = (2.0, 1.2)
         add_textured_sign(stage, "/World/RokeyMartSign", SIGN_PNG,
-                           position=(2.5, 3.0, 2.2), size=(2.0, 1.0), rot_z=0.0)
+                           position=(2.5, 3.0, _SIGN_SIZE[1] / 2), size=_SIGN_SIZE, rot_z=0.0)
 else:
     print(f"[배경] {GARAGE_USD} 없음 - 기본 그리드 지면으로 대체", flush=True)
     world.scene.add_default_ground_plane()
