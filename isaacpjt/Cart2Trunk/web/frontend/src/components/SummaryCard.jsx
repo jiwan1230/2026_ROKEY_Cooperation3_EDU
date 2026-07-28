@@ -101,7 +101,7 @@ export default function SummaryCard() {
       )}
       {advancedOpen && scoreGrade && (
         <div className={styles.criteria}>
-          점수 등급: {uniformFormula === "weighted" ? "지금 우선순위 설정" : "지금 트렁크 크기"} 기준
+          배치 품질: {uniformFormula === "weighted" ? "지금 우선순위 설정" : "지금 트렁크 크기"} 기준
           최선~최악 범위 중 상위 <span>{scoreGrade.pct.toFixed(0)}%</span>
         </div>
       )}

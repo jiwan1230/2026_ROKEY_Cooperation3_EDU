@@ -49,7 +49,7 @@ describe("SummaryCard", () => {
     // 등급 근거는 "고급 설정"으로 접혀있다(2026-07-28) - 먼저 펼친다. 원점수
     // 캡션은 UI에서 아예 제거했으므로(사용자 요청) 등급 근거 문장만 확인한다.
     await userEvent.click(screen.getByTestId("score-advanced-toggle"));
-    expect(screen.getByText(/점수 등급: 지금 우선순위 설정 기준/)).toBeInTheDocument();
+    expect(screen.getByText(/배치 품질: 지금 우선순위 설정 기준/)).toBeInTheDocument();
   });
 
   it("shows a score grade for count_first_density when all placed boxes use it and trunk size is known", async () => {
@@ -62,7 +62,7 @@ describe("SummaryCard", () => {
     render(<PlannerProvider><Loader payload={payload} /><SummaryCard /></PlannerProvider>);
     await userEvent.click(screen.getByText("load"));
     await userEvent.click(screen.getByTestId("score-advanced-toggle"));
-    expect(screen.getByText(/점수 등급: 지금 트렁크 크기 기준/)).toBeInTheDocument();
+    expect(screen.getByText(/배치 품질: 지금 트렁크 크기 기준/)).toBeInTheDocument();
   });
 
   it("hides the score grade when weighted and count_first_density formulas are mixed", async () => {
@@ -77,6 +77,6 @@ describe("SummaryCard", () => {
     };
     render(<PlannerProvider><Loader payload={payload} /><SummaryCard /></PlannerProvider>);
     await userEvent.click(screen.getByText("load"));
-    expect(screen.queryByText(/점수 등급:/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/배치 품질:/)).not.toBeInTheDocument();
   });
 });
