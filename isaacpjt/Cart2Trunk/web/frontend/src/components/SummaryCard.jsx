@@ -1,4 +1,5 @@
 // src/components/SummaryCard.jsx
+import { useState } from "react";
 import { usePlannerState } from "../state/PlannerContext.jsx";
 import { gradeBoxScore, gradeUtilization, labelForPct } from "../utils/scoreGrading.js";
 import styles from "./SummaryCard.module.css";
@@ -14,6 +15,11 @@ export default function SummaryCard() {
   const state = usePlannerState();
   const summary = state.result?.summary;
   const placed = state.result?.placed || [];
+  // 원점수/등급 계산 근거/등급 기준표는 알고리즘 내부 계산을 설명하는
+  // 세부 정보라 - 배지(우수/양호 등)만 봐도 충분한 사람이 대부분이라는
+  // 피드백으로, 기본은 접어두고 필요할 때만 펼친다(ControlPanel의 "고급
+  // 설정"과 같은 패턴).
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   // 평균 점수 등급은 모든 박스가 "같은" 채점 공식을 썼을 때만 의미가 있다 -
   // count_first 모드는 내부적으로 weighted/count_first_density 두 공식 중
   // 하나를 박스마다 다르게 쓸 수 있는데, 두 공식이 섞이면 스케일이 완전히
@@ -83,11 +89,21 @@ export default function SummaryCard() {
         </strong>
       </div>
       {summary && (
+        <button
+          type="button"
+          className={styles.advancedToggle}
+          data-testid="score-advanced-toggle"
+          onClick={() => setAdvancedOpen((open) => !open)}
+        >
+          점수·등급 계산 기준 {advancedOpen ? "숨기기 ▴" : "자세히 보기 ▾"}
+        </button>
+      )}
+      {advancedOpen && summary && (
         <div className={styles.criteria}>
           원점수 <span>{summary.avg_score.toFixed(3)}</span>(낮을수록 좋은 자리 → 등급으로 환산)
         </div>
       )}
-      {scoreGrade && (
+      {advancedOpen && scoreGrade && (
         <div className={styles.criteria}>
           점수 등급: {uniformFormula === "weighted" ? "지금 우선순위 설정" : "지금 트렁크 크기"} 기준
           최선~최악 범위 중 상위 <span>{scoreGrade.pct.toFixed(0)}%</span>
@@ -95,7 +111,7 @@ export default function SummaryCard() {
       )}
       <div className={styles.row}><span>계산 시간</span><strong>{summary ? `${summary.calc_time_ms.toFixed(0)}ms` : "-"}</strong></div>
       <div className={styles.status}>상태: {STATUS_LABEL[state.planState]}</div>
-      {summary && (
+      {advancedOpen && summary && (
         <div className={styles.criteria}>
           <div className={styles.criteriaLabel}>공간 활용률 등급 기준</div>
           <ul className={styles.thresholdList}>

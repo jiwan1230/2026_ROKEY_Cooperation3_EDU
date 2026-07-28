@@ -9,11 +9,11 @@
    캡션으로 올려서 값+배지가 카드 폭을 온전히 다 쓰게 바꿨다. */
 .row { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .row > span:first-child {
-  font-size: 12px; font-weight: 700; color: var(--color-text-secondary);
+  font-size: 13px; font-weight: 700; color: var(--color-text-secondary);
   text-transform: uppercase; letter-spacing: 0.03em;
 }
 .row strong {
-  display: flex; align-items: center; gap: 8px; font-size: 21px;
+  display: flex; align-items: center; gap: 8px; font-size: 24px;
   color: var(--color-text-primary); min-width: 0;
 }
 
@@ -21,29 +21,39 @@
    품질을 0~100 양수로 합친 값) - 배경을 살짝 얹고 글자를 키워서 다른 행과
    구분되게 한다. */
 .overallRow { background: var(--color-canvas); border-radius: 8px; padding: 12px 14px; }
-.overallRow > span:first-child { font-size: 12.5px; }
-.overallRow strong { font-size: 30px; }
+.overallRow > span:first-child { font-size: 14px; }
+.overallRow strong { font-size: 32px; }
 
-.status { margin-top: 2px; font-size: 13.5px; color: var(--color-text-primary); line-height: 1.5; }
-.criteria { font-size: 12.5px; color: var(--color-text-secondary); line-height: 1.6; }
-.criteria span { color: var(--color-text-primary); font-weight: 600; }
-.criteriaLabel { font-size: 12px; font-weight: 700; color: var(--color-text-primary); }
+.status { margin-top: 2px; font-size: 15px; color: var(--color-text-primary); line-height: 1.5; }
+/* 점수/등급 계산 근거는 "고급 설정"(advancedOpen)으로 접어두는 세부 정보라
+   기본은 숨어있지만, 펼쳤을 때는 충분히 읽기 편해야 한다는 피드백으로
+   본문 색+글자 크기를 올렸다(예전엔 흐린 보조색+더 작은 글자였음). */
+.criteria { font-size: 13.5px; color: var(--color-text-primary); line-height: 1.6; }
+.criteria span { font-weight: 700; }
+.criteriaLabel { font-size: 13.5px; font-weight: 700; color: var(--color-text-primary); }
 /* 괄호 설명이 등급 기준 문장 중간에서 줄바꿈되면 줄 폭이 들쭉날쭉해 보인다는
    피드백 - 괄호 부분을 아예 다음 줄로 떼어내고, 같은 캡션이라는 게 보이게
    살짝만 간격을 둔다(카드 전체 gap보다는 좁게). */
 .criteriaNote { margin-top: 4px; }
 
+/* 알고리즘 검증 탭의 "고급 설정" 토글과 같은 스타일 - 원점수/등급 산출
+   근거/공간활용률 등급표는 자주 안 보는 세부 정보라 기본은 접어둔다. */
+.advancedToggle {
+  align-self: flex-start; border: none; background: transparent; padding: 2px 0;
+  font-size: 13px; font-weight: 700; color: var(--color-accent); cursor: pointer;
+}
+
 /* 등급 기준을 "22%↑ 우수 · 14~22% 양호 · ..." 한 문장으로 이어붙이면 좁은
    칸에서 단어 중간에 줄바꿈돼 읽기 어렵다는 피드백 - 등급마다 한 줄씩 쓰는
    목록으로 바꿔서 어디서 줄바꿈돼도 항상 "라벨: 값" 단위가 유지되게 한다. */
-.thresholdList { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
-.thresholdList li { display: flex; justify-content: space-between; gap: 10px; font-size: 12.5px; color: var(--color-text-primary); }
-.thresholdList li > span:first-child { color: var(--color-text-secondary); }
+.thresholdList { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.thresholdList li { display: flex; justify-content: space-between; gap: 10px; font-size: 13.5px; color: var(--color-text-primary); }
+.thresholdList li > span:first-child { color: var(--color-text-secondary); font-weight: 600; }
 
 /* 값 옆에 붙는 등급 배지 - 글자가 줄바꿈되면서 잘려 보이던 문제(사용자
    스크린샷)의 직접 원인이라, 항상 한 줄로 고정하고 줄어들지 않게 한다. */
 .grade {
-  flex-shrink: 0; white-space: nowrap; font-size: 12.5px; font-weight: 700; padding: 3px 10px;
+  flex-shrink: 0; white-space: nowrap; font-size: 13px; font-weight: 700; padding: 4px 11px;
   border-radius: 999px;
 }
 .grade[data-grade="우수"] { background: #E4F8EA; color: var(--color-success); }
